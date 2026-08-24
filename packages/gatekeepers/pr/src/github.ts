@@ -80,3 +80,19 @@ export async function openPullRequest(
 
   return { url: pr.html_url, branch, base };
 }
+
+/** Open an issue on an allowlisted repo through the API (no fork needed). */
+export async function openIssue(
+  api: GithubApi,
+  repo: string,
+  title: string,
+  body: string
+): Promise<{ url: string }> {
+  const issue = (await githubApi(
+    { ...api, userAgent: UA },
+    "POST",
+    `/repos/${repo}/issues`,
+    { title, body }
+  )) as { html_url: string };
+  return { url: issue.html_url };
+}

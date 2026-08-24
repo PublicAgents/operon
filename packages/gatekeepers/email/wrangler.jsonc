@@ -10,9 +10,12 @@
   "routes": [{ "pattern": "email-gk.livevariant.ai", "custom_domain": true }],
   "send_email": [{ "name": "EMAIL" }],
   "durable_objects": {
-    "bindings": [{ "name": "MAILBOX", "class_name": "Mailbox" }]
+    "bindings": [
+      { "name": "MAILBOX", "class_name": "Mailbox" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox", "Ledger"] }],
   "vars": {
     // ROSTER injected by scripts/deploy.mjs. EMAIL_DOMAIN is the subdomain
     // whose MX routes to this Worker (NOT the apex, which is Workspace).

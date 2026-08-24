@@ -1,11 +1,11 @@
 import { findAgent, parseRoster } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import PostalMime from "postal-mime";
 import { Mailbox, type AttachmentMeta } from "./mailbox.js";
 import { identityForAgent, identityForRecipient } from "./identity.js";
 import { disclosureFooter, fromName, normalizeAddress } from "./policy.js";
 
-export { Mailbox };
+export { Mailbox, Ledger };
 export * from "./identity.js";
 export * from "./policy.js";
 
@@ -35,10 +35,15 @@ interface Env {
     }): Promise<{ messageId?: string }>;
   };
   MAILBOX: DurableObjectNamespace<Mailbox>;
+  LEDGER: DurableObjectNamespace<Ledger>;
 }
 
 function mailbox(env: Env, agentId: string) {
   return env.MAILBOX.get(env.MAILBOX.idFromName(agentId));
+}
+
+function ledger(env: Env) {
+  return env.LEDGER.get(env.LEDGER.idFromName("email"));
 }
 
 /** Address the operator's copy lands at: OPERATOR_EMAIL, else <name>@<zone> (catch-all). */
@@ -127,6 +132,11 @@ async function deliver(
     return errorResponse(502, "send_failed", String(error).slice(0, 300));
   }
 
+  // Durable oversight FIRST: a ledger row that survives regardless of
+  // whether the email copy or the Telegram notify then succeed, so a send
+  // can never happen with no operator-visible record at all.
+  await ledger(env).append("email_sent", { agentId, to: msg.to, subject: msg.subject, count });
+
   // Sent for real from here on. Operator oversight is mandatory but must not
   // undo the send; the copy is best-effort with a guaranteed Telegram fallback.
   const copyTo = operatorCopy(env, identity.localPart, zone);
@@ -159,14 +169,15 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
   const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
   if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
   const box = mailbox(env, agent.id);
-  // Read without deleting; the held message is removed only after it is
-  // actually delivered, so a failed send leaves it retriable.
-  const held = await box.getHeld(heldId);
-  if (!held) return errorResponse(404, "held_not_found", heldId);
+  // Atomically claim: only the first concurrent approval of this id gets the
+  // message, so it can never be sent twice. Failure unclaims for retry.
+  const held = await box.claimHeld(heldId);
+  if (!held) return errorResponse(409, "held_unavailable", "already claimed or not found");
 
   const now = new Date().toISOString();
   const reservation = await box.reserveSend(held.to, now, true);
   if (reservation.action === "reject") {
+    await box.unclaimHeld(heldId);
     return errorResponse(429, "rate_limited", `daily send cap is ${box.dailyCap}`);
   }
   const identity = identityForAgent(agent, env.EMAIL_DOMAIN, roster.zone);
@@ -180,6 +191,7 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
     reservation.action === "send" ? reservation.count : 0
   );
   if (response.ok) await box.deleteHeld(heldId);
+  else await box.unclaimHeld(heldId);
   return response;
 }
 

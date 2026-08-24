@@ -6,7 +6,7 @@ import {
   Ledger,
   GitDataError
 } from "@operon/worker-kit";
-import { openPullRequest, type PrRequest } from "./github.js";
+import { openIssue, openPullRequest, type PrRequest } from "./github.js";
 
 export { Ledger };
 export * from "./github.js";
@@ -102,11 +102,53 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
   }
 }
 
+async function handleIssue(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) {
+    await ledger(env).append("issue_denied", { status: denied.status });
+    return denied;
+  }
+  const body = await readJson<{ agentId?: string; repo?: string; title?: string; body?: string }>(
+    request
+  );
+  if (!body.ok) {
+    await ledger(env).append("issue_failed", { reason: "malformed_json" });
+    return errorResponse(400, "malformed_json");
+  }
+  const { repo, title, body: issueBody, agentId } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
+    await ledger(env).append("issue_failed", { reason: "repo_not_allowlisted", repo });
+    return errorResponse(403, "repo_not_allowlisted", `allowed: ${allowlist(env).join(", ")}`);
+  }
+  if (typeof title !== "string" || !title || typeof issueBody !== "string" || !issueBody) {
+    await ledger(env).append("issue_failed", { reason: "missing_title_or_body", repo });
+    return errorResponse(400, "missing_title_or_body");
+  }
+  if (!env.MACHINE_PAT) return errorResponse(500, "credential_unconfigured");
+  try {
+    const result = await openIssue(
+      { token: env.MACHINE_PAT, userAgent: "operon-gatekeeper-pr" },
+      repo,
+      title,
+      issueBody
+    );
+    await ledger(env).append("issue_opened", { agentId, repo, url: result.url });
+    return json({ ok: true, ...result });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    await ledger(env).append("issue_failed", { reason: "github_error", repo, detail: detail.slice(0, 300) });
+    return errorResponse(502, "issue_open_failed", detail.slice(0, 300));
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/gatekeeper/pr" && request.method === "POST") {
       return handlePr(request, env);
+    }
+    if (url.pathname === "/gatekeeper/issue" && request.method === "POST") {
+      return handleIssue(request, env);
     }
     if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
       const denied = requireBearer(request, env.PR_SERVICE_TOKEN);

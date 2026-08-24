@@ -19,6 +19,10 @@ const HELP = `operon: the doors out of this wake
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
+  operon issue <owner/repo> <bodyfile> --title <t>
+                                         open an issue on an allowlisted repo; the
+                                         body is read from bodyfile (a markdown file
+                                         in your repo). Swept before it leaves.
   operon pr <owner/repo> [dir] --title <t> --body <b>
                                          propose a change to an allowlisted repo: the
                                          files in dir (default "pr") are added/updated
@@ -84,6 +88,14 @@ export function parseArgs(argv: string[]): CliCall | "help" {
         throw new CliUsageError("usage: operon email --to <addr> --subject <s> --body <b>");
       }
       return { path: "/email", payload: { to, subject, text: body } };
+    }
+    case "issue": {
+      const [repo, bodyFile] = positionals(rest);
+      const title = flagValue(rest, "--title");
+      if (!repo || !repo.includes("/") || !bodyFile || !title) {
+        throw new CliUsageError("usage: operon issue <owner/repo> <bodyfile> --title <t>");
+      }
+      return { path: "/issue", payload: { repo, bodyFile, title } };
     }
     case "pr": {
       const [repo, dir] = positionals(rest);

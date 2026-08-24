@@ -131,9 +131,22 @@ export class Mailbox extends DurableObject {
     return held;
   }
 
-  /** Read a held send without removing it; delete only after it is delivered. */
-  async getHeld(id: string): Promise<HeldSend | undefined> {
-    return this.ctx.storage.get<HeldSend>(`held:${id}`);
+  /**
+   * Atomically claim a held send for delivery: returns it only to the first
+   * caller, so two concurrent approvals of the same id cannot both send it.
+   * On delivery success the caller deletes it; on failure the caller
+   * unclaims it so it can be retried.
+   */
+  async claimHeld(id: string): Promise<HeldSend | undefined> {
+    const held = await this.ctx.storage.get<HeldSend & { claimed?: boolean }>(`held:${id}`);
+    if (!held || held.claimed) return undefined;
+    await this.ctx.storage.put(`held:${id}`, { ...held, claimed: true });
+    return held;
+  }
+
+  async unclaimHeld(id: string): Promise<void> {
+    const held = await this.ctx.storage.get<HeldSend & { claimed?: boolean }>(`held:${id}`);
+    if (held) await this.ctx.storage.put(`held:${id}`, { ...held, claimed: false });
   }
 
   async deleteHeld(id: string): Promise<void> {
