@@ -14,11 +14,15 @@ const HELP = `operon: the doors out of this wake
                                          assigned host ("@" is the zone apex);
                                          dir defaults to "site". Swept for secrets
                                          before anything leaves the container.
-  operon clone <owner/repo>              clone an allowlisted repo for a pull request;
-                                         prints the path to work in
-  operon pr <owner/repo> --title <t> --body <b>
-                                         push the current feature branch of that clone
-                                         to the machine user's fork and open a PR
+  operon pr <owner/repo> [dir] --title <t> --body <b>
+                                         propose a change to an allowlisted repo: the
+                                         files in dir (default "pr") are added/updated
+                                         on a branch and a pull request is opened. Swept
+                                         like publish. No git and no token run here; a
+                                         Gatekeeper does the commit and PR via the API.
+                                         For an EXISTING file, put the full new content
+                                         at the same path; fetch its current form off
+                                         the public repo yourself first.
 
 Doors answer with named errors when something is wrong; an error names
 what to fix. A door that is not wired yet answers *_not_wired.`;
@@ -38,6 +42,19 @@ function flagValue(args: string[], flag: string): string | undefined {
   return args[index + 1];
 }
 
+/** Positional args are those not starting with -- and not consumed by a flag. */
+function positionals(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith("--")) {
+      i++; // skip the flag's value
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
+
 export function parseArgs(argv: string[]): CliCall | "help" {
   const [command, ...rest] = argv;
   if (!command || command === "--help" || command === "help") return "help";
@@ -52,24 +69,18 @@ export function parseArgs(argv: string[]): CliCall | "help" {
     case "publish": {
       const host = flagValue(rest, "--host");
       if (!host) throw new CliUsageError("usage: operon publish [dir] --host <host>");
-      const positional = rest.filter(
-        (arg, i) => !arg.startsWith("--") && rest[i - 1] !== "--host"
-      );
-      return { path: "/publish", payload: { dir: positional[0] ?? "site", host } };
-    }
-    case "clone": {
-      const repo = rest[0];
-      if (!repo || !repo.includes("/")) throw new CliUsageError("usage: operon clone <owner/repo>");
-      return { path: "/clone", payload: { repo } };
+      return { path: "/publish", payload: { dir: positionals(rest)[0] ?? "site", host } };
     }
     case "pr": {
-      const repo = rest[0];
+      const [repo, dir] = positionals(rest);
       const title = flagValue(rest, "--title");
       const body = flagValue(rest, "--body");
       if (!repo || !repo.includes("/") || !title || !body) {
-        throw new CliUsageError("usage: operon pr <owner/repo> --title <t> --body <b>");
+        throw new CliUsageError(
+          "usage: operon pr <owner/repo> [dir] --title <t> --body <b>"
+        );
       }
-      return { path: "/pr", payload: { repo, title, body } };
+      return { path: "/pr", payload: { repo, dir: dir ?? "pr", title, body } };
     }
     default:
       throw new CliUsageError(`unknown command "${command}"; run operon --help`);
@@ -100,17 +111,13 @@ async function main(): Promise<number> {
     method: isGet ? "GET" : "POST",
     ...(isGet
       ? {}
-      : {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(call.payload)
-        })
+      : { headers: { "content-type": "application/json" }, body: JSON.stringify(call.payload) })
   });
   const body = (await response.json()) as Record<string, unknown>;
   console.log(JSON.stringify(body, null, 2));
   return response.ok && body.ok !== false ? 0 : 1;
 }
 
-// Only run as a program when invoked directly, so tests can import parseArgs.
 if (process.argv[1]?.endsWith("cli.js")) {
   main()
     .then(code => process.exit(code))

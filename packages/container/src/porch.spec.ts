@@ -68,11 +68,8 @@ async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
   const porch = new Porch({
     config: wakeConfig,
     stateDir,
-    reposDir: join(stateDir, "repos"),
-    mirrorsDir: join(stateDir, "mirrors"),
     denylist,
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
-    chownForSession: async () => undefined,
     log: () => undefined
   });
   const url = await porch.start(0);
@@ -95,7 +92,8 @@ describe("capabilities", () => {
           notifyToken: "t",
           publishUrl: "http://y",
           publishToken: "p",
-          prToken: "pat",
+          prUrl: "http://z",
+          prToken: "b",
           prRepos: ["a/b"]
         })
       )
@@ -179,14 +177,50 @@ describe("porch doors", () => {
   );
 
   it("refuses PR targets off the allowlist", async () => {
-    const { url } = await startPorch(config({ prToken: "pat", prRepos: ["org/allowed"] }));
-    const response = await fetch(`${url}/clone`, {
+    const { url } = await startPorch(
+      config({ prUrl: "http://unused", prToken: "b", prRepos: ["org/allowed"] })
+    );
+    const response = await fetch(`${url}/pr`, {
       method: "POST",
-      body: JSON.stringify({ repo: "org/other" })
+      body: JSON.stringify({ repo: "org/other", title: "t", body: "b" })
     });
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: string }).error).toBe("repo_not_allowlisted");
   });
+
+  it.skipIf(!hasGitleaks)(
+    "sweeps a PR payload and forwards it to the PR Gatekeeper as data",
+    async () => {
+      const stub = await startStub(() => ({
+        status: 200,
+        body: JSON.stringify({ ok: true, url: "https://github.com/org/allowed/pull/1" })
+      }));
+      const { url, stateDir } = await startPorch(
+        config({ prUrl: `${stub.url}/gk`, prToken: "b", prRepos: ["org/allowed"] }),
+        ["super-secret-token"]
+      );
+      await mkdir(join(stateDir, "pr"));
+      await writeFile(join(stateDir, "pr", "server.json"), '{"leak":"super-secret-token"}');
+      const blocked = await fetch(`${url}/pr`, {
+        method: "POST",
+        body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
+      });
+      expect(blocked.status).toBe(422);
+      expect(stub.requests).toHaveLength(0);
+
+      await writeFile(join(stateDir, "pr", "server.json"), '{"name":"clean"}');
+      const good = await fetch(`${url}/pr`, {
+        method: "POST",
+        body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
+      });
+      expect(good.status).toBe(200);
+      expect(stub.requests).toHaveLength(1);
+      expect(stub.requests[0]).toContain('"repo":"org/allowed"');
+      expect(stub.requests[0]).toContain('"path":"server.json"');
+      // The container never sends a github credential; only the data.
+      expect(stub.requests[0]).not.toContain("super-secret-token");
+    }
+  );
 });
 
 describe("contentTypeFor", () => {

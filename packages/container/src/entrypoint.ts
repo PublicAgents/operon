@@ -24,13 +24,12 @@ import {
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
-const REPOS_DIR = join(WORKDIR, "repos");
 /**
- * Root-owned, mode-0700 base for every clean-push mirror. 0700 means the
- * mind's uid cannot enter or write it, so it cannot replace a freshly
- * cloned mirror between clone and the credentialed push (the porch runs
- * concurrently with the session, so this must resist a live race, not just
- * a stale directory). Never chowned to the mind.
+ * Root-owned, mode-0700 base for the state-push mirror. The state push
+ * (the one remaining in-container credentialed git op) runs from a clean
+ * clone here rather than the mind-owned repo; 0700 keeps the mind's uid
+ * out. The PR path holds no git credential in the container at all, so it
+ * needs no mirror.
  */
 const MIRRORS_DIR = "/tmp/operon-mirrors";
 
@@ -134,7 +133,6 @@ async function ensureMirrorsDir(): Promise<void> {
 
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
-  await mkdir(REPOS_DIR, { recursive: true });
   await ensureMirrorsDir();
   // Clean URL: the token travels in the git child's env via the credential
   // helper, so nothing in .git/config ever carries it.
@@ -322,10 +320,7 @@ async function main(): Promise<number> {
   const porch = new Porch({
     config,
     stateDir: STATE_DIR,
-    reposDir: REPOS_DIR,
-    mirrorsDir: MIRRORS_DIR,
     denylist: autoDenylist(config),
-    chownForSession: chownToMind,
     log
   });
   const porchUrl = await porch.start();

@@ -23,6 +23,9 @@
     },
     {
       "path": "./packages/gatekeepers/deploy"
+    },
+    {
+      "path": "./packages/gatekeepers/pr"
     }
   ]
 }

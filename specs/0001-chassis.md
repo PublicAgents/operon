@@ -204,12 +204,14 @@ contract (section 4.1). Entrypoint sequence:
    the GitHub Gatekeeper.
 2. `assertEnvClean()`, then `verifyModel()`; record the answering model.
 3. Open the **porch**: a loopback-only HTTP server the entrypoint runs for
-   the session's duration, holding every Gatekeeper token on the session's
-   behalf. The session reaches the doors through the `operon` CLI
-   (`--help` lists what is live: notify, publish, clone/pr), whose only
+   the session's duration, holding the internal Gatekeeper bearers on the
+   session's behalf. The session reaches the doors through the `operon`
+   CLI (`--help` lists what is live: notify, publish, pr), whose only
    configuration is the porch's localhost address; no credential enters
-   the session environment. Publish payloads are swept inside the
-   container (denylist variants + gitleaks) before anything leaves it.
+   the session environment. The porch does no git and holds no GitHub
+   credential: every door submits DATA to a Gatekeeper. Publish and PR
+   payloads are swept inside the container (denylist variants + gitleaks)
+   before anything leaves it.
 4. `runSession()`: one headless harness invocation with the wake prompt
    (read your charter and memory, your time budget, your doors, act,
    journal). The charter does the rest. Output streams to a wake log.
@@ -260,16 +262,21 @@ raw credentials outward.
   configured autonomous-agent marker, and no denylisted literal in any
   text payload), everything ledgered including denials. The /gatekeeper/
   path prefix is reserved on every host.
-- **pr (implemented, porch-side)**: fork-based pull requests through a
-  machine user. The machine user has read-only access to the private
-  target repos and nothing else; the porch clones allowlisted targets and
-  pushes feature branches to the machine user's FORK, then opens the PR
-  upstream, so write access to any upstream repo is structurally zero and
-  the operator's review is the merge gate. The machine-user token is
-  container-held (never in the session env; git operations carry it as a
-  per-invocation header so it never lands in a .git/config), targets are
-  allowlisted by deployment config, and the PR itself is the publicly
-  reviewable ledger of this door.
+- **pr (implemented)**: fork-based pull requests through a machine user,
+  done entirely by a Gatekeeper Worker via the GitHub API: **no git and no
+  GitHub credential ever run inside a wake container.** The porch submits
+  file DATA (swept like a publish) to the PR Gatekeeper; the Gatekeeper
+  (holding the machine credential) creates blobs, a tree, a commit, and a
+  branch on the machine user's fork through the Git Data API, then opens
+  the PR upstream. The machine user is read-only on private targets and
+  owns only its forks, so upstream write access is structurally zero and
+  the operator's review is the merge gate. Targets are allowlisted in both
+  the porch and the Gatekeeper (which trusts no caller), and the PR itself
+  is the publicly reviewable ledger. This replaced an earlier in-container
+  git implementation: a token-holding root process running git over a
+  mind-writable repo is an inherently leaky arrangement (it produced a
+  series of privilege-boundary findings), so the credential was moved out
+  of the container entirely.
 - **github**: mints short-lived scoped credentials for state-repo clone/push;
   opens PRs on product repos on an agent's behalf. Push to anything except
   the agent's own state repo is structurally impossible.

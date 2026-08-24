@@ -1,0 +1,39 @@
+{
+  "name": "@operon/gatekeeper-pr",
+  "version": "0.0.0",
+  "description": "The PR Gatekeeper: holds the machine GitHub credential and opens fork-based pull requests for allowlisted repos entirely through the GitHub API, so no git and no token ever run inside a wake container",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": { "cwd": "{projectRoot}" },
+        "dependsOn": ["^build"],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/worker-kit": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

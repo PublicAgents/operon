@@ -25,20 +25,25 @@ describe("operon CLI parsing", () => {
     });
   });
 
-  it("parses clone and pr", () => {
-    expect(parseArgs(["clone", "org/repo"])).toEqual({
-      path: "/clone",
-      payload: { repo: "org/repo" }
+  it("parses pr with default and explicit dir", () => {
+    expect(parseArgs(["pr", "org/repo", "--title", "t", "--body", "b"])).toEqual({
+      path: "/pr",
+      payload: { repo: "org/repo", dir: "pr", title: "t", body: "b" }
     });
     expect(
-      parseArgs(["pr", "org/repo", "--title", "t", "--body", "b"])
-    ).toEqual({ path: "/pr", payload: { repo: "org/repo", title: "t", body: "b" } });
+      parseArgs(["pr", "org/repo", "proposals/x", "--title", "t", "--body", "b"])
+    ).toEqual({
+      path: "/pr",
+      payload: { repo: "org/repo", dir: "proposals/x", title: "t", body: "b" }
+    });
   });
 
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);
-    expect(() => parseArgs(["clone", "norepo"])).toThrowError(CliUsageError);
+    expect(() => parseArgs(["pr", "norepo", "--title", "t", "--body", "b"])).toThrowError(
+      CliUsageError
+    );
     expect(() => parseArgs(["pr", "org/repo", "--title", "t"])).toThrowError(/--body/);
     expect(() => parseArgs(["dance"])).toThrowError(/unknown command/);
   });

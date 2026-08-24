@@ -24,6 +24,7 @@ export const ENV = {
   hosts: "OPERON_HOSTS",
   publishUrl: "OPERON_PUBLISH_URL",
   publishToken: "OPERON_PUBLISH_TOKEN",
+  prUrl: "OPERON_PR_URL",
   prToken: "OPERON_PR_TOKEN",
   prRepos: "OPERON_PR_REPOS"
 } as const;
@@ -50,7 +51,9 @@ export interface WakeConfig {
   /** Publish Gatekeeper endpoint + bearer; absent means publishing is not wired. */
   publishUrl?: string;
   publishToken?: string;
-  /** Machine-user token for fork-based PRs; absent means the PR door is closed. */
+  /** PR Gatekeeper endpoint + internal bearer; absent means the PR door is closed.
+   * The GitHub credential lives in that Worker, never here. */
+  prUrl?: string;
   prToken?: string;
   /** Allowlisted "owner/repo" PR targets. */
   prRepos: string[];
@@ -112,6 +115,7 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
       .filter(host => host.length > 0),
     publishUrl: env[ENV.publishUrl],
     publishToken: env[ENV.publishToken],
+    prUrl: env[ENV.prUrl],
     prToken: env[ENV.prToken],
     prRepos: (env[ENV.prRepos] ?? "")
       .split(",")
