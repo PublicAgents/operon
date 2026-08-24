@@ -20,6 +20,7 @@ export {
   type PresleepFailure
 } from "./presleep.js";
 export { runCapture, runStreaming, CommandError } from "./exec.js";
+export { stageAndCollect } from "./staging.js";
 export {
   runGitleaks,
   parseReport,

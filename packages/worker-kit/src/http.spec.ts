@@ -41,6 +41,13 @@ describe("readJson", () => {
     const request = new Request("https://x/", { method: "POST", body: "{not json" });
     expect(await readJson(request)).toEqual({ ok: false });
   });
+
+  it("rejects valid non-object JSON that handlers would crash destructuring", async () => {
+    for (const body of ["null", "42", '"text"', "[1,2]"]) {
+      const request = new Request("https://x/", { method: "POST", body });
+      expect(await readJson(request)).toEqual({ ok: false });
+    }
+  });
 });
 
 describe("responses", () => {

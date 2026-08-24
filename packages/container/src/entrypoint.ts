@@ -1,10 +1,11 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
 import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaks } from "./gitleaks.js";
-import { verifyPresleep, type ChangedFile, type PresleepFailure } from "./presleep.js";
+import { verifyPresleep, type PresleepFailure } from "./presleep.js";
+import { stageAndCollect } from "./staging.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -16,11 +17,6 @@ import { verifyPresleep, type ChangedFile, type PresleepFailure } from "./presle
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
-// A changed file larger than this is not partially scanned (which would let
-// a secret past the cap ride along in the full file git pushes); it is
-// treated as unscannable and blocks the push. State files are small text by
-// design, so a multi-MB change is itself worth a human look.
-const MAX_SCANNED_FILE_BYTES = 4 * 1024 * 1024;
 
 const WAKE_PROMPT =
   "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
@@ -87,47 +83,6 @@ async function runSession(adapter: HarnessAdapter, config: WakeConfig): Promise<
   });
 }
 
-/** NUL-separated raw paths from a `--name-only -z` diff; no quoting, no rename arrows. */
-function splitZ(output: string): string[] {
-  return output.split("\0").filter(entry => entry.length > 0);
-}
-
-/**
- * Scan exactly what will be pushed. Stage first, then read the staged set
- * from git's own NUL-separated path list (correct for renames and paths
- * with special characters), reading each file in full. A file too large to
- * scan, or one that fails to read for any reason other than being a staged
- * deletion, is returned with null content, which blocks the push. Nothing
- * is scanned as a truncated proxy for what git actually stages.
- */
-async function stageAndCollect(): Promise<ChangedFile[]> {
-  await git(["add", "-A"]);
-  const staged = splitZ(await git(["diff", "--cached", "--name-only", "-z"]));
-  const deleted = new Set(
-    splitZ(await git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z"]))
-  );
-
-  const files: ChangedFile[] = [];
-  for (const path of staged) {
-    if (deleted.has(path)) {
-      // A staged deletion publishes no content; the path still counts for
-      // the journal check via its presence in the change set.
-      files.push({ path, content: "" });
-      continue;
-    }
-    try {
-      const buffer = await readFile(join(STATE_DIR, path));
-      files.push({
-        path,
-        content: buffer.byteLength > MAX_SCANNED_FILE_BYTES ? null : buffer.toString("utf8")
-      });
-    } catch {
-      files.push({ path, content: null });
-    }
-  }
-  return files;
-}
-
 async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<void> {
   if (!hasStaged) {
     log("no changes to push");
@@ -170,7 +125,7 @@ async function main(): Promise<number> {
   const sessionExit = await runSession(adapter, config);
   log(`${label}: session exited ${sessionExit}`);
 
-  const staged = await stageAndCollect();
+  const staged = await stageAndCollect(STATE_DIR, sessionBaseEnv());
   // The container auto-denylists every secret it itself holds: the
   // operator's list covers what the operator knows about, this covers what
   // the wake was given. Neither should ever appear in state.

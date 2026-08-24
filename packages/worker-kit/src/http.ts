@@ -12,16 +12,21 @@ export function json(data: unknown, status = 200): Response {
 }
 
 /**
- * Parse a request body as JSON without throwing. A malformed body must not
- * reject before a handler's ledger/failure path runs: an unaudited crash is
- * exactly the invisible failure the ledger exists to prevent. Returns a
- * discriminated result the caller handles explicitly.
+ * Parse a request body as a JSON OBJECT without throwing. A malformed body
+ * must not reject before a handler's ledger/failure path runs, and a valid
+ * non-object body (null, a number, an array) must not either: every caller
+ * destructures fields, so anything that is not a plain object is reported
+ * as not-ok rather than handed over to crash on access.
  */
 export async function readJson<T = unknown>(
   request: Request
 ): Promise<{ ok: true; value: T } | { ok: false }> {
   try {
-    return { ok: true, value: (await request.json()) as T };
+    const value: unknown = await request.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return { ok: false };
+    }
+    return { ok: true, value: value as T };
   } catch {
     return { ok: false };
   }
