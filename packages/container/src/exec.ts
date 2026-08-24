@@ -12,9 +12,14 @@ export class CommandError extends Error {
   constructor(
     command: string,
     readonly exitCode: number | null,
-    readonly stderr: string
+    readonly stderr: string,
+    readonly stdout = ""
   ) {
-    super(`command_failed: ${command} exited ${exitCode ?? "by signal"}: ${stderr.slice(0, 500)}`);
+    // Some tools (Claude Code's -p mode included) report their error on
+    // stdout; a diagnostic that only carries stderr renders as an empty
+    // message exactly when it matters most.
+    const detail = (stderr.trim() || stdout.trim()).slice(0, 500);
+    super(`command_failed: ${command} exited ${exitCode ?? "by signal"}: ${detail}`);
   }
 }
 
@@ -46,7 +51,7 @@ export function runCapture(
     child.on("close", code => {
       if (code === 0 || (code !== null && options.allowedExitCodes?.includes(code))) {
         resolve({ stdout, stderr, exitCode: code });
-      } else reject(new CommandError(command, code, stderr));
+      } else reject(new CommandError(command, code, stderr, stdout));
     });
   });
 }
