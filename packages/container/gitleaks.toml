@@ -1,0 +1,14 @@
+# The wake container's gitleaks configuration. Baked into the image and
+# passed explicitly with --config so the scanned state repo (which the
+# agent can write) can never supply its own. Extends the default ruleset;
+# add chassis-specific rules here, never in the state repo.
+
+[extend]
+useDefault = true
+
+# The clone step embeds the short-lived state-repo token in .git/config
+# (container-local only, never pushed); without this allowlist every wake
+# would flag its own credential and block. Nothing under .git/ is ever
+# part of the pushed change set.
+[[allowlists]]
+paths = ['''(^|/)\.git/''']

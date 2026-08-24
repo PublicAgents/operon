@@ -20,3 +20,9 @@ export {
   type PresleepFailure
 } from "./presleep.js";
 export { runCapture, runStreaming, CommandError } from "./exec.js";
+export {
+  runGitleaks,
+  parseReport,
+  type GitleaksFinding,
+  type GitleaksOptions
+} from "./gitleaks.js";

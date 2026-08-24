@@ -200,7 +200,12 @@ contract (section 4.1). Entrypoint sequence:
    covers whitespace-split, cross-file-split, base64/base64url/hex forms of
    each literal, and auto-includes every secret the container itself holds
    (mind credential, state-repo token, notify token) on top of the
-   operator's denylist. Honest scope: this is a mistake-catcher, and a
+   operator's denylist. A second, generic layer runs gitleaks (pinned
+   binary, checksum-verified) with the IMAGE's config: pattern and entropy
+   rules catch secrets nobody listed, and the scanned repo cannot exempt
+   itself (inline gitleaks:allow ignored, repo ignore files not honored,
+   config never read from the repo); a scanner error blocks the push.
+   Honest scope: this is a mistake-catcher, and a
    deliberately exfiltrating mind can encode past any string filter; the
    defense for that case is structural (the session env contains only the
    mind credential, and every in-container credential is short-lived and

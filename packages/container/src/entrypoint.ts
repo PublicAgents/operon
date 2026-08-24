@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
 import { CommandError, runCapture, runStreaming } from "./exec.js";
-import { verifyPresleep, type ChangedFile } from "./presleep.js";
+import { runGitleaks } from "./gitleaks.js";
+import { verifyPresleep, type ChangedFile, type PresleepFailure } from "./presleep.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -180,6 +181,29 @@ async function main(): Promise<number> {
     ...(config.notifyToken ? [config.notifyToken] : [])
   ];
   const verification = verifyPresleep(staged, denylist);
+
+  // Generic layer: gitleaks catches secrets nobody listed. A scanner error
+  // fails closed as unscannable: an unscanned push must not happen.
+  let gitleaksFailures: PresleepFailure[];
+  try {
+    gitleaksFailures = (await runGitleaks(STATE_DIR)).map(finding => ({
+      code: "secret_found" as const,
+      detail: `gitleaks ${finding.ruleId} in ${finding.file}:${finding.startLine}`
+    }));
+  } catch (error) {
+    gitleaksFailures = [
+      {
+        code: "unscannable",
+        detail: `gitleaks failed to run: ${String(error).slice(0, 300)}`
+      }
+    ];
+  }
+  verification.failures.push(...gitleaksFailures);
+  if (gitleaksFailures.length > 0) {
+    verification.ok = false;
+    verification.blockPush = true;
+  }
+
   for (const failure of verification.failures) {
     log(`presleep ${failure.code}: ${failure.detail}`);
   }

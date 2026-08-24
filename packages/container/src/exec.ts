@@ -22,13 +22,15 @@ export interface RunOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** Exit codes besides 0 that resolve instead of throwing (e.g. a scanner's findings code). */
+  allowedExitCodes?: number[];
 }
 
 export function runCapture(
   command: string,
   args: string[],
   options: RunOptions = {}
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -42,8 +44,9 @@ export function runCapture(
     child.stderr.on("data", chunk => (stderr += chunk));
     child.on("error", reject);
     child.on("close", code => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new CommandError(command, code, stderr));
+      if (code === 0 || (code !== null && options.allowedExitCodes?.includes(code))) {
+        resolve({ stdout, stderr, exitCode: code });
+      } else reject(new CommandError(command, code, stderr));
     });
   });
 }
