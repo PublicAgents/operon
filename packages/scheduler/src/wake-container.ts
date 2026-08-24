@@ -85,16 +85,28 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       return { status: "error", error: `container_start_failed: ${String(error)}` };
     }
 
-    // The heartbeat that keeps this DO (and therefore the container) alive
-    // for the duration of the wake.
-    await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
-
+    // Supervision first, heartbeat second: if arming the alarm fails, the
+    // monitor callback still supervises the wake; the reverse order could
+    // strand a running container with a held lock and no supervisor at all.
     this.ctx.waitUntil(
       this.ctx.container.monitor().then(
         () => this.finish(record, "completed"),
         error => this.finish(record, "failed", String(error))
       )
     );
+
+    try {
+      // The heartbeat that keeps this DO (and therefore the container)
+      // alive for the duration of the wake.
+      await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
+    } catch (error) {
+      // The wake proceeds under monitor supervision, but without the
+      // heartbeat it can be evicted mid-session: the operator should know.
+      console.error("heartbeat arming failed", error);
+      await this.notify(
+        `[${record.agentId}] wake ${record.wakeId}: heartbeat arming failed (${String(error).slice(0, 200)}); the wake may be stopped early by eviction`
+      );
+    }
     return { status: "started", wakeId: record.wakeId };
   }
 
@@ -161,11 +173,21 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     return [...entries.values()];
   }
 
+  /**
+   * Finalize a wake exactly once. The hard-wall alarm and the monitor
+   * callback can race to finish the same record (destroy makes the monitor
+   * settle right after the alarm already recorded hard_timeout), and a
+   * stale monitor callback could otherwise clear a LATER wake's lock and
+   * heartbeat. The guard makes the first finisher win and every other call
+   * a no-op.
+   */
   private async finish(
     record: WakeRecord,
     status: "completed" | "failed",
     reason?: string
   ): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
+    if (!current || current.wakeId !== record.wakeId) return;
     const finished: WakeRecord & { reason?: string } = {
       ...record,
       status,
@@ -181,7 +203,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
   private async notify(text: string): Promise<void> {
     if (!this.env.NOTIFY_URL || !this.env.NOTIFY_TOKEN) return;
     try {
-      await fetch(this.env.NOTIFY_URL, {
+      const response = await fetch(this.env.NOTIFY_URL, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -189,6 +211,11 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         },
         body: JSON.stringify({ text })
       });
+      if (!response.ok) {
+        console.error(
+          `wake-container notify rejected: ${response.status} ${(await response.text()).slice(0, 200)}`
+        );
+      }
     } catch (error) {
       console.error("wake-container notify failed", error);
     }

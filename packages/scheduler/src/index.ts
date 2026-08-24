@@ -109,7 +109,7 @@ async function wake(
 async function notify(env: Env, text: string): Promise<void> {
   if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
   try {
-    await fetch(env.NOTIFY_URL, {
+    const response = await fetch(env.NOTIFY_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -117,6 +117,11 @@ async function notify(env: Env, text: string): Promise<void> {
       },
       body: JSON.stringify({ text })
     });
+    if (!response.ok) {
+      console.error(
+        `notify rejected: ${response.status} ${(await response.text()).slice(0, 200)}`
+      );
+    }
   } catch (error) {
     console.error("notify failed", error);
   }
