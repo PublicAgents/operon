@@ -7,6 +7,7 @@ import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect } from "./staging.js";
 import { Porch } from "./porch.js";
+import { gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -18,6 +19,32 @@ import { Porch } from "./porch.js";
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
+const REPOS_DIR = join(WORKDIR, "repos");
+
+/**
+ * The privilege split: the entrypoint (and its porch) run as root and hold
+ * the tokens; the mind session runs as the unprivileged "mind" user (fixed
+ * uid in the Dockerfile). Same-uid isolation is not isolation: a same-uid
+ * session could read the supervisor's /proc environment and argv. Outside
+ * the image (local dev, tests) there is no root and no mind user, so the
+ * split degrades to same-uid with a logged warning.
+ */
+const MIND_UID = 1001;
+const MIND_GID = 1001;
+
+function canDropPrivileges(): boolean {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+function mindSpawnIds(): { uid?: number; gid?: number } {
+  if (canDropPrivileges()) return { uid: MIND_UID, gid: MIND_GID };
+  return {};
+}
+
+async function chownToMind(path: string): Promise<void> {
+  if (!canDropPrivileges()) return;
+  await runCapture("chown", ["-R", `${MIND_UID}:${MIND_GID}`, path]);
+}
 
 /**
  * Minutes reserved between the session's end and the wake's hard wall, for
@@ -66,20 +93,42 @@ function sessionBaseEnv(): Record<string, string> {
   return env;
 }
 
+/** Base env for the entrypoint's own git operations over mind-owned trees. */
+function gitBaseEnv(): Record<string, string> {
+  return gitCredentialEnv(sessionBaseEnv(), "");
+}
+
 async function git(args: string[], env?: Record<string, string>): Promise<string> {
   const { stdout } = await runCapture("git", args, {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...env }
+    env: { ...gitBaseEnv(), ...env }
+  });
+  return stdout;
+}
+
+/** A credentialed git run: token in the child env only, never argv or disk. */
+async function gitWithToken(args: string[], token: string): Promise<string> {
+  const { stdout } = await runCapture("git", [...hardenedGitFlags(), ...args], {
+    cwd: STATE_DIR,
+    env: gitCredentialEnv(sessionBaseEnv(), token),
+    timeoutMs: 5 * 60 * 1000
   });
   return stdout;
 }
 
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
-  const url = `https://x-access-token:${config.githubToken}@github.com/${config.stateRepo}.git`;
-  await runCapture("git", ["clone", url, STATE_DIR], { env: sessionBaseEnv() });
+  await mkdir(REPOS_DIR, { recursive: true });
+  // Clean URL: the token travels in the git child's env via the credential
+  // helper, so nothing in .git/config ever carries it.
+  await runCapture(
+    "git",
+    [...hardenedGitFlags(), "clone", `https://github.com/${config.stateRepo}.git`, STATE_DIR],
+    { env: gitCredentialEnv(sessionBaseEnv(), config.githubToken), timeoutMs: 5 * 60 * 1000 }
+  );
   await git(["config", "user.name", config.agentId]);
   await git(["config", "user.email", `${config.agentId}@operon.invalid`]);
+  await chownToMind(WORKDIR);
 }
 
 interface VerifiedModel {
@@ -179,10 +228,20 @@ async function runSession(
   // when the mind ran long. OPERON_PORCH is a loopback address, not a
   // credential: the session's env still contains only its own mind
   // credential; every other token stays behind the porch.
+  const ids = mindSpawnIds();
+  if (!("uid" in ids)) {
+    log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
+  }
   return runStreaming(spec.command, [...spec.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...spec.env, OPERON_PORCH: porchUrl },
-    timeoutMs: budgetMinutes * 60_000
+    env: {
+      ...sessionBaseEnv(),
+      ...spec.env,
+      OPERON_PORCH: porchUrl,
+      ...("uid" in ids ? { HOME: "/home/mind" } : {})
+    },
+    timeoutMs: budgetMinutes * 60_000,
+    ...ids
   });
 }
 
@@ -192,7 +251,7 @@ async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<vo
     return;
   }
   await git(["commit", "-m", `wake ${config.wakeId}`]);
-  await git(["push", "origin", "HEAD"]);
+  await gitWithToken(["push", "--no-verify", "origin", "HEAD"], config.githubToken);
   log("state pushed");
 }
 
@@ -232,8 +291,9 @@ async function main(): Promise<number> {
   const porch = new Porch({
     config,
     stateDir: STATE_DIR,
-    reposDir: join(WORKDIR, "repos"),
+    reposDir: REPOS_DIR,
     denylist: autoDenylist(config),
+    chownForSession: chownToMind,
     log
   });
   const porchUrl = await porch.start();
@@ -248,7 +308,7 @@ async function main(): Promise<number> {
   }
   log(`${label}: session exited ${sessionExit}`);
 
-  const staged = await stageAndCollect(STATE_DIR, sessionBaseEnv());
+  const staged = await stageAndCollect(STATE_DIR, gitBaseEnv());
   const verification = verifyPresleep(staged, autoDenylist(config));
 
   // Generic layer: gitleaks catches secrets nobody listed. A scanner error

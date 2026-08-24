@@ -29,6 +29,9 @@ export interface RunOptions {
   timeoutMs?: number;
   /** Exit codes besides 0 that resolve instead of throwing (e.g. a scanner's findings code). */
   allowedExitCodes?: number[];
+  /** Run the child as this uid/gid (privilege drop; requires root). */
+  uid?: number;
+  gid?: number;
 }
 
 export function runCapture(
@@ -41,7 +44,9 @@ export function runCapture(
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: options.timeoutMs
+      timeout: options.timeoutMs,
+      uid: options.uid,
+      gid: options.gid
     });
     let stdout = "";
     let stderr = "";
@@ -67,7 +72,9 @@ export function runStreaming(
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "inherit", "inherit"],
-      timeout: options.timeoutMs
+      timeout: options.timeoutMs,
+      uid: options.uid,
+      gid: options.gid
     });
     child.on("error", reject);
     child.on("close", code => resolve(code ?? 1));

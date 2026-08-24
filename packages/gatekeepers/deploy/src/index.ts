@@ -1,14 +1,14 @@
 import { parseRoster } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import {
-  decodeBase64,
   hostLabel,
   storagePath,
   validatePublish,
   type PublishRequest
 } from "./gates.js";
+import { SitePublisher } from "./site-publisher.js";
 
-export { Ledger };
+export { Ledger, SitePublisher };
 export * from "./gates.js";
 
 /**
@@ -25,6 +25,7 @@ interface Env {
   DISCLOSURE_MARKER?: string;
   SECRET_DENYLIST?: string;
   SITE_STORE: KVNamespace;
+  SITE_PUBLISHER: DurableObjectNamespace<SitePublisher>;
   LEDGER: DurableObjectNamespace<Ledger>;
 }
 
@@ -34,10 +35,6 @@ function ledger(env: Env) {
 
 function fileKey(host: string, path: string): string {
   return `f:${host}:${path}`;
-}
-
-function manifestKey(host: string): string {
-  return `m:${host}`;
 }
 
 async function handlePublish(request: Request, env: Env): Promise<Response> {
@@ -73,25 +70,18 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
   }
 
   const { host, files, agentId } = body.value;
-  const newPaths = new Set(files.map(file => file.path));
-  for (const file of files) {
-    await env.SITE_STORE.put(fileKey(host, file.path), decodeBase64(file.contentBase64), {
-      metadata: { contentType: file.contentType }
-    });
-  }
-  const previous = await env.SITE_STORE.get<string[]>(manifestKey(host), "json");
-  for (const stale of previous ?? []) {
-    if (!newPaths.has(stale)) await env.SITE_STORE.delete(fileKey(host, stale));
-  }
-  await env.SITE_STORE.put(manifestKey(host), JSON.stringify([...newPaths]));
+  // Single writer per host: the per-host Durable Object serializes the
+  // whole write-delete-manifest sequence against concurrent publishes.
+  const publisher = env.SITE_PUBLISHER.get(env.SITE_PUBLISHER.idFromName(host));
+  const outcome = await publisher.publishFiles(host, files);
 
   await ledger(env).append("published", {
     agentId,
     host,
-    files: files.length,
-    removed: (previous ?? []).filter(path => !newPaths.has(path)).length
+    files: outcome.files,
+    removed: outcome.removed
   });
-  return json({ ok: true, host, files: files.length });
+  return json({ ok: true, host, files: outcome.files });
 }
 
 async function serve(request: Request, env: Env): Promise<Response> {

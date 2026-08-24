@@ -13,13 +13,17 @@
       {
         "name": "LEDGER",
         "class_name": "Ledger"
+      },
+      {
+        "name": "SITE_PUBLISHER",
+        "class_name": "SitePublisher"
       }
     ]
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["Ledger"]
+      "new_sqlite_classes": ["Ledger", "SitePublisher"]
     }
   ],
   "kv_namespaces": [

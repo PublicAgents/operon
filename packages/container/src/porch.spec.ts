@@ -71,6 +71,7 @@ async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
     reposDir: join(stateDir, "repos"),
     denylist,
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
+    chownForSession: async () => undefined,
     log: () => undefined
   });
   const url = await porch.start(0);

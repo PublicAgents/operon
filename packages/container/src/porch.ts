@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { runCapture } from "./exec.js";
+import { gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
 import { runGitleaks } from "./gitleaks.js";
 import { scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
@@ -18,10 +19,11 @@ import type { WakeConfig } from "./config.js";
  *  - publish: submit a directory of static files for one assigned host;
  *    swept here (denylist variants + gitleaks) BEFORE anything leaves the
  *    container, then re-checked by the publish Gatekeeper.
- *  - clone/pr: fork-based pull requests through the machine user. The
- *    porch performs every credentialed git operation with the token in a
- *    per-invocation header, so it never lands in a .git/config or the
- *    session env, and targets are allowlisted by deployment config.
+ *  - clone/pr: fork-based pull requests through the machine user. Every
+ *    credentialed git operation is hardened (see git-cred.ts): the token
+ *    exists only in the git child's environment, never on argv, on disk,
+ *    or in the session env; hooks and repo-config execution vectors are
+ *    disabled; targets are allowlisted by deployment config.
  */
 
 export const PORCH_PORT = 41414;
@@ -61,6 +63,8 @@ export interface PorchContext {
   denylist: string[];
   /** Overrides the image's gitleaks config path (tests run outside the image). */
   gitleaksConfig?: string;
+  /** Hands ownership of a path to the session user (no-op outside the image). */
+  chownForSession(path: string): Promise<void>;
   log(message: string): void;
 }
 
@@ -245,10 +249,6 @@ export class Porch {
     return ok({ host, files: files.length, gatekeeper: resultText });
   }
 
-  private authHeader(): string {
-    return `Basic ${Buffer.from(`x-access-token:${this.context.config.prToken}`).toString("base64")}`;
-  }
-
   private async github(path: string, init: RequestInit = {}): Promise<Response> {
     return fetch(`https://api.github.com${path}`, {
       ...init,
@@ -289,22 +289,21 @@ export class Porch {
     if (typeof repo !== "string") return repo;
 
     const dir = this.repoDir(repo);
-    // The credential travels as a per-invocation header, never into the
-    // clone's config, so nothing on disk carries it.
+    // Hardened invocation: the token travels only in the git child's env
+    // (never argv, never .git/config), hooks and config-exec vectors are
+    // disabled, and the finished clone is handed to the session user.
     await runCapture(
       "git",
-      [
-        "-c",
-        `http.https://github.com/.extraheader=Authorization: ${this.authHeader()}`,
-        "clone",
-        `https://github.com/${repo}.git`,
-        dir
-      ],
-      { timeoutMs: 5 * 60 * 1000 }
+      [...hardenedGitFlags(), "clone", `https://github.com/${repo}.git`, dir],
+      {
+        env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, this.context.config.prToken ?? ""),
+        timeoutMs: 5 * 60 * 1000
+      }
     );
     const user = await this.whoami();
     await runCapture("git", ["-C", dir, "config", "user.name", user]);
     await runCapture("git", ["-C", dir, "config", "user.email", `${user}@users.noreply.github.com`]);
+    await this.context.chownForSession(dir);
     return ok({ path: dir, repo });
   }
 
@@ -323,11 +322,19 @@ export class Porch {
     } catch {
       return fail(409, "not_cloned", `clone ${repo} first`);
     }
-    const branch = (await runCapture("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+    const branch = (
+      await runCapture("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], {
+        env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
+      })
+    ).stdout.trim();
     if (branch === "main" || branch === "master" || branch === "HEAD") {
       return fail(400, "not_on_a_branch", "create and commit to a feature branch first");
     }
-    const dirty = (await runCapture("git", ["-C", dir, "status", "--porcelain"])).stdout.trim();
+    const dirty = (
+      await runCapture("git", ["-C", dir, "status", "--porcelain"], {
+        env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
+      })
+    ).stdout.trim();
     if (dirty.length > 0) return fail(409, "uncommitted_changes", "commit your changes first");
 
     const user = await this.whoami();
@@ -343,19 +350,25 @@ export class Porch {
     }
     if (!forkReady) return fail(502, "fork_unavailable", `${user}/${name} did not appear`);
 
+    // --no-verify plus the hardened flags: nothing the session wrote into
+    // the clone (hooks, fsmonitor, helpers) executes during this push, and
+    // the token exists only in this child's environment.
     await runCapture(
       "git",
       [
+        ...hardenedGitFlags(),
         "-C",
         dir,
-        "-c",
-        `http.https://github.com/.extraheader=Authorization: ${this.authHeader()}`,
         "push",
+        "--no-verify",
         "--force-with-lease",
         `https://github.com/${user}/${name}.git`,
         `HEAD:${branch}`
       ],
-      { timeoutMs: 5 * 60 * 1000 }
+      {
+        env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, this.context.config.prToken ?? ""),
+        timeoutMs: 5 * 60 * 1000
+      }
     );
 
     const upstream = await this.github(`/repos/${repo}`);
@@ -378,12 +391,21 @@ export class Porch {
   }
 }
 
+const MAX_BODY_BYTES = 1024 * 1024;
+
 function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let data = "";
+    let overflowed = false;
     request.on("data", chunk => {
+      if (overflowed) return;
       data += chunk;
-      if (data.length > 64 * 1024 * 1024) reject(new Error("body_too_large"));
+      if (data.length > MAX_BODY_BYTES) {
+        overflowed = true;
+        data = "";
+        request.destroy();
+        reject(new Error("body_too_large"));
+      }
     });
     request.on("end", () => {
       try {
