@@ -236,14 +236,22 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     // The ownership check and the cleanup are one transaction: a stale
     // finisher that lost the lock to a newer launch can neither write its
     // row nor delete the new wake's lock or heartbeat, atomically and
-    // regardless of how coroutines or events interleave.
-    await this.ctx.storage.transaction(async txn => {
-      const current = await txn.get<WakeRecord>(CURRENT);
-      if (!current || current.wakeId !== record.wakeId) return;
-      await txn.put(rowKey(record), finished);
-      await txn.deleteAlarm();
-      await txn.delete(CURRENT);
-    });
+    // regardless of how coroutines or events interleave. If the
+    // transaction itself fails transiently, membership is rolled back so a
+    // later finisher (the alarm's reconcile, or the racing callback) can
+    // retry instead of being permanently suppressed.
+    try {
+      await this.ctx.storage.transaction(async txn => {
+        const current = await txn.get<WakeRecord>(CURRENT);
+        if (!current || current.wakeId !== record.wakeId) return;
+        await txn.put(rowKey(record), finished);
+        await txn.deleteAlarm();
+        await txn.delete(CURRENT);
+      });
+    } catch (error) {
+      this.finishedWakeIds.delete(record.wakeId);
+      throw error;
+    }
   }
 
   /** Best-effort operator alert through the telegram Gatekeeper; never throws. */
