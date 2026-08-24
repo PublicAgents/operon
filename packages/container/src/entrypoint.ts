@@ -103,8 +103,14 @@ function mindHome(): string {
  * Best-effort: an email door not wired, or a pull failure, must not fail
  * the wake.
  */
-async function pullInbox(config: WakeConfig): Promise<void> {
-  if (!config.emailUrl || !config.emailToken) return;
+/**
+ * Pull inbound email and write it to inbox/, returning the pulled ids so
+ * the caller can ACK them only AFTER the wake's state (including these
+ * files) is durably persisted. Acking at boot would lose messages if the
+ * wake then fails or persistence is blocked.
+ */
+async function pullInbox(config: WakeConfig): Promise<string[]> {
+  if (!config.emailUrl || !config.emailToken) return [];
   try {
     const response = await fetch(`${config.emailUrl}/gatekeeper/email/pull`, {
       method: "POST",
@@ -113,7 +119,7 @@ async function pullInbox(config: WakeConfig): Promise<void> {
     });
     if (!response.ok) {
       log(`inbox pull failed: ${response.status}`);
-      return;
+      return [];
     }
     const { messages } = (await response.json()) as {
       messages: Array<{
@@ -125,7 +131,7 @@ async function pullInbox(config: WakeConfig): Promise<void> {
         attachments?: Array<{ filename: string; mimeType: string; size: number }>;
       }>;
     };
-    if (!messages || messages.length === 0) return;
+    if (!messages || messages.length === 0) return [];
     const dir = join(STATE_DIR, "inbox");
     await mkdir(dir, { recursive: true });
     for (const m of messages) {
@@ -140,18 +146,27 @@ async function pullInbox(config: WakeConfig): Promise<void> {
       await writeFile(join(dir, `${m.date.slice(0, 19).replace(/[:]/g, "")}-${m.id.slice(0, 8)}.md`), body);
     }
     await chownToMind(dir);
-    // Ack only after the files are durably written: an interrupted pull or
-    // a failed write leaves the messages to be re-delivered next wake
-    // (writing the same file again is idempotent).
-    await fetch(`${config.emailUrl}/gatekeeper/email/ack`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
-      body: JSON.stringify({ agentId: config.agentId, ids: messages.map(m => m.id) })
-    }).catch(() => undefined);
     log(`pulled ${messages.length} inbound email(s) into inbox/`);
+    return messages.map(m => m.id);
   } catch (error) {
     log(`inbox pull error: ${String(error).slice(0, 200)}`);
+    return [];
   }
+}
+
+/**
+ * Ack pulled inbox messages: only called after the wake's state is durably
+ * persisted, so the DO forgets a message only once it is committed to the
+ * state repo. An interrupted or blocked wake re-delivers them next time
+ * (writing the same inbox file again is idempotent).
+ */
+async function ackInbox(config: WakeConfig, ids: string[]): Promise<void> {
+  if (!config.emailUrl || !config.emailToken || ids.length === 0) return;
+  await fetch(`${config.emailUrl}/gatekeeper/email/ack`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
+    body: JSON.stringify({ agentId: config.agentId, ids })
+  }).catch(() => undefined);
 }
 
 async function cloneState(config: WakeConfig): Promise<void> {
@@ -354,7 +369,7 @@ async function main(): Promise<number> {
 
   log(`${label}: cloning ${config.stateRepo}`);
   await cloneState(config);
-  await pullInbox(config);
+  const pulledInboxIds = await pullInbox(config);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -426,6 +441,9 @@ async function main(): Promise<number> {
   }
 
   await persistState(config, changes);
+  // Inbox is acked only now, after the state (including the inbox files) is
+  // durably persisted: a wake that failed or was blocked re-delivers.
+  await ackInbox(config, pulledInboxIds);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

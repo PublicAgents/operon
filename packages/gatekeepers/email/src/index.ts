@@ -89,7 +89,7 @@ async function handleSend(request: Request, env: Env): Promise<Response> {
 
   // Atomic check-and-reserve in the DO: two overlapping sends near the cap
   // cannot both pass, and the slot is reserved before delivery.
-  const reservation = await box.reserveSend(recipient, now, false);
+  const reservation = await box.reserveSend(recipient, subject, now, false);
   if (reservation.action === "reject") {
     return errorResponse(429, "rate_limited", `daily send cap is ${box.dailyCap}`);
   }
@@ -132,12 +132,12 @@ async function deliver(
     return errorResponse(502, "send_failed", String(error).slice(0, 300));
   }
 
-  // Sent for real from here on. Every oversight channel is best-effort and
-  // independent: none may throw and abort this function (which would leave
-  // a sent email unrecorded and, for an approved send, a claimed message
-  // stranded). console.log is the always-available final record; the
-  // ledger, operator email copy, and Telegram notify are richer surfaces,
-  // each attempted regardless of the others.
+  // Sent for real from here on. The durable operator-visible record already
+  // exists: reserveSend wrote an outbox row in the DO, before this network
+  // send, readable via /outbox. So every channel here is best-effort and
+  // non-throwing (a failure can neither hide the send nor, for an approved
+  // send, strand the claimed message): the ledger, the operator email copy,
+  // and the Telegram notify are richer surfaces layered on the outbox.
   console.log(`email_sent agent=${agentId} to=${msg.to} count=${count}`);
   try {
     await ledger(env).append("email_sent", { agentId, to: msg.to, subject: msg.subject, count });
@@ -181,7 +181,7 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
   if (!held) return errorResponse(409, "held_unavailable", "already claimed or not found");
 
   const now = new Date().toISOString();
-  const reservation = await box.reserveSend(held.to, now, true);
+  const reservation = await box.reserveSend(held.to, held.subject, now, true);
   if (reservation.action === "reject") {
     await box.unclaimHeld(heldId);
     return errorResponse(429, "rate_limited", `daily send cap is ${box.dailyCap}`);
@@ -225,6 +225,17 @@ async function handleAck(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, acked: ids.length });
 }
 
+async function handleOutbox(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof body.value.agentId === "string" ? findAgent(roster, body.value.agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  return json({ ok: true, outbox: await mailbox(env, agent.id).outbox() });
+}
+
 export default {
   async email(message, env, ctx): Promise<void> {
     const roster = parseRoster(env.ROSTER);
@@ -258,6 +269,7 @@ export default {
       if (url.pathname === "/gatekeeper/email/send") return handleSend(request, env);
       if (url.pathname === "/gatekeeper/email/pull") return handlePull(request, env);
       if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
+      if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
       if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
     }
     return errorResponse(404, "not_found");

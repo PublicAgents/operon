@@ -92,7 +92,12 @@ export class Mailbox extends DurableObject {
    * overlapping sends near the cap cannot both pass. A caller whose actual
    * delivery then fails calls release() to give the slot back.
    */
-  async reserveSend(to: string, nowIso: string, approved: boolean): Promise<SendReservation> {
+  async reserveSend(
+    to: string,
+    subject: string,
+    nowIso: string,
+    approved: boolean
+  ): Promise<SendReservation> {
     const day = today(nowIso);
     const window = await this.ctx.storage.get<SendWindow>("sendWindow");
     const sentToday = window && window.day === day ? window.count : 0;
@@ -113,7 +118,25 @@ export class Mailbox extends DurableObject {
       correspondents.push(recipient);
       await this.ctx.storage.put("correspondents", correspondents);
     }
+    // Durable outbox record, written in the SAME DO turn as the reservation
+    // and BEFORE the network send: the guaranteed operator-visible record of
+    // every outbound attempt, independent of whether the email copy or the
+    // Telegram notify then succeed. Readable via the outbox endpoint.
+    await this.ctx.storage.put(`out:${nowIso}:${crypto.randomUUID()}`, {
+      to: recipient,
+      subject,
+      at: nowIso
+    });
     return { action: "send", count };
+  }
+
+  async outbox(limit = 100): Promise<Array<{ to: string; subject: string; at: string }>> {
+    const entries = await this.ctx.storage.list<{ to: string; subject: string; at: string }>({
+      prefix: "out:",
+      reverse: true,
+      limit
+    });
+    return [...entries.values()];
   }
 
   /** Return a reserved-but-undelivered slot to the daily counter. */
