@@ -121,6 +121,15 @@ async function wake(
       await notify(env, `[${agent.id}] wake skipped: ${detail}`);
       return { status: "locked", wakeId: result.wakeId, detail };
     }
+    if (result.status === "disabled") {
+      // Deliberate operator state, notified only for manual wakes: a cron
+      // firing against a disabled agent is the kill switch doing its job,
+      // and alerting on every cron tick would be noise.
+      if (trigger === "manual") {
+        await notify(env, `[${agent.id}] wake refused: disabled by operator (/enable ${agent.id} to lift)`);
+      }
+      return { status: "disabled", detail: "disabled by operator" };
+    }
     if (result.status === "error") {
       await notify(env, `[${agent.id}] wake ${wakeId} failed to start: ${result.error}`);
       return { status: "error", wakeId, detail: result.error };

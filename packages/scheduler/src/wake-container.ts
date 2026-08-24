@@ -121,6 +121,21 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       return { status: "error", error: `container_start_failed: ${String(error)}` };
     }
 
+    // Close the disable/launch race: a /disable that interleaved at any
+    // await above may have seen no running container and killed nothing.
+    // Every interleaving now ends dead: the flag was either visible at the
+    // top check (refused), or is visible here, where this launch kills its
+    // own container.
+    if (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) {
+      try {
+        this.ctx.container.destroy();
+      } catch (error) {
+        console.error("kill after disabled-race failed", error);
+      }
+      await this.finish(record, "failed", "killed_by_operator_disable");
+      return { status: "disabled" };
+    }
+
     // Supervision first, heartbeat second: if arming the alarm fails, the
     // monitor callback still supervises the wake; the reverse order could
     // strand a running container with a held lock and no supervisor at all.
@@ -169,11 +184,16 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     }
     await this.ctx.storage.put(OPERATOR_DISABLED, true);
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
-    if (current && this.ctx.container?.running) {
-      try {
-        this.ctx.container.destroy();
-      } catch (error) {
-        console.error("kill on disable failed", error);
+    if (current) {
+      // Kill a running container; a launch still mid-start sees the flag
+      // in launch()'s post-start check and kills its own container, so a
+      // CURRENT that is not running yet still ends dead.
+      if (this.ctx.container?.running) {
+        try {
+          this.ctx.container.destroy();
+        } catch (error) {
+          console.error("kill on disable failed", error);
+        }
       }
       return { disabled: true, killedWakeId: current.wakeId };
     }
