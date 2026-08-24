@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { runCapture } from "./exec.js";
-import { gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
+import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 import { runGitleaks } from "./gitleaks.js";
 import { scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
@@ -294,7 +294,7 @@ export class Porch {
     // disabled, and the finished clone is handed to the session user.
     await runCapture(
       "git",
-      [...hardenedGitFlags(), "clone", `https://github.com/${repo}.git`, dir],
+      [...hardenedGitFlags(), "clone", githubRepoUrl(repo), dir],
       {
         env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, this.context.config.prToken ?? ""),
         timeoutMs: 5 * 60 * 1000
@@ -366,7 +366,7 @@ export class Porch {
         "push",
         "--no-verify",
         "--force-with-lease",
-        `https://github.com/${user}/${name}.git`,
+        githubRepoUrl(`${user}/${name}`),
         `HEAD:${branch}`
       ],
       {

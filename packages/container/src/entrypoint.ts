@@ -7,7 +7,7 @@ import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect } from "./staging.js";
 import { Porch } from "./porch.js";
-import { gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
+import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -130,7 +130,7 @@ async function cloneState(config: WakeConfig): Promise<void> {
   // helper, so nothing in .git/config ever carries it.
   await runCapture(
     "git",
-    [...hardenedGitFlags(), "clone", `https://github.com/${config.stateRepo}.git`, STATE_DIR],
+    [...hardenedGitFlags(), "clone", githubRepoUrl(config.stateRepo), STATE_DIR],
     { env: gitCredentialEnv(sessionBaseEnv(), config.githubToken), timeoutMs: 5 * 60 * 1000 }
   );
   await git(["config", "user.name", config.agentId]);
@@ -260,7 +260,14 @@ async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<vo
   // --no-verify in addition to the hooks-disabled flags: belt and braces
   // against a mind-planted commit-time hook running as root.
   await git(["commit", "--no-verify", "-m", `wake ${config.wakeId}`]);
-  await gitWithToken(["push", "--no-verify", "origin", "HEAD"], config.githubToken);
+  // Push to an EXPLICIT github URL, never the 'origin' remote name: the
+  // mind can rewrite origin's URL/transport in .git/config, and this
+  // process runs as root.
+  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  await gitWithToken(
+    ["push", "--no-verify", githubRepoUrl(config.stateRepo), `HEAD:${branch}`],
+    config.githubToken
+  );
   log("state pushed");
 }
 

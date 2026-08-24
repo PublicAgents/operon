@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCapture } from "./exec.js";
-import { gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
+import { githubRepoUrl, gitCredentialEnv, hardenedGitFlags } from "./git-cred.js";
 
 async function initRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "operon-hooks-"));
@@ -38,6 +38,18 @@ describe("hardenedGitFlags", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("scopes the credential helper to github https and refuses ssh/file transport", () => {
+    const flags = hardenedGitFlags().join(" ");
+    expect(flags).toContain("credential.https://github.com.helper=");
+    expect(flags).toContain("protocol.ssh.allow=never");
+    expect(flags).toContain("core.sshCommand=/bin/false");
+    expect(flags).toContain("protocol.file.allow=never");
+  });
+
+  it("builds explicit trusted github URLs", () => {
+    expect(githubRepoUrl("owner/repo")).toBe("https://github.com/owner/repo.git");
   });
 
   it("keeps the token off argv and out of config", () => {

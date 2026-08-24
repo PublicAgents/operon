@@ -31,21 +31,53 @@ function ensureEmptyHooksDir(): string {
   return emptyHooksDir;
 }
 
-/** Config flags prepended to every credentialed git command. */
+/** The only remote host and scheme the token is ever handed to. */
+const GITHUB_ORIGIN = "https://github.com";
+
+/**
+ * Config flags prepended to every credentialed git command. Beyond
+ * disabling hooks/fsmonitor, these defend the ROOT-run push against a
+ * .git/config the unprivileged mind can rewrite:
+ *
+ *  - the credential helper is SCOPED to https://github.com, so even if the
+ *    mind rewrites a remote or adds a url.<evil>.insteadOf rule, the token
+ *    is never handed to any other host (that push just fails, unauthed);
+ *  - SSH and file transports are refused and core.sshCommand is forced to
+ *    a no-op, so a rewritten ssh:// remote cannot execute a command as
+ *    root; only https/git remain;
+ *  - -c overrides take precedence over repo-level config, which is what
+ *    makes these hold against a hostile local config.
+ *
+ * Callers still push to an EXPLICIT github.com URL rather than a remote
+ * name, so the transport is not read from the mind-owned remote at all.
+ */
 export function hardenedGitFlags(): string[] {
   const helper = `!f() { echo username=x-access-token; echo "password=$${TOKEN_ENV}"; }; f`;
   return [
     "-c",
     "credential.helper=",
     "-c",
-    `credential.helper=${helper}`,
+    `credential.${GITHUB_ORIGIN}.helper=`,
+    "-c",
+    `credential.${GITHUB_ORIGIN}.helper=${helper}`,
+    "-c",
+    "credential.useHttpPath=false",
     "-c",
     `core.hooksPath=${ensureEmptyHooksDir()}`,
     "-c",
     "core.fsmonitor=false",
     "-c",
+    "core.sshCommand=/bin/false",
+    "-c",
+    "protocol.ssh.allow=never",
+    "-c",
     "protocol.file.allow=never"
   ];
+}
+
+/** The explicit, trusted push/clone URL for a github "owner/repo". */
+export function githubRepoUrl(repo: string): string {
+  return `${GITHUB_ORIGIN}/${repo}.git`;
 }
 
 /** Environment for a credentialed git child. */
