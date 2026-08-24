@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  effectiveCursors,
   prunableIds,
   transcriptFor,
   type AgentTranscript,
@@ -12,7 +13,16 @@ import {
  * monotonic and pulls never race appends.
  */
 export class Channel extends DurableObject {
-  async append(entry: Omit<ChannelEntry, "id">): Promise<ChannelEntry> {
+  /**
+   * protectAgents is the roster's agent list: agents whose unread backlog
+   * pruning must respect even before their first ack. undefined (roster
+   * unavailable to the caller) fails safe: nothing prunes below the hard
+   * bound.
+   */
+  async append(
+    entry: Omit<ChannelEntry, "id">,
+    protectAgents?: string[]
+  ): Promise<ChannelEntry> {
     const nextId = ((await this.ctx.storage.get<number>("nextId")) ?? 1);
     const stored: ChannelEntry = { id: nextId, ...entry };
     await this.ctx.storage.put(`e:${String(nextId).padStart(10, "0")}`, stored);
@@ -23,8 +33,15 @@ export class Channel extends DurableObject {
     // channel is a recent-context window, not an archive (the ledger and
     // the agents' own journals are the archive).
     const entries = [...(await this.ctx.storage.list<ChannelEntry>({ prefix: "e:" })).values()];
-    const cursors = [...(await this.ctx.storage.list<number>({ prefix: "cursor:" })).values()];
-    const { ids, droppedUnacked } = prunableIds(entries, cursors);
+    const cursorsByAgent = new Map(
+      [...(await this.ctx.storage.list<number>({ prefix: "cursor:" })).entries()].map(
+        ([key, value]) => [key.slice("cursor:".length), value] as const
+      )
+    );
+    const { ids, droppedUnacked } = prunableIds(
+      entries,
+      effectiveCursors(cursorsByAgent, protectAgents)
+    );
     if (ids.length > 0) {
       if (droppedUnacked > 0) {
         console.error(

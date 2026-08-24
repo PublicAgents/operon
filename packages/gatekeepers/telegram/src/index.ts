@@ -1,3 +1,4 @@
+import { parseRoster } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import { triageUpdate, type TelegramUpdate } from "./webhook.js";
 import { Channel } from "./channel-do.js";
@@ -13,6 +14,7 @@ interface Env {
   WAKE_TRIGGER_TOKEN?: string;
   OPERATOR_API_TOKEN?: string;
   OPERATOR_CHAT_ID?: string;
+  ROSTER?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -24,6 +26,20 @@ function ledger(env: Env) {
 
 function channel(env: Env) {
   return env.CHANNEL.get(env.CHANNEL.idFromName("operator"));
+}
+
+/**
+ * The roster's agent ids, whose unread backlog channel pruning must
+ * respect. undefined when the roster is absent or unparseable: the
+ * channel then fails safe and prunes nothing below its hard bound.
+ */
+function protectedAgents(env: Env): string[] | undefined {
+  if (!env.ROSTER) return undefined;
+  try {
+    return parseRoster(env.ROSTER).agents.map(agent => agent.id);
+  } catch {
+    return undefined;
+  }
 }
 
 async function sendToOperator(env: Env, text: string): Promise<boolean> {
@@ -93,23 +109,29 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "tell": {
-      await channel(env).append({
-        at: new Date().toISOString(),
-        from: "operator",
-        agentId: action.agentId,
-        text: action.text.slice(0, 4000)
-      });
+      await channel(env).append(
+        {
+          at: new Date().toISOString(),
+          from: "operator",
+          agentId: action.agentId,
+          text: action.text.slice(0, 4000)
+        },
+        protectedAgents(env)
+      );
       await ledger(env).append("operator_tell", { agentId: action.agentId, length: action.text.length });
       await sendToOperator(env, `queued for ${action.agentId}; delivered on its next wake`);
       return json({ ok: true });
     }
     case "broadcast": {
-      await channel(env).append({
-        at: new Date().toISOString(),
-        from: "operator",
-        agentId: "*",
-        text: action.text.slice(0, 4000)
-      });
+      await channel(env).append(
+        {
+          at: new Date().toISOString(),
+          from: "operator",
+          agentId: "*",
+          text: action.text.slice(0, 4000)
+        },
+        protectedAgents(env)
+      );
       await ledger(env).append("operator_broadcast", { length: action.text.length });
       await sendToOperator(env, "queued for all agents; delivered on their next wakes");
       return json({ ok: true });
@@ -147,12 +169,15 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
   // even if the Telegram delivery failed: the channel is the memory.
   if (typeof body.value.agentId === "string" && body.value.agentId.length > 0) {
     try {
-      await channel(env).append({
-        at: new Date().toISOString(),
-        from: "agent",
-        agentId: body.value.agentId,
-        text: text.slice(0, 4000)
-      });
+      await channel(env).append(
+        {
+          at: new Date().toISOString(),
+          from: "agent",
+          agentId: body.value.agentId,
+          text: text.slice(0, 4000)
+        },
+        protectedAgents(env)
+      );
     } catch (error) {
       console.error("channel append failed", error);
     }
@@ -209,12 +234,15 @@ export default {
       ) {
         return errorResponse(400, "invalid_request", 'agentId ("*" broadcasts) and text required');
       }
-      const entry = await channel(env).append({
-        at: new Date().toISOString(),
-        from: "operator",
-        agentId: body.value.agentId,
-        text: body.value.text.slice(0, 4000)
-      });
+      const entry = await channel(env).append(
+        {
+          at: new Date().toISOString(),
+          from: "operator",
+          agentId: body.value.agentId,
+          text: body.value.text.slice(0, 4000)
+        },
+        protectedAgents(env)
+      );
       await ledger(env).append("operator_api_send", { agentId: body.value.agentId });
       return json({ ok: true, id: entry.id });
     }

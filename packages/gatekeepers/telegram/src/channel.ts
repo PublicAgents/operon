@@ -38,6 +38,22 @@ export const HARD_RETENTION = 2000;
  * log still exceeds HARD_RETENTION, the overflow is dropped oldest-first
  * regardless; the caller logs that unacked entries were lost.
  */
+/**
+ * The cursor set pruning must respect: every protected agent counts, a
+ * missing cursor counting as 0 (an agent that never completed a wake has
+ * read nothing). Stored cursors for agents no longer in the roster are
+ * dropped. An UNKNOWN protection set (no roster available) returns [0]:
+ * fail safe, nothing prunes below the hard bound.
+ */
+export function effectiveCursors(
+  stored: Map<string, number>,
+  protectAgents: string[] | undefined
+): number[] {
+  if (!protectAgents) return [0];
+  if (protectAgents.length === 0) return [0];
+  return protectAgents.map(agentId => stored.get(agentId) ?? 0);
+}
+
 export function prunableIds(
   entries: ChannelEntry[],
   cursors: number[]

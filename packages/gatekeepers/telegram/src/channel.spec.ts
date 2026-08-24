@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { concernsAgent, prunableIds, transcriptFor, CONTEXT_WINDOW, HARD_RETENTION, RETENTION, type ChannelEntry } from "./channel.js";
+import { concernsAgent, effectiveCursors, prunableIds, transcriptFor, CONTEXT_WINDOW, HARD_RETENTION, RETENTION, type ChannelEntry } from "./channel.js";
 
 function entry(partial: Partial<ChannelEntry> & { id: number }): ChannelEntry {
   return {
@@ -105,5 +105,27 @@ describe("prunableIds", () => {
     const result = prunableIds(entries, []);
     expect(result.droppedUnacked).toBe(5);
     expect(result.ids).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe("effectiveCursors", () => {
+  it("counts a roster agent with no ack yet as cursor 0", () => {
+    const cursors = effectiveCursors(new Map([["promoter", 50]]), ["promoter", "newbie"]);
+    expect(cursors.sort()).toEqual([0, 50]);
+  });
+
+  it("drops stored cursors for agents no longer in the roster", () => {
+    expect(effectiveCursors(new Map([["gone", 99]]), ["promoter"])).toEqual([0]);
+  });
+
+  it("fails safe to [0] when the roster is unknown or empty", () => {
+    expect(effectiveCursors(new Map([["promoter", 50]]), undefined)).toEqual([0]);
+    expect(effectiveCursors(new Map(), [])).toEqual([0]);
+  });
+
+  it("a never-acked roster agent blocks normal pruning entirely", () => {
+    const entries = Array.from({ length: RETENTION + 20 }, (_, i) => entry({ id: i + 1 }));
+    const cursors = effectiveCursors(new Map([["promoter", RETENTION + 20]]), ["promoter", "newbie"]);
+    expect(prunableIds(entries, cursors)).toEqual({ ids: [], droppedUnacked: 0 });
   });
 });
