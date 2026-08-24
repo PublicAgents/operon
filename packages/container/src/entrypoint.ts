@@ -98,8 +98,15 @@ function gitBaseEnv(): Record<string, string> {
   return gitCredentialEnv(sessionBaseEnv(), "");
 }
 
+/**
+ * Every entrypoint git call is hardened, not only the credentialed ones:
+ * these run as ROOT over the mind-owned repository, so a hook or config
+ * the mind planted would otherwise execute as root at commit time. The
+ * hardened flags disable hooks, repo credential helpers, fsmonitor, and
+ * file-protocol transport uniformly.
+ */
 async function git(args: string[], env?: Record<string, string>): Promise<string> {
-  const { stdout } = await runCapture("git", args, {
+  const { stdout } = await runCapture("git", [...hardenedGitFlags(), ...args], {
     cwd: STATE_DIR,
     env: { ...gitBaseEnv(), ...env }
   });
@@ -250,7 +257,9 @@ async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<vo
     log("no changes to push");
     return;
   }
-  await git(["commit", "-m", `wake ${config.wakeId}`]);
+  // --no-verify in addition to the hooks-disabled flags: belt and braces
+  // against a mind-planted commit-time hook running as root.
+  await git(["commit", "--no-verify", "-m", `wake ${config.wakeId}`]);
   await gitWithToken(["push", "--no-verify", "origin", "HEAD"], config.githubToken);
   log("state pushed");
 }

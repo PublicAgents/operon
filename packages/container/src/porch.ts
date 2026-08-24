@@ -301,8 +301,12 @@ export class Porch {
       }
     );
     const user = await this.whoami();
-    await runCapture("git", ["-C", dir, "config", "user.name", user]);
-    await runCapture("git", ["-C", dir, "config", "user.email", `${user}@users.noreply.github.com`]);
+    await runCapture("git", [...hardenedGitFlags(), "-C", dir, "config", "user.name", user], {
+      env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
+    });
+    await runCapture("git", [...hardenedGitFlags(), "-C", dir, "config", "user.email", `${user}@users.noreply.github.com`], {
+      env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
+    });
     await this.context.chownForSession(dir);
     return ok({ path: dir, repo });
   }
@@ -323,7 +327,7 @@ export class Porch {
       return fail(409, "not_cloned", `clone ${repo} first`);
     }
     const branch = (
-      await runCapture("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], {
+      await runCapture("git", [...hardenedGitFlags(), "-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], {
         env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
       })
     ).stdout.trim();
@@ -331,7 +335,7 @@ export class Porch {
       return fail(400, "not_on_a_branch", "create and commit to a feature branch first");
     }
     const dirty = (
-      await runCapture("git", ["-C", dir, "status", "--porcelain"], {
+      await runCapture("git", [...hardenedGitFlags(), "-C", dir, "status", "--porcelain"], {
         env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, "")
       })
     ).stdout.trim();
