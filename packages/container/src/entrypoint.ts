@@ -1,18 +1,13 @@
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
 import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
-import { stageAndCollect } from "./staging.js";
+import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { Porch } from "./porch.js";
-import {
-  cleanPushToGithub,
-  gitCredentialEnv,
-  githubRepoUrl,
-  hardenedGitFlags
-} from "./git-cred.js";
+import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -24,14 +19,6 @@ import {
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
-/**
- * Root-owned, mode-0700 base for the state-push mirror. The state push
- * (the one remaining in-container credentialed git op) runs from a clean
- * clone here rather than the mind-owned repo; 0700 keeps the mind's uid
- * out. The PR path holds no git credential in the container at all, so it
- * needs no mirror.
- */
-const MIRRORS_DIR = "/tmp/operon-mirrors";
 
 /**
  * The privilege split: the entrypoint (and its porch) run as root and hold
@@ -105,44 +92,33 @@ function sessionBaseEnv(): Record<string, string> {
   return env;
 }
 
-/** Base env for the entrypoint's own git operations over mind-owned trees. */
-function gitBaseEnv(): Record<string, string> {
-  return gitCredentialEnv(sessionBaseEnv(), "");
-}
-
-/**
- * Every entrypoint git call is hardened, not only the credentialed ones:
- * these run as ROOT over the mind-owned repository, so a hook or config
- * the mind planted would otherwise execute as root at commit time. The
- * hardened flags disable hooks, repo credential helpers, fsmonitor, and
- * file-protocol transport uniformly.
- */
-async function git(args: string[], env?: Record<string, string>): Promise<string> {
-  const { stdout } = await runCapture("git", [...hardenedGitFlags(), ...args], {
-    cwd: STATE_DIR,
-    env: { ...gitBaseEnv(), ...env }
-  });
-  return stdout;
-}
-
-async function ensureMirrorsDir(): Promise<void> {
-  await mkdir(MIRRORS_DIR, { recursive: true });
-  // mkdir mode is subject to umask; force 0700 explicitly.
-  await chmod(MIRRORS_DIR, 0o700);
+function mindHome(): string {
+  return canDropPrivileges() ? "/home/mind" : (process.env.HOME ?? "/tmp");
 }
 
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
-  await ensureMirrorsDir();
-  // Clean URL: the token travels in the git child's env via the credential
-  // helper, so nothing in .git/config ever carries it.
+  // The ONE authenticated git op: a clone into an empty directory, run as
+  // ROOT with a SHORT-LIVED READ-ONLY token in the git child's env (never
+  // argv, never .git/config, and root's env is unreadable by the mind).
+  // Safe precisely because the directory is empty at clone time: there is
+  // no mind-controlled config, hook, or filter to abuse. Nothing is pushed
+  // with this token; persistence goes through the Gatekeeper.
   await runCapture(
     "git",
     [...hardenedGitFlags(), "clone", githubRepoUrl(config.stateRepo), STATE_DIR],
     { env: gitCredentialEnv(sessionBaseEnv(), config.githubToken), timeoutMs: 5 * 60 * 1000 }
   );
-  await git(["config", "user.name", config.agentId]);
-  await git(["config", "user.email", `${config.agentId}@operon.invalid`]);
+  // Identity for any commits the mind chooses to make locally; harmless to
+  // set as root on the fresh clone before it is handed over.
+  await runCapture("git", [...hardenedGitFlags(), "config", "user.name", config.agentId], {
+    cwd: STATE_DIR
+  });
+  await runCapture(
+    "git",
+    [...hardenedGitFlags(), "config", "user.email", `${config.agentId}@operon.invalid`],
+    { cwd: STATE_DIR }
+  );
   await chownToMind(WORKDIR);
 }
 
@@ -260,28 +236,39 @@ async function runSession(
   });
 }
 
-async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<void> {
-  if (!hasStaged) {
-    log("no changes to push");
+/**
+ * Persist the wake's changes by handing the file DATA to the github
+ * Gatekeeper, which commits them to the state repo via the Git Data API.
+ * No push token and no credentialed git run in this container.
+ */
+async function persistState(
+  config: WakeConfig,
+  changes: StagedChanges
+): Promise<void> {
+  if (!config.persistUrl || !config.persistToken) {
+    throw new Error("persist_not_wired: OPERON_PERSIST_URL/TOKEN missing");
+  }
+  const files = changes.changed
+    .filter((file): file is { path: string; content: string } => typeof file.content === "string")
+    .map(file => ({ path: file.path, contentBase64: Buffer.from(file.content, "utf8").toString("base64") }));
+  if (files.length === 0 && changes.deleted.length === 0) {
+    log("nothing to persist");
     return;
   }
-  // --no-verify in addition to the hooks-disabled flags: belt and braces
-  // against a mind-planted commit-time hook running as root.
-  await git(["commit", "--no-verify", "-m", `wake ${config.wakeId}`]);
-  // Push to an EXPLICIT github URL, never the 'origin' remote name: the
-  // mind can rewrite origin's URL/transport in .git/config, and this
-  // process runs as root.
-  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
-  await cleanPushToGithub({
-    sourceDir: STATE_DIR,
-    mirrorDir: join(MIRRORS_DIR, "state"),
-    repo: config.stateRepo,
-    branch,
-    token: config.githubToken,
-    run: (args, env) => runCapture("git", args, { env, timeoutMs: 5 * 60 * 1000 }),
-    rm: dir => rm(dir, { recursive: true, force: true })
+  const response = await fetch(config.persistUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.persistToken}` },
+    body: JSON.stringify({
+      agentId: config.agentId,
+      message: `wake ${config.wakeId}`,
+      files,
+      deletions: changes.deleted
+    })
   });
-  log("state pushed");
+  if (!response.ok) {
+    throw new Error(`persist_failed: ${response.status} ${(await response.text()).slice(0, 300)}`);
+  }
+  log("state persisted through the github Gatekeeper");
 }
 
 async function notify(config: WakeConfig, text: string): Promise<void> {
@@ -335,8 +322,13 @@ async function main(): Promise<number> {
   }
   log(`${label}: session exited ${sessionExit}`);
 
-  const staged = await stageAndCollect(STATE_DIR, gitBaseEnv());
-  const verification = verifyPresleep(staged, autoDenylist(config));
+  // Change detection runs as the mind uid: a filter it triggers executes
+  // unprivileged, so this needs no root and no clean mirror.
+  const changes = await stageAndCollect(STATE_DIR, {
+    env: { ...sessionBaseEnv(), HOME: mindHome() },
+    ...mindSpawnIds()
+  });
+  const verification = verifyPresleep(changes.changed, autoDenylist(config));
 
   // Generic layer: gitleaks catches secrets nobody listed. A scanner error
   // fails closed as unscannable: an unscanned push must not happen.
@@ -367,14 +359,14 @@ async function main(): Promise<number> {
   if (verification.blockPush) {
     await notify(
       config,
-      `${label}: PUSH WITHHELD, presleep blocked the push (${verification.failures
+      `${label}: PERSIST WITHHELD, presleep blocked it (${verification.failures
         .map(f => f.code)
-        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was pushed.`
+        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was persisted.`
     );
     return 2;
   }
 
-  await commitAndPush(config, staged.length > 0);
+  await persistState(config, changes);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

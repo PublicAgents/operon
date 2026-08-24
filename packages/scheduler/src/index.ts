@@ -26,6 +26,8 @@ interface Env {
   NOTIFY_TOKEN?: string;
   PUBLISH_URL?: string;
   PUBLISH_TOKEN?: string;
+  PERSIST_URL?: string;
+  PERSIST_TOKEN?: string;
   PR_URL?: string;
   PR_TOKEN?: string;
   PR_REPOS?: string;
@@ -81,6 +83,8 @@ function launchContext(env: Env): LaunchContext {
       notifyToken: env.NOTIFY_TOKEN,
       publishUrl: env.PUBLISH_URL,
       publishToken: env.PUBLISH_TOKEN,
+      persistUrl: env.PERSIST_URL,
+      persistToken: env.PERSIST_TOKEN,
       prUrl: env.PR_URL,
       prToken: env.PR_TOKEN,
       prRepos: env.PR_REPOS,

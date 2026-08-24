@@ -15,6 +15,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./git-data": {
+      "@operon/source": "./src/git-data.ts",
+      "types": "./dist/git-data.d.ts",
+      "import": "./dist/git-data.js",
+      "default": "./dist/git-data.js"
     }
   },
   "files": ["dist", "!**/*.tsbuildinfo"]

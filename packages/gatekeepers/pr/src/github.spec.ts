@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openPullRequest, type GithubClient } from "./github.js";
+import { openPullRequest } from "./github.js";
 
 /**
  * A scripted GitHub API: asserts the Gatekeeper drives the fork + Git Data
@@ -36,17 +36,16 @@ function scriptedFetch(calls: string[]): typeof fetch {
 describe("openPullRequest", () => {
   it("opens a fork-based PR entirely through the API", async () => {
     const calls: string[] = [];
-    const client: GithubClient = {
-      token: "pat",
-      branchSuffix: "abc",
-      fetch: scriptedFetch(calls)
-    };
-    const result = await openPullRequest(client, {
-      repo: "org/repo",
-      title: "Add server.json",
-      body: "Registers the MCP server.",
-      files: [{ path: "server.json", contentBase64: btoa('{"name":"x"}') }]
-    });
+    const result = await openPullRequest(
+      { token: "pat", userAgent: "test", fetch: scriptedFetch(calls) },
+      {
+        repo: "org/repo",
+        title: "Add server.json",
+        body: "Registers the MCP server.",
+        files: [{ path: "server.json", contentBase64: btoa('{"name":"x"}') }]
+      },
+      "abc"
+    );
 
     expect(result).toEqual({
       url: "https://github.com/org/repo/pull/7",
@@ -62,13 +61,12 @@ describe("openPullRequest", () => {
   });
 
   it("surfaces a GitHub API failure as an error", async () => {
-    const client: GithubClient = {
-      token: "pat",
-      branchSuffix: "abc",
-      fetch: (async () => new Response("nope", { status: 404 })) as typeof fetch
-    };
     await expect(
-      openPullRequest(client, { repo: "org/repo", title: "t", body: "b", files: [] })
+      openPullRequest(
+        { token: "pat", userAgent: "test", fetch: (async () => new Response("nope", { status: 404 })) as typeof fetch },
+        { repo: "org/repo", title: "t", body: "b", files: [] },
+        "abc"
+      )
     ).rejects.toThrow(/github_api_error/);
   });
 });

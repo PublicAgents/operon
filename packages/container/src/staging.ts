@@ -2,24 +2,33 @@ import { runCapture } from "./exec.js";
 import type { ChangedFile } from "./presleep.js";
 
 /**
- * Stage everything, then collect the exact content git will push, per
- * staged path, for the presleep sweep.
+ * Determine what the wake changed, reading exactly what a commit would
+ * publish. Stage everything, then read the staged set from git's own
+ * NUL-separated path list (correct for renames and special characters),
+ * reading each blob in full from the INDEX (`git show :<path>`), not the
+ * working tree, so symlinks are scanned as their target-string blob and
+ * nothing is a truncated proxy.
  *
- * Content comes from the INDEX (`git show :<path>`), not the working tree:
- * the index blob is what the commit publishes. This matters for symlinks
- * (git stores the link's target string as the blob; reading the resolved
- * file would scan the wrong bytes and a secret embedded in the target
- * string would ship unscanned) and for anything that changes between
- * staging and reading. Paths come NUL-separated from git itself, so
- * renames and special characters resolve correctly.
- *
- * A blob over the size cap, or one git cannot produce, is returned with
- * null content, which the verifier treats as unscannable and blocks the
- * push. Staged deletions publish no content and count only for the
- * journal check.
+ * Runs as the MIND uid, unprivileged and unauthenticated: a mind-planted
+ * clean filter or hook triggered by `git add`/`git show` executes as the
+ * mind itself, which is no escalation, so no hardened-flag gymnastics or
+ * root git are needed here.
  */
 
 const MAX_SCANNED_FILE_BYTES = 4 * 1024 * 1024;
+
+export interface StagedChanges {
+  /** Added or modified files, with their full content for scanning + commit. */
+  changed: ChangedFile[];
+  /** Paths deleted this wake. */
+  deleted: string[];
+}
+
+export interface StageOptions {
+  env?: Record<string, string>;
+  uid?: number;
+  gid?: number;
+}
 
 function splitZ(output: string): string[] {
   return output.split("\0").filter(entry => entry.length > 0);
@@ -27,10 +36,11 @@ function splitZ(output: string): string[] {
 
 export async function stageAndCollect(
   dir: string,
-  env?: Record<string, string>
-): Promise<ChangedFile[]> {
-  const git = async (args: string[]) =>
-    (await runCapture("git", args, { cwd: dir, env })).stdout;
+  options: StageOptions = {}
+): Promise<StagedChanges> {
+  const run = (args: string[]) =>
+    runCapture("git", args, { cwd: dir, env: options.env, uid: options.uid, gid: options.gid });
+  const git = async (args: string[]) => (await run(args)).stdout;
 
   await git(["add", "-A"]);
   const staged = splitZ(await git(["diff", "--cached", "--name-only", "-z"]));
@@ -38,21 +48,18 @@ export async function stageAndCollect(
     splitZ(await git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z"]))
   );
 
-  const files: ChangedFile[] = [];
+  const changed: ChangedFile[] = [];
   for (const path of staged) {
-    if (deleted.has(path)) {
-      files.push({ path, content: "" });
-      continue;
-    }
+    if (deleted.has(path)) continue;
     try {
       const content = await git(["show", `:${path}`]);
-      files.push({
+      changed.push({
         path,
         content: Buffer.byteLength(content, "utf8") > MAX_SCANNED_FILE_BYTES ? null : content
       });
     } catch {
-      files.push({ path, content: null });
+      changed.push({ path, content: null });
     }
   }
-  return files;
+  return { changed, deleted: [...deleted] };
 }

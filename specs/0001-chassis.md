@@ -234,8 +234,11 @@ contract (section 4.1). Entrypoint sequence:
    defense for that case is structural (the session env contains only the
    mind credential, and every in-container credential is short-lived and
    low-value, per section 7).
-6. Commit and push state. A failed push is a failed wake and alerts the
-   operator.
+6. Persist state through the github Gatekeeper: the entrypoint sends the
+   wake's changed files (and deletions) as DATA to the Gatekeeper's
+   /commit endpoint, which commits them to the state repo via the Git Data
+   API. No push token and no credentialed git run in the container. A
+   failed persist is a failed wake and alerts the operator.
 7. Send the end-of-wake summary through the Telegram Gatekeeper.
 8. Exit. The container is disposable; nothing persists locally.
 

@@ -1,5 +1,12 @@
-import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
-import { GithubError, openPullRequest, type PrRequest } from "./github.js";
+import {
+  errorResponse,
+  json,
+  readJson,
+  requireBearer,
+  Ledger,
+  GitDataError
+} from "@operon/worker-kit";
+import { openPullRequest, type PrRequest } from "./github.js";
 
 export { Ledger };
 export * from "./github.js";
@@ -76,8 +83,9 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
 
   try {
     const result = await openPullRequest(
-      { token: env.MACHINE_PAT, branchSuffix: crypto.randomUUID() },
-      { repo, title, body: prBody, files }
+      { token: env.MACHINE_PAT, userAgent: "operon-gatekeeper-pr" },
+      { repo, title, body: prBody, files },
+      crypto.randomUUID()
     );
     await ledger(env).append("pr_opened", {
       agentId,
@@ -88,7 +96,7 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     });
     return json({ ok: true, ...result });
   } catch (error) {
-    const detail = error instanceof GithubError ? error.message : String(error);
+    const detail = error instanceof GitDataError ? error.message : String(error);
     await ledger(env).append("pr_failed", { reason: "github_error", repo, detail: detail.slice(0, 300) });
     return errorResponse(502, "pr_open_failed", detail.slice(0, 300));
   }

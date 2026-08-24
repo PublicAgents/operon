@@ -35,6 +35,9 @@ export interface WakeOptions {
   /** Publish Gatekeeper endpoint; the porch submits site artifacts here. */
   publishUrl?: string;
   publishToken?: string;
+  /** github Gatekeeper /commit endpoint + bearer; the entrypoint persists state here. */
+  persistUrl?: string;
+  persistToken?: string;
   /**
    * PR Gatekeeper endpoint and the INTERNAL bearer the porch authenticates
    * to it with. The GitHub machine credential lives only in that Worker,
@@ -71,6 +74,8 @@ export const WAKE_ENV = {
   hosts: "OPERON_HOSTS",
   publishUrl: "OPERON_PUBLISH_URL",
   publishToken: "OPERON_PUBLISH_TOKEN",
+  persistUrl: "OPERON_PERSIST_URL",
+  persistToken: "OPERON_PERSIST_TOKEN",
   prUrl: "OPERON_PR_URL",
   prToken: "OPERON_PR_TOKEN",
   prRepos: "OPERON_PR_REPOS"
@@ -100,6 +105,8 @@ export function wakeEnv(
   if (options.notifyToken) env[WAKE_ENV.notifyToken] = options.notifyToken;
   if (options.publishUrl) env[WAKE_ENV.publishUrl] = options.publishUrl;
   if (options.publishToken) env[WAKE_ENV.publishToken] = options.publishToken;
+  if (options.persistUrl) env[WAKE_ENV.persistUrl] = options.persistUrl;
+  if (options.persistToken) env[WAKE_ENV.persistToken] = options.persistToken;
   if (options.prUrl) env[WAKE_ENV.prUrl] = options.prUrl;
   if (options.prToken) env[WAKE_ENV.prToken] = options.prToken;
   if (options.prRepos) env[WAKE_ENV.prRepos] = options.prRepos;
