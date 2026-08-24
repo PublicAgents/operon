@@ -47,6 +47,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Cross-package imports resolve through each package's dist, so the
+      # bundle is meaningless without a build first (same reason the colony
+      # deploy script requires build:chassis).
+      - name: Build packages
+        run: npx nx run-many -t build
+
       - name: Wrangler dry-run (scheduler + container image)
         working-directory: packages/scheduler
         run: npx wrangler deploy --dry-run --outdir /tmp/bundle-scheduler
