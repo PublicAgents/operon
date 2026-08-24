@@ -82,6 +82,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
   return {
     notify: Boolean(config.notifyUrl && config.notifyToken),
     publish: Boolean(config.publishUrl && config.publishToken),
+    github: Boolean(config.prUrl && config.prToken),
     pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
     email: Boolean(config.emailUrl && config.emailToken),
     hosts: config.hosts,
@@ -142,9 +143,13 @@ export class Porch {
       const body = request.method === "POST" ? await readBody(request) : {};
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);
       if (request.method === "POST" && url.pathname === "/publish") return await this.publish(body);
-      if (request.method === "POST" && url.pathname === "/pr") return await this.pr(body);
-      if (request.method === "POST" && url.pathname === "/issue") return await this.issue(body);
-      if (request.method === "POST" && url.pathname === "/status") return await this.status();
+      if (request.method === "POST" && url.pathname === "/github/pr") return await this.pr(body);
+      if (request.method === "POST" && url.pathname === "/github/issue") return await this.issue(body);
+      if (request.method === "POST" && url.pathname === "/github/status") return await this.status();
+      if (request.method === "POST" && url.pathname === "/github/thread") return await this.thread(body);
+      if (request.method === "POST" && url.pathname === "/github/comment") return await this.comment(body);
+      if (request.method === "POST" && url.pathname === "/github/update") return await this.update(body);
+      if (request.method === "POST" && url.pathname === "/github/push") return await this.push(body);
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
@@ -267,6 +272,8 @@ export class Porch {
     const prBody = body.body;
     if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
     if (typeof prBody !== "string" || prBody.length === 0) return fail(400, "missing_body");
+    const blocked = this.sweepFields({ title, body: prBody });
+    if (blocked) return blocked;
 
     const { files, error } = await this.collectSwept(body.dir, "pr");
     if (error) return error;
@@ -298,6 +305,10 @@ export class Porch {
       return fail(403, "repo_not_allowlisted", `allowed: ${config.prRepos.join(", ")}`);
     }
     if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
+    {
+      const blocked = this.sweepFields({ title });
+      if (blocked) return blocked;
+    }
     if (typeof bodyFile !== "string" || bodyFile.includes("..") || bodyFile.startsWith("/")) {
       return fail(400, "invalid_body_file");
     }
@@ -324,17 +335,132 @@ export class Porch {
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
   }
 
-  private async status(): Promise<JsonResult> {
+  /** POST a payload to the github Gatekeeper's /gatekeeper/<door>. */
+  private async githubGatekeeper(
+    door: string,
+    payload: Record<string, unknown>,
+    maxResponse = 20000
+  ): Promise<JsonResult> {
     const { config } = this.context;
-    if (!config.prUrl || !config.prToken) return fail(503, "status_not_wired");
-    const response = await fetch(`${config.prUrl.replace(/\/gatekeeper\/pr$/, "")}/gatekeeper/status`, {
+    if (!config.prUrl || !config.prToken) return fail(503, `${door}_not_wired`);
+    const base = config.prUrl.replace(/\/gatekeeper\/pr$/, "");
+    const response = await fetch(`${base}/gatekeeper/${door}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
-      body: JSON.stringify({ agentId: config.agentId })
+      body: JSON.stringify({ agentId: config.agentId, ...payload })
     });
-    const resultText = (await response.text()).slice(0, 20000);
-    if (!response.ok) return fail(502, "status_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    const resultText = (await response.text()).slice(0, maxResponse);
+    if (!response.ok) return fail(502, `${door}_rejected`, `${response.status}: ${resultText.slice(0, 400)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async status(): Promise<JsonResult> {
+    return this.githubGatekeeper("status", {}, 60000);
+  }
+
+  private async thread(body: Record<string, unknown>): Promise<JsonResult> {
+    const { repo, number } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    return this.githubGatekeeper("thread", { repo, number }, 200000);
+  }
+
+  /**
+   * Sweep short outbound text fields (titles, messages, subjects). Anything
+   * that leaves the container is swept, not only bodies and file payloads:
+   * a denylisted credential hidden in a PR title or a commit message would
+   * otherwise exfiltrate just as well.
+   */
+  private sweepFields(fields: Record<string, unknown>): JsonResult | null {
+    const input: ChangedFile[] = Object.entries(fields)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+      .map(([label, content]) => ({ path: label, content }));
+    if (input.length === 0) return null;
+    const failures = scanForSecrets(input, this.context.denylist);
+    if (failures.length > 0) {
+      return fail(422, "blocked_by_sweep", failures.map(f => f.detail).join("; "));
+    }
+    return null;
+  }
+
+  /** Resolve a comment/update body from inline text or a state-repo file, swept. */
+  private async sweptText(
+    inline: unknown,
+    fromFile: unknown,
+    label: string
+  ): Promise<{ text?: string; error?: JsonResult }> {
+    let text: string | undefined;
+    if (typeof inline === "string" && inline.length > 0) text = inline;
+    else if (typeof fromFile === "string" && fromFile.length > 0) {
+      if (fromFile.includes("..") || fromFile.startsWith("/")) {
+        return { error: fail(400, "invalid_body_file") };
+      }
+      try {
+        text = await readFile(join(this.context.stateDir, fromFile), "utf8");
+      } catch {
+        return { error: fail(404, "body_file_not_found", fromFile) };
+      }
+    }
+    if (!text) return { error: fail(400, `missing_${label}`) };
+    const failures = scanForSecrets([{ path: label, content: text }], this.context.denylist);
+    if (failures.length > 0) {
+      return { error: fail(422, "blocked_by_sweep", failures.map(f => f.detail).join("; ")) };
+    }
+    return { text };
+  }
+
+  private async comment(body: Record<string, unknown>): Promise<JsonResult> {
+    const { repo, number, replyTo } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    const { text, error } = await this.sweptText(body.body, body.bodyFile, "comment");
+    if (error) return error;
+    this.context.log(`commenting on ${repo}#${number}`);
+    return this.githubGatekeeper("comment", {
+      repo,
+      number,
+      body: text,
+      ...(typeof replyTo === "number" ? { replyTo } : {})
+    });
+  }
+
+  private async update(body: Record<string, unknown>): Promise<JsonResult> {
+    const { repo, number, title, state } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    if (state !== undefined && state !== "open" && state !== "closed") return fail(400, "invalid_state");
+    if (typeof title === "string" && title) {
+      const blocked = this.sweepFields({ title });
+      if (blocked) return blocked;
+    }
+    const payload: Record<string, unknown> = { repo, number };
+    if (typeof title === "string" && title) payload.title = title;
+    if (state) payload.state = state;
+    if (body.bodyFile !== undefined || typeof body.body === "string") {
+      const { text, error } = await this.sweptText(body.body, body.bodyFile, "body");
+      if (error) return error;
+      payload.body = text;
+    }
+    if (!payload.title && !payload.body && !payload.state) return fail(400, "empty_patch");
+    this.context.log(`updating ${repo}#${number}`);
+    return this.githubGatekeeper("update", payload);
+  }
+
+  private async push(body: Record<string, unknown>): Promise<JsonResult> {
+    const { log } = this.context;
+    const { repo, number, message } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    if (typeof message !== "string" || message.length === 0) return fail(400, "missing_message");
+    {
+      const blocked = this.sweepFields({ message });
+      if (blocked) return blocked;
+    }
+    const { files, error } = await this.collectSwept(body.dir, "pr");
+    if (error) return error;
+    log(`pushing ${files.length} file(s) to ${repo}#${number}`);
+    return this.githubGatekeeper("push", {
+      repo,
+      number,
+      message,
+      files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
+    });
   }
 
   private async email(body: Record<string, unknown>): Promise<JsonResult> {
@@ -344,6 +470,11 @@ export class Porch {
     if (typeof to !== "string" || !to.includes("@")) return fail(400, "invalid_to");
     if (typeof subject !== "string" || subject.length === 0) return fail(400, "missing_subject");
     if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+    // The recipient is outbound text too: a denylisted secret smuggled into
+    // the address (its local part reaches the external mail service) must
+    // block exactly like one in the subject or body.
+    const blocked = this.sweepFields({ to, subject, text });
+    if (blocked) return blocked;
 
     log(`sending email to ${to}`);
     const response = await fetch(`${config.emailUrl}/gatekeeper/email/send`, {

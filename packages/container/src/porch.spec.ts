@@ -97,7 +97,7 @@ describe("capabilities", () => {
           prRepos: ["a/b"]
         })
       )
-    ).toMatchObject({ notify: true, publish: true, pr: true, prRepos: ["a/b"] });
+    ).toMatchObject({ notify: true, publish: true, pr: true, github: true, prRepos: ["a/b"] });
   });
 });
 
@@ -115,8 +115,44 @@ describe("porch doors", () => {
       body: JSON.stringify({ host: "@" })
     });
     expect(((await publish.json()) as { error: string }).error).toBe("publish_not_wired");
-    const pr = await fetch(`${url}/pr`, { method: "POST", body: "{}" });
+    const pr = await fetch(`${url}/github/pr`, { method: "POST", body: "{}" });
     expect(((await pr.json()) as { error: string }).error).toBe("pr_not_wired");
+    const thread = await fetch(`${url}/github/thread`, {
+      method: "POST",
+      body: JSON.stringify({ repo: "a/b", number: 1 })
+    });
+    expect(((await thread.json()) as { error: string }).error).toBe("thread_not_wired");
+  });
+
+  it("sweeps short outbound text fields, not only bodies and files", async () => {
+    const { url } = await startPorch(
+      config({ prUrl: "http://never-reached", prToken: "t", prRepos: ["a/b"] }),
+      ["super-secret-token"]
+    );
+    const blocked = await fetch(`${url}/github/update`, {
+      method: "POST",
+      body: JSON.stringify({ repo: "a/b", number: 1, title: "deploy super-secret-token" })
+    });
+    expect(blocked.status).toBe(422);
+    expect(((await blocked.json()) as { error: string }).error).toBe("blocked_by_sweep");
+    const message = await fetch(`${url}/github/push`, {
+      method: "POST",
+      body: JSON.stringify({ repo: "a/b", number: 1, message: "carry super-secret-token", dir: "pr" })
+    });
+    expect(((await message.json()) as { error: string }).error).toBe("blocked_by_sweep");
+  });
+
+  it("sweeps the email recipient, subject, and body", async () => {
+    const { url } = await startPorch(
+      config({ emailUrl: "http://never-reached", emailToken: "t" }),
+      ["super-secret-token"]
+    );
+    const viaRecipient = await fetch(`${url}/email`, {
+      method: "POST",
+      body: JSON.stringify({ to: "super-secret-token@x.com", subject: "hi", text: "hello" })
+    });
+    expect(viaRecipient.status).toBe(422);
+    expect(((await viaRecipient.json()) as { error: string }).error).toBe("blocked_by_sweep");
   });
 
   it("forwards notify with the agent prefix and the bearer", async () => {
@@ -180,7 +216,7 @@ describe("porch doors", () => {
     const { url } = await startPorch(
       config({ prUrl: "http://unused", prToken: "b", prRepos: ["org/allowed"] })
     );
-    const response = await fetch(`${url}/pr`, {
+    const response = await fetch(`${url}/github/pr`, {
       method: "POST",
       body: JSON.stringify({ repo: "org/other", title: "t", body: "b" })
     });
@@ -201,7 +237,7 @@ describe("porch doors", () => {
       );
       await mkdir(join(stateDir, "pr"));
       await writeFile(join(stateDir, "pr", "server.json"), '{"leak":"super-secret-token"}');
-      const blocked = await fetch(`${url}/pr`, {
+      const blocked = await fetch(`${url}/github/pr`, {
         method: "POST",
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
@@ -209,7 +245,7 @@ describe("porch doors", () => {
       expect(stub.requests).toHaveLength(0);
 
       await writeFile(join(stateDir, "pr", "server.json"), '{"name":"clean"}');
-      const good = await fetch(`${url}/pr`, {
+      const good = await fetch(`${url}/github/pr`, {
         method: "POST",
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
