@@ -124,6 +124,24 @@ describe("porch doors", () => {
     expect(((await thread.json()) as { error: string }).error).toBe("thread_not_wired");
   });
 
+  it("sweeps short outbound text fields, not only bodies and files", async () => {
+    const { url } = await startPorch(
+      config({ prUrl: "http://never-reached", prToken: "t", prRepos: ["a/b"] }),
+      ["super-secret-token"]
+    );
+    const blocked = await fetch(`${url}/github/update`, {
+      method: "POST",
+      body: JSON.stringify({ repo: "a/b", number: 1, title: "deploy super-secret-token" })
+    });
+    expect(blocked.status).toBe(422);
+    expect(((await blocked.json()) as { error: string }).error).toBe("blocked_by_sweep");
+    const message = await fetch(`${url}/github/push`, {
+      method: "POST",
+      body: JSON.stringify({ repo: "a/b", number: 1, message: "carry super-secret-token", dir: "pr" })
+    });
+    expect(((await message.json()) as { error: string }).error).toBe("blocked_by_sweep");
+  });
+
   it("forwards notify with the agent prefix and the bearer", async () => {
     const stub = await startStub(() => ({ status: 200, body: "{}" }));
     const { url } = await startPorch(

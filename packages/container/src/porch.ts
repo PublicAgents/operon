@@ -272,6 +272,8 @@ export class Porch {
     const prBody = body.body;
     if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
     if (typeof prBody !== "string" || prBody.length === 0) return fail(400, "missing_body");
+    const blocked = this.sweepFields({ title, body: prBody });
+    if (blocked) return blocked;
 
     const { files, error } = await this.collectSwept(body.dir, "pr");
     if (error) return error;
@@ -303,6 +305,10 @@ export class Porch {
       return fail(403, "repo_not_allowlisted", `allowed: ${config.prRepos.join(", ")}`);
     }
     if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
+    {
+      const blocked = this.sweepFields({ title });
+      if (blocked) return blocked;
+    }
     if (typeof bodyFile !== "string" || bodyFile.includes("..") || bodyFile.startsWith("/")) {
       return fail(400, "invalid_body_file");
     }
@@ -358,6 +364,24 @@ export class Porch {
     return this.githubGatekeeper("thread", { repo, number }, 200000);
   }
 
+  /**
+   * Sweep short outbound text fields (titles, messages, subjects). Anything
+   * that leaves the container is swept, not only bodies and file payloads:
+   * a denylisted credential hidden in a PR title or a commit message would
+   * otherwise exfiltrate just as well.
+   */
+  private sweepFields(fields: Record<string, unknown>): JsonResult | null {
+    const input: ChangedFile[] = Object.entries(fields)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+      .map(([label, content]) => ({ path: label, content }));
+    if (input.length === 0) return null;
+    const failures = scanForSecrets(input, this.context.denylist);
+    if (failures.length > 0) {
+      return fail(422, "blocked_by_sweep", failures.map(f => f.detail).join("; "));
+    }
+    return null;
+  }
+
   /** Resolve a comment/update body from inline text or a state-repo file, swept. */
   private async sweptText(
     inline: unknown,
@@ -402,6 +426,10 @@ export class Porch {
     const { repo, number, title, state } = body;
     if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
     if (state !== undefined && state !== "open" && state !== "closed") return fail(400, "invalid_state");
+    if (typeof title === "string" && title) {
+      const blocked = this.sweepFields({ title });
+      if (blocked) return blocked;
+    }
     const payload: Record<string, unknown> = { repo, number };
     if (typeof title === "string" && title) payload.title = title;
     if (state) payload.state = state;
@@ -420,6 +448,10 @@ export class Porch {
     const { repo, number, message } = body;
     if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
     if (typeof message !== "string" || message.length === 0) return fail(400, "missing_message");
+    {
+      const blocked = this.sweepFields({ message });
+      if (blocked) return blocked;
+    }
     const { files, error } = await this.collectSwept(body.dir, "pr");
     if (error) return error;
     log(`pushing ${files.length} file(s) to ${repo}#${number}`);
@@ -438,6 +470,8 @@ export class Porch {
     if (typeof to !== "string" || !to.includes("@")) return fail(400, "invalid_to");
     if (typeof subject !== "string" || subject.length === 0) return fail(400, "missing_subject");
     if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+    const blocked = this.sweepFields({ subject, text });
+    if (blocked) return blocked;
 
     log(`sending email to ${to}`);
     const response = await fetch(`${config.emailUrl}/gatekeeper/email/send`, {
