@@ -37,17 +37,31 @@ describe("transcriptFor", () => {
     expect(t.upTo).toBe(4);
   });
 
-  it("caps context at the window and keeps upTo at the last relevant id", () => {
+  it("never acks an operator message the wake did not receive", () => {
+    // More new operator messages than the context window: every one of
+    // them is still delivered; the window only trims old context.
     const all: ChannelEntry[] = [];
     for (let id = 1; id <= CONTEXT_WINDOW + 10; id++) {
       all.push(entry({ id, agentId: "promoter" }));
     }
     const t = transcriptFor(all, "promoter", 0);
+    expect(t.entries).toHaveLength(CONTEXT_WINDOW + 10);
+    expect(t.entries[0].id).toBe(1);
+    expect(t.upTo).toBe(CONTEXT_WINDOW + 10);
+    expect(t.newOperatorIds).toHaveLength(CONTEXT_WINDOW + 10);
+  });
+
+  it("caps already-acked context at the window", () => {
+    const all: ChannelEntry[] = [];
+    for (let id = 1; id <= CONTEXT_WINDOW + 10; id++) {
+      all.push(entry({ id, agentId: "promoter" }));
+    }
+    // Everything acked: pure context, so the window applies.
+    const t = transcriptFor(all, "promoter", CONTEXT_WINDOW + 10);
     expect(t.entries).toHaveLength(CONTEXT_WINDOW);
     expect(t.entries[0].id).toBe(11);
+    expect(t.newOperatorIds).toEqual([]);
     expect(t.upTo).toBe(CONTEXT_WINDOW + 10);
-    // New marks are not limited by the display window.
-    expect(t.newOperatorIds).toHaveLength(CONTEXT_WINDOW + 10);
   });
 
   it("leaves the cursor unchanged when nothing concerns the agent", () => {

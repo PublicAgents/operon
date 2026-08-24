@@ -45,10 +45,16 @@ export function transcriptFor(
   cursor: number
 ): AgentTranscript {
   const relevant = all.filter(entry => concernsAgent(entry, agentId));
-  const entries = relevant.slice(-CONTEXT_WINDOW);
-  const newOperatorIds = relevant
-    .filter(entry => entry.from === "operator" && entry.id > cursor)
-    .map(entry => entry.id);
-  const upTo = relevant.length > 0 ? relevant[relevant.length - 1].id : cursor;
-  return { entries, newOperatorIds, upTo };
+  const newOperator = relevant.filter(
+    entry => entry.from === "operator" && entry.id > cursor
+  );
+  // The context window trims OLD conversation only. Every not-yet-acked
+  // operator message is always delivered, however many accumulated between
+  // wakes: acking a message the wake never saw would lose an instruction.
+  const window = relevant.slice(-CONTEXT_WINDOW);
+  const byId = new Map<number, ChannelEntry>();
+  for (const entry of [...window, ...newOperator]) byId.set(entry.id, entry);
+  const entries = [...byId.values()].sort((a, b) => a.id - b.id);
+  const upTo = entries.length > 0 ? entries[entries.length - 1].id : cursor;
+  return { entries, newOperatorIds: newOperator.map(entry => entry.id), upTo };
 }
