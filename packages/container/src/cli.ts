@@ -14,6 +14,11 @@ const HELP = `operon: the doors out of this wake
                                          assigned host ("@" is the zone apex);
                                          dir defaults to "site". Swept for secrets
                                          before anything leaves the container.
+  operon email --to <addr> --subject <s> --body <b>
+                                         send an email (disclosed as an AI agent,
+                                         rate-limited; a first email to a new
+                                         recipient is held for the operator). Your
+                                         inbound mail is in inbox/ each wake.
   operon pr <owner/repo> [dir] --title <t> --body <b>
                                          propose a change to an allowlisted repo: the
                                          files in dir (default "pr") are added/updated
@@ -70,6 +75,15 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       const host = flagValue(rest, "--host");
       if (!host) throw new CliUsageError("usage: operon publish [dir] --host <host>");
       return { path: "/publish", payload: { dir: positionals(rest)[0] ?? "site", host } };
+    }
+    case "email": {
+      const to = flagValue(rest, "--to");
+      const subject = flagValue(rest, "--subject");
+      const body = flagValue(rest, "--body");
+      if (!to || !to.includes("@") || !subject || !body) {
+        throw new CliUsageError("usage: operon email --to <addr> --subject <s> --body <b>");
+      }
+      return { path: "/email", payload: { to, subject, text: body } };
     }
     case "pr": {
       const [repo, dir] = positionals(rest);

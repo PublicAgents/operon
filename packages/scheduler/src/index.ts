@@ -31,6 +31,8 @@ interface Env {
   PR_URL?: string;
   PR_TOKEN?: string;
   PR_REPOS?: string;
+  EMAIL_URL?: string;
+  EMAIL_TOKEN?: string;
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
@@ -88,6 +90,8 @@ function launchContext(env: Env): LaunchContext {
       prUrl: env.PR_URL,
       prToken: env.PR_TOKEN,
       prRepos: env.PR_REPOS,
+      emailUrl: env.EMAIL_URL,
+      emailToken: env.EMAIL_TOKEN,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }

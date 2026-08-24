@@ -26,6 +26,9 @@
     },
     {
       "path": "./packages/gatekeepers/pr"
+    },
+    {
+      "path": "./packages/gatekeepers/email"
     }
   ]
 }

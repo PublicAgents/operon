@@ -46,6 +46,9 @@ export interface WakeOptions {
   prUrl?: string;
   prToken?: string;
   prRepos?: string;
+  /** Email Gatekeeper endpoint + internal bearer (send/pull/reply). */
+  emailUrl?: string;
+  emailToken?: string;
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -78,7 +81,9 @@ export const WAKE_ENV = {
   persistToken: "OPERON_PERSIST_TOKEN",
   prUrl: "OPERON_PR_URL",
   prToken: "OPERON_PR_TOKEN",
-  prRepos: "OPERON_PR_REPOS"
+  prRepos: "OPERON_PR_REPOS",
+  emailUrl: "OPERON_EMAIL_URL",
+  emailToken: "OPERON_EMAIL_TOKEN"
 } as const;
 
 export function wakeEnv(
@@ -110,6 +115,8 @@ export function wakeEnv(
   if (options.prUrl) env[WAKE_ENV.prUrl] = options.prUrl;
   if (options.prToken) env[WAKE_ENV.prToken] = options.prToken;
   if (options.prRepos) env[WAKE_ENV.prRepos] = options.prRepos;
+  if (options.emailUrl) env[WAKE_ENV.emailUrl] = options.emailUrl;
+  if (options.emailToken) env[WAKE_ENV.emailToken] = options.emailToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   return env;

@@ -1,0 +1,41 @@
+{
+  "name": "@operon/gatekeeper-email",
+  "version": "0.0.0",
+  "description": "The email Gatekeeper: routes inbound mail into a per-agent inbox (and forwards a copy to the operator), and sends outbound mail through the Email Service binding with a mandatory AI disclosure footer, a rate limit, first-contact hold, and an operator BCC",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": { "cwd": "{projectRoot}" },
+        "dependsOn": ["^build"],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0",
+    "postal-mime": "^2.4.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

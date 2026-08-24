@@ -83,6 +83,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     notify: Boolean(config.notifyUrl && config.notifyToken),
     publish: Boolean(config.publishUrl && config.publishToken),
     pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
+    email: Boolean(config.emailUrl && config.emailToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -142,6 +143,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);
       if (request.method === "POST" && url.pathname === "/publish") return await this.publish(body);
       if (request.method === "POST" && url.pathname === "/pr") return await this.pr(body);
+      if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -282,6 +284,25 @@ export class Porch {
     const resultText = (await response.text()).slice(0, 800);
     if (!response.ok) return fail(502, "pr_rejected", `${response.status}: ${resultText}`);
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async email(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config, log } = this.context;
+    if (!config.emailUrl || !config.emailToken) return fail(503, "email_not_wired");
+    const { to, subject, text } = body;
+    if (typeof to !== "string" || !to.includes("@")) return fail(400, "invalid_to");
+    if (typeof subject !== "string" || subject.length === 0) return fail(400, "missing_subject");
+    if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+
+    log(`sending email to ${to}`);
+    const response = await fetch(`${config.emailUrl}/gatekeeper/email/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
+      body: JSON.stringify({ agentId: config.agentId, to, subject, text })
+    });
+    const resultText = (await response.text()).slice(0, 500);
+    if (!response.ok) return fail(502, "email_rejected", `${response.status}: ${resultText}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 }
 
