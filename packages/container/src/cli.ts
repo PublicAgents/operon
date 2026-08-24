@@ -19,6 +19,9 @@ const HELP = `operon: the doors out of this wake
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
+  operon status                          your open PRs and issues and the latest
+                                         comments on them, so you can follow the
+                                         conversation on what you proposed
   operon issue <owner/repo> <bodyfile> --title <t>
                                          open an issue on an allowlisted repo; the
                                          body is read from bodyfile (a markdown file
@@ -70,6 +73,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
   switch (command) {
     case "capabilities":
       return { path: "/capabilities", payload: {} };
+    case "status":
+      return { path: "/status", payload: {} };
     case "notify": {
       const text = rest.join(" ").trim();
       if (!text) throw new CliUsageError("usage: operon notify <text...>");

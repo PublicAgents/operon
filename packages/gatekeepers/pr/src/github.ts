@@ -81,6 +81,86 @@ export async function openPullRequest(
   return { url: pr.html_url, branch, base };
 }
 
+export interface ActivityComment {
+  user: string;
+  at: string;
+  body: string;
+}
+
+export interface ActivityItem {
+  url: string;
+  repo: string;
+  number: number;
+  title: string;
+  kind: "pr" | "issue";
+  state: string;
+  merged?: boolean;
+  updatedAt: string;
+  commentCount: number;
+  recentComments: ActivityComment[];
+}
+
+/**
+ * List the machine account's own recently-updated PRs and issues, with the
+ * latest comments on each, so an agent can follow the conversation on what
+ * it opened. Searching by author scopes cleanly to this agent's account
+ * (one account per agent), and the credential's read covers private repos
+ * too. Bounded: a handful of items, a few comments each.
+ */
+export async function listActivity(api: GithubApi, max = 12): Promise<ActivityItem[]> {
+  const client: GithubApi = { ...api, userAgent: UA };
+  const me = (await githubApi(client, "GET", "/user")) as { login: string };
+  const q = encodeURIComponent(`author:${me.login} sort:updated-desc`);
+  const search = (await githubApi(client, "GET", `/search/issues?q=${q}&per_page=${max}`)) as {
+    items: Array<{
+      html_url: string;
+      title: string;
+      state: string;
+      number: number;
+      comments: number;
+      updated_at: string;
+      repository_url: string;
+      pull_request?: { merged_at?: string | null };
+    }>;
+  };
+
+  const items: ActivityItem[] = [];
+  for (const it of search.items ?? []) {
+    const repo = it.repository_url.replace("https://api.github.com/repos/", "");
+    const isPr = Boolean(it.pull_request);
+    let merged: boolean | undefined;
+    if (isPr && it.state === "closed") {
+      merged = Boolean(it.pull_request?.merged_at);
+    }
+    let recentComments: ActivityComment[] = [];
+    if (it.comments > 0) {
+      const comments = (await githubApi(
+        client,
+        "GET",
+        `/repos/${repo}/issues/${it.number}/comments?per_page=30`
+      )) as Array<{ user?: { login?: string }; created_at: string; body?: string }>;
+      recentComments = comments.slice(-3).map(c => ({
+        user: c.user?.login ?? "unknown",
+        at: c.created_at,
+        body: (c.body ?? "").slice(0, 800)
+      }));
+    }
+    items.push({
+      url: it.html_url,
+      repo,
+      number: it.number,
+      title: it.title,
+      kind: isPr ? "pr" : "issue",
+      state: it.state,
+      merged,
+      updatedAt: it.updated_at,
+      commentCount: it.comments,
+      recentComments
+    });
+  }
+  return items;
+}
+
 /** Open an issue on an allowlisted repo through the API (no fork needed). */
 export async function openIssue(
   api: GithubApi,

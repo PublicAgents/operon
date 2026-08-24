@@ -132,13 +132,19 @@ async function deliver(
     return errorResponse(502, "send_failed", String(error).slice(0, 300));
   }
 
-  // Durable oversight FIRST: a ledger row that survives regardless of
-  // whether the email copy or the Telegram notify then succeed, so a send
-  // can never happen with no operator-visible record at all.
-  await ledger(env).append("email_sent", { agentId, to: msg.to, subject: msg.subject, count });
+  // Sent for real from here on. Every oversight channel is best-effort and
+  // independent: none may throw and abort this function (which would leave
+  // a sent email unrecorded and, for an approved send, a claimed message
+  // stranded). console.log is the always-available final record; the
+  // ledger, operator email copy, and Telegram notify are richer surfaces,
+  // each attempted regardless of the others.
+  console.log(`email_sent agent=${agentId} to=${msg.to} count=${count}`);
+  try {
+    await ledger(env).append("email_sent", { agentId, to: msg.to, subject: msg.subject, count });
+  } catch (error) {
+    console.error("email ledger append failed", error);
+  }
 
-  // Sent for real from here on. Operator oversight is mandatory but must not
-  // undo the send; the copy is best-effort with a guaranteed Telegram fallback.
   const copyTo = operatorCopy(env, identity.localPart, zone);
   let copied = true;
   try {

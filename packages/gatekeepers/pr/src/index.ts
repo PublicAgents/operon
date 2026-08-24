@@ -6,16 +6,17 @@ import {
   Ledger,
   GitDataError
 } from "@operon/worker-kit";
-import { openIssue, openPullRequest, type PrRequest } from "./github.js";
+import { listActivity, openIssue, openPullRequest, type PrRequest } from "./github.js";
 
 export { Ledger };
 export * from "./github.js";
 
 /**
- * The PR Gatekeeper: opens fork-based pull requests for allowlisted repos
+ * The PR Gatekeeper: opens fork-based pull requests and issues for
+ * allowlisted repos, and reports the status of what an agent opened, all
  * through the GitHub API. It holds the machine credential; no wake
  * container ever does. Callers (the porch) authenticate with an internal
- * bearer and submit file DATA; this Worker turns it into a PR.
+ * bearer and submit DATA; this Worker turns it into GitHub actions.
  */
 
 interface Env {
@@ -23,6 +24,19 @@ interface Env {
   PR_SERVICE_TOKEN?: string;
   PR_REPOS?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
+  [secret: string]: unknown;
+}
+
+/**
+ * The GitHub credential for an agent: its own account's PAT
+ * (MACHINE_PAT_<AGENTID>) when set, else the shared MACHINE_PAT. Per-agent
+ * accounts let each agent open and own its PRs under its own identity and
+ * receive its own notifications.
+ */
+function patForAgent(env: Env, agentId: string): string | undefined {
+  const perAgent = env[`MACHINE_PAT_${agentId.toUpperCase().replace(/-/g, "_")}`];
+  if (typeof perAgent === "string" && perAgent.length > 0) return perAgent;
+  return env.MACHINE_PAT;
 }
 
 function ledger(env: Env) {
@@ -76,14 +90,15 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
       return errorResponse(400, "invalid_file", String(file?.path));
     }
   }
-  if (!env.MACHINE_PAT) {
+  const pat = typeof agentId === "string" ? patForAgent(env, agentId) : undefined;
+  if (!pat) {
     await ledger(env).append("pr_failed", { reason: "credential_unconfigured", repo });
     return errorResponse(500, "credential_unconfigured");
   }
 
   try {
     const result = await openPullRequest(
-      { token: env.MACHINE_PAT, userAgent: "operon-gatekeeper-pr" },
+      { token: pat, userAgent: "operon-gatekeeper-pr" },
       { repo, title, body: prBody, files },
       crypto.randomUUID()
     );
@@ -124,10 +139,11 @@ async function handleIssue(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("issue_failed", { reason: "missing_title_or_body", repo });
     return errorResponse(400, "missing_title_or_body");
   }
-  if (!env.MACHINE_PAT) return errorResponse(500, "credential_unconfigured");
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
   try {
     const result = await openIssue(
-      { token: env.MACHINE_PAT, userAgent: "operon-gatekeeper-pr" },
+      { token: pat, userAgent: "operon-gatekeeper-pr" },
       repo,
       title,
       issueBody
@@ -141,6 +157,22 @@ async function handleIssue(request: Request, env: Env): Promise<Response> {
   }
 }
 
+async function handleStatus(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const pat = typeof body.value.agentId === "string" ? patForAgent(env, body.value.agentId) : undefined;
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const items = await listActivity({ token: pat, userAgent: "operon-gatekeeper-pr" });
+    return json({ ok: true, items });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    return errorResponse(502, "status_failed", detail.slice(0, 300));
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -149,6 +181,9 @@ export default {
     }
     if (url.pathname === "/gatekeeper/issue" && request.method === "POST") {
       return handleIssue(request, env);
+    }
+    if (url.pathname === "/gatekeeper/status" && request.method === "POST") {
+      return handleStatus(request, env);
     }
     if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
       const denied = requireBearer(request, env.PR_SERVICE_TOKEN);

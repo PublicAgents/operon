@@ -144,6 +144,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/publish") return await this.publish(body);
       if (request.method === "POST" && url.pathname === "/pr") return await this.pr(body);
       if (request.method === "POST" && url.pathname === "/issue") return await this.issue(body);
+      if (request.method === "POST" && url.pathname === "/status") return await this.status();
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
@@ -321,6 +322,19 @@ export class Porch {
     const resultText = (await response.text()).slice(0, 500);
     if (!response.ok) return fail(502, "issue_rejected", `${response.status}: ${resultText}`);
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async status(): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.prUrl || !config.prToken) return fail(503, "status_not_wired");
+    const response = await fetch(`${config.prUrl.replace(/\/gatekeeper\/pr$/, "")}/gatekeeper/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
+      body: JSON.stringify({ agentId: config.agentId })
+    });
+    const resultText = (await response.text()).slice(0, 20000);
+    if (!response.ok) return fail(502, "status_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
   private async email(body: Record<string, unknown>): Promise<JsonResult> {
