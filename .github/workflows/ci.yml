@@ -64,3 +64,11 @@ jobs:
       - name: Wrangler dry-run (github Gatekeeper)
         working-directory: packages/gatekeepers/github
         run: npx wrangler deploy --dry-run --outdir /tmp/bundle-github
+
+      - name: Wrangler dry-run (deploy Gatekeeper)
+        working-directory: packages/gatekeepers/deploy
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-deploy
+
+      - name: Wrangler dry-run (PR Gatekeeper)
+        working-directory: packages/gatekeepers/pr
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-pr

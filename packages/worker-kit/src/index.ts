@@ -1,2 +1,12 @@
 export { json, errorResponse, requireBearer, readJson } from "./http.js";
 export { Ledger, type LedgerRow } from "./ledger.js";
+export {
+  githubApi,
+  buildTree,
+  commitToBranch,
+  decodeUtf8,
+  GitDataError,
+  type GitFile,
+  type GithubApi,
+  type CommitResult
+} from "./git-data.js";

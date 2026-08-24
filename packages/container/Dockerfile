@@ -24,9 +24,15 @@ RUN curl -fsSL -o /tmp/gitleaks.tar.gz \
   && rm /tmp/gitleaks.tar.gz \
   && gitleaks version
 RUN npm install -g @anthropic-ai/claude-code
-RUN useradd --create-home agent
+# The mind session runs as this unprivileged user; the entrypoint stays
+# root so the session cannot read the supervisor's /proc environment or
+# argv (see entrypoint.ts, privilege split).
+RUN useradd --create-home --uid 1001 mind
 COPY --from=build /app/dist /opt/operon
 COPY gitleaks.toml /opt/operon/gitleaks.toml
-USER agent
-WORKDIR /home/agent
+# The wake's door handle: a thin client for the entrypoint's loopback
+# porch; it holds no credentials (see porch.ts).
+RUN printf '#!/bin/sh\nexec node /opt/operon/cli.js "$@"\n' > /usr/local/bin/operon \
+  && chmod +x /usr/local/bin/operon
+WORKDIR /root
 ENTRYPOINT ["node", "/opt/operon/entrypoint.js"]

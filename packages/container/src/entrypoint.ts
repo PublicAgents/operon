@@ -5,7 +5,9 @@ import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/inde
 import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
-import { stageAndCollect } from "./staging.js";
+import { stageAndCollect, type StagedChanges } from "./staging.js";
+import { Porch } from "./porch.js";
+import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -17,6 +19,31 @@ import { stageAndCollect } from "./staging.js";
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
+
+/**
+ * The privilege split: the entrypoint (and its porch) run as root and hold
+ * the tokens; the mind session runs as the unprivileged "mind" user (fixed
+ * uid in the Dockerfile). Same-uid isolation is not isolation: a same-uid
+ * session could read the supervisor's /proc environment and argv. Outside
+ * the image (local dev, tests) there is no root and no mind user, so the
+ * split degrades to same-uid with a logged warning.
+ */
+const MIND_UID = 1001;
+const MIND_GID = 1001;
+
+function canDropPrivileges(): boolean {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+function mindSpawnIds(): { uid?: number; gid?: number } {
+  if (canDropPrivileges()) return { uid: MIND_UID, gid: MIND_GID };
+  return {};
+}
+
+async function chownToMind(path: string): Promise<void> {
+  if (!canDropPrivileges()) return;
+  await runCapture("chown", ["-R", `${MIND_UID}:${MIND_GID}`, path]);
+}
 
 /**
  * Minutes reserved between the session's end and the wake's hard wall, for
@@ -36,6 +63,7 @@ function wakePrompt(budgetMinutes: number): string {
   return (
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
+    "Your doors to the world are the operon CLI: run operon --help to see which are live this wake. " +
     "Act as you see fit, and when your journal entry is written, stop."
   );
 }
@@ -64,20 +92,34 @@ function sessionBaseEnv(): Record<string, string> {
   return env;
 }
 
-async function git(args: string[], env?: Record<string, string>): Promise<string> {
-  const { stdout } = await runCapture("git", args, {
-    cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...env }
-  });
-  return stdout;
+function mindHome(): string {
+  return canDropPrivileges() ? "/home/mind" : (process.env.HOME ?? "/tmp");
 }
 
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
-  const url = `https://x-access-token:${config.githubToken}@github.com/${config.stateRepo}.git`;
-  await runCapture("git", ["clone", url, STATE_DIR], { env: sessionBaseEnv() });
-  await git(["config", "user.name", config.agentId]);
-  await git(["config", "user.email", `${config.agentId}@operon.invalid`]);
+  // The ONE authenticated git op: a clone into an empty directory, run as
+  // ROOT with a SHORT-LIVED READ-ONLY token in the git child's env (never
+  // argv, never .git/config, and root's env is unreadable by the mind).
+  // Safe precisely because the directory is empty at clone time: there is
+  // no mind-controlled config, hook, or filter to abuse. Nothing is pushed
+  // with this token; persistence goes through the Gatekeeper.
+  await runCapture(
+    "git",
+    [...hardenedGitFlags(), "clone", githubRepoUrl(config.stateRepo), STATE_DIR],
+    { env: gitCredentialEnv(sessionBaseEnv(), config.githubToken), timeoutMs: 5 * 60 * 1000 }
+  );
+  // Identity for any commits the mind chooses to make locally; harmless to
+  // set as root on the fresh clone before it is handed over.
+  await runCapture("git", [...hardenedGitFlags(), "config", "user.name", config.agentId], {
+    cwd: STATE_DIR
+  });
+  await runCapture(
+    "git",
+    [...hardenedGitFlags(), "config", "user.email", `${config.agentId}@operon.invalid`],
+    { cwd: STATE_DIR }
+  );
+  await chownToMind(WORKDIR);
 }
 
 interface VerifiedModel {
@@ -139,11 +181,28 @@ async function verifyModel(
   }
 }
 
+/**
+ * Every secret the container itself holds, auto-added to the sweep: the
+ * operator's list covers what the operator knows about, this covers what
+ * the wake was given. Neither should ever appear in state or a publish.
+ */
+function autoDenylist(config: WakeConfig): string[] {
+  return [
+    ...config.secretDenylist,
+    config.mindCredential,
+    config.githubToken,
+    ...(config.notifyToken ? [config.notifyToken] : []),
+    ...(config.publishToken ? [config.publishToken] : []),
+    ...(config.prToken ? [config.prToken] : [])
+  ];
+}
+
 async function runSession(
   adapter: HarnessAdapter,
   config: WakeConfig,
   model: string,
-  degraded: boolean
+  degraded: boolean,
+  porchUrl: string
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
@@ -157,22 +216,59 @@ async function runSession(
   // The timeout enforces the budget the prompt promised: past it the
   // session receives SIGTERM while the entrypoint still has the wrap-up
   // margin to verify, push, and notify, so the wake's work survives even
-  // when the mind ran long.
+  // when the mind ran long. OPERON_PORCH is a loopback address, not a
+  // credential: the session's env still contains only its own mind
+  // credential; every other token stays behind the porch.
+  const ids = mindSpawnIds();
+  if (!("uid" in ids)) {
+    log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
+  }
   return runStreaming(spec.command, [...spec.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...spec.env },
-    timeoutMs: budgetMinutes * 60_000
+    env: {
+      ...sessionBaseEnv(),
+      ...spec.env,
+      OPERON_PORCH: porchUrl,
+      ...("uid" in ids ? { HOME: "/home/mind" } : {})
+    },
+    timeoutMs: budgetMinutes * 60_000,
+    ...ids
   });
 }
 
-async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<void> {
-  if (!hasStaged) {
-    log("no changes to push");
+/**
+ * Persist the wake's changes by handing the file DATA to the github
+ * Gatekeeper, which commits them to the state repo via the Git Data API.
+ * No push token and no credentialed git run in this container.
+ */
+async function persistState(
+  config: WakeConfig,
+  changes: StagedChanges
+): Promise<void> {
+  if (!config.persistUrl || !config.persistToken) {
+    throw new Error("persist_not_wired: OPERON_PERSIST_URL/TOKEN missing");
+  }
+  const files = changes.changed
+    .filter((file): file is { path: string; content: string } => typeof file.content === "string")
+    .map(file => ({ path: file.path, contentBase64: Buffer.from(file.content, "utf8").toString("base64") }));
+  if (files.length === 0 && changes.deleted.length === 0) {
+    log("nothing to persist");
     return;
   }
-  await git(["commit", "-m", `wake ${config.wakeId}`]);
-  await git(["push", "origin", "HEAD"]);
-  log("state pushed");
+  const response = await fetch(config.persistUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.persistToken}` },
+    body: JSON.stringify({
+      agentId: config.agentId,
+      message: `wake ${config.wakeId}`,
+      files,
+      deletions: changes.deleted
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`persist_failed: ${response.status} ${(await response.text()).slice(0, 300)}`);
+  }
+  log("state persisted through the github Gatekeeper");
 }
 
 async function notify(config: WakeConfig, text: string): Promise<void> {
@@ -206,21 +302,33 @@ async function main(): Promise<number> {
     ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
     : verified.answer;
 
+  // The porch opens before the session and closes after it: the wake's
+  // doors exist exactly while a mind is awake to use them.
+  const porch = new Porch({
+    config,
+    stateDir: STATE_DIR,
+    denylist: autoDenylist(config),
+    log
+  });
+  const porchUrl = await porch.start();
+  log(`${label}: porch open at ${porchUrl}`);
+
   log(`${label}: session starting (model ${verified.model})`);
-  const sessionExit = await runSession(adapter, config, verified.model, verified.degraded);
+  let sessionExit: number;
+  try {
+    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl);
+  } finally {
+    await porch.close();
+  }
   log(`${label}: session exited ${sessionExit}`);
 
-  const staged = await stageAndCollect(STATE_DIR, sessionBaseEnv());
-  // The container auto-denylists every secret it itself holds: the
-  // operator's list covers what the operator knows about, this covers what
-  // the wake was given. Neither should ever appear in state.
-  const denylist = [
-    ...config.secretDenylist,
-    config.mindCredential,
-    config.githubToken,
-    ...(config.notifyToken ? [config.notifyToken] : [])
-  ];
-  const verification = verifyPresleep(staged, denylist);
+  // Change detection runs as the mind uid: a filter it triggers executes
+  // unprivileged, so this needs no root and no clean mirror.
+  const changes = await stageAndCollect(STATE_DIR, {
+    env: { ...sessionBaseEnv(), HOME: mindHome() },
+    ...mindSpawnIds()
+  });
+  const verification = verifyPresleep(changes.changed, autoDenylist(config));
 
   // Generic layer: gitleaks catches secrets nobody listed. A scanner error
   // fails closed as unscannable: an unscanned push must not happen.
@@ -251,14 +359,14 @@ async function main(): Promise<number> {
   if (verification.blockPush) {
     await notify(
       config,
-      `${label}: PUSH WITHHELD, presleep blocked the push (${verification.failures
+      `${label}: PERSIST WITHHELD, presleep blocked it (${verification.failures
         .map(f => f.code)
-        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was pushed.`
+        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was persisted.`
     );
     return 2;
   }
 
-  await commitAndPush(config, staged.length > 0);
+  await persistState(config, changes);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

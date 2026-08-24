@@ -20,7 +20,15 @@ export const ENV = {
   notifyToken: "OPERON_NOTIFY_TOKEN",
   secretDenylist: "OPERON_SECRET_DENYLIST",
   harnessExtraArgs: "OPERON_HARNESS_EXTRA_ARGS",
-  maxWakeMinutes: "OPERON_MAX_WAKE_MINUTES"
+  maxWakeMinutes: "OPERON_MAX_WAKE_MINUTES",
+  hosts: "OPERON_HOSTS",
+  publishUrl: "OPERON_PUBLISH_URL",
+  publishToken: "OPERON_PUBLISH_TOKEN",
+  persistUrl: "OPERON_PERSIST_URL",
+  persistToken: "OPERON_PERSIST_TOKEN",
+  prUrl: "OPERON_PR_URL",
+  prToken: "OPERON_PR_TOKEN",
+  prRepos: "OPERON_PR_REPOS"
 } as const;
 
 export interface WakeConfig {
@@ -40,6 +48,20 @@ export interface WakeConfig {
   harnessExtraArgs: string[];
   /** The wake's hard wall in minutes; the session gets this minus a margin. */
   maxWakeMinutes: number;
+  /** Zone hosts this agent may publish to ("@" or subdomain labels). */
+  hosts: string[];
+  /** Publish Gatekeeper endpoint + bearer; absent means publishing is not wired. */
+  publishUrl?: string;
+  publishToken?: string;
+  /** github Gatekeeper /commit endpoint + bearer for state persistence. */
+  persistUrl?: string;
+  persistToken?: string;
+  /** PR Gatekeeper endpoint + internal bearer; absent means the PR door is closed.
+   * The GitHub credential lives in that Worker, never here. */
+  prUrl?: string;
+  prToken?: string;
+  /** Allowlisted "owner/repo" PR targets. */
+  prRepos: string[];
 }
 
 export class ConfigError extends Error {
@@ -91,7 +113,21 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
       .map(entry => entry.trim())
       .filter(entry => entry.length > 0),
     harnessExtraArgs: parseExtraArgs(env[ENV.harnessExtraArgs]),
-    maxWakeMinutes: parseMaxWakeMinutes(env[ENV.maxWakeMinutes])
+    maxWakeMinutes: parseMaxWakeMinutes(env[ENV.maxWakeMinutes]),
+    hosts: (env[ENV.hosts] ?? "")
+      .split(",")
+      .map(host => host.trim())
+      .filter(host => host.length > 0),
+    publishUrl: env[ENV.publishUrl],
+    publishToken: env[ENV.publishToken],
+    persistUrl: env[ENV.persistUrl],
+    persistToken: env[ENV.persistToken],
+    prUrl: env[ENV.prUrl],
+    prToken: env[ENV.prToken],
+    prRepos: (env[ENV.prRepos] ?? "")
+      .split(",")
+      .map(repo => repo.trim())
+      .filter(repo => repo.length > 0)
   };
 }
 

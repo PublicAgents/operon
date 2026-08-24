@@ -24,8 +24,9 @@ packages/
   container/    Wake container image + entrypoint + harness adapters +
                 presleep verifier (self-contained: no cross-package runtime
                 imports; config.spec.ts pins its env names to core's)
-  gatekeepers/  One small Worker per capability (telegram and github today;
-                deploy, spend, post-office per the spec)
+  gatekeepers/  One small Worker per capability (telegram, github, deploy
+                today; spend and post-office per the spec). The agent-facing
+                side is the container's loopback porch + `operon` CLI.
 charters/       Charter template only. Per-tenant charters, rosters, and
                 tenant specs live in each colony's own deployment repo,
                 never here: this repo stays generic and clonable.

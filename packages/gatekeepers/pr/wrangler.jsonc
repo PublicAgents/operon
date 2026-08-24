@@ -1,0 +1,22 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-pr",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Reachable only through a service binding, and even then must present
+  // PR_SERVICE_TOKEN. The GitHub credential never leaves this Worker.
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }],
+  "vars": {
+    // Deployments override: the "owner/repo" allowlist, re-checked here so
+    // this Worker trusts no caller. Same value the scheduler passes as
+    // PR_REPOS to the wake.
+    "PR_REPOS": "livevariant/livevariant"
+  }
+  // Secrets (wrangler secret put -c workers/gatekeeper-pr/wrangler.jsonc):
+  //   MACHINE_PAT        classic PAT (repo scope) for the machine github user
+  //   PR_SERVICE_TOKEN   internal bearer the scheduler/porch present
+}

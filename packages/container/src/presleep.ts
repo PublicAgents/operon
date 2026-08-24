@@ -78,20 +78,17 @@ function matchForm(content: string, literal: string): string | null {
   return null;
 }
 
-export function verifyPresleep(
+/**
+ * The secret sweep alone, over any file set: used by the presleep gate on
+ * the staged change set and by the porch on publish payloads before they
+ * leave the container. Same rules everywhere: full content or unscannable,
+ * variant forms, cross-file corpus, masked reporting.
+ */
+export function scanForSecrets(
   changedFiles: ChangedFile[],
-  denylist: string[],
-  journalPath = JOURNAL_PATH
-): PresleepResult {
+  denylist: string[]
+): PresleepFailure[] {
   const failures: PresleepFailure[] = [];
-
-  if (!changedFiles.some(file => file.path === journalPath)) {
-    failures.push({
-      code: "journal_untouched",
-      detail: `${journalPath} was not modified this wake; a wake that leaves no journal entry did not happen, as far as the record is concerned`
-    });
-  }
-
   const scannable: ChangedFile[] = [];
   for (const file of changedFiles) {
     if (file.content === null) {
@@ -140,6 +137,25 @@ export function verifyPresleep(
       }
     }
   }
+
+  return failures;
+}
+
+export function verifyPresleep(
+  changedFiles: ChangedFile[],
+  denylist: string[],
+  journalPath = JOURNAL_PATH
+): PresleepResult {
+  const failures: PresleepFailure[] = [];
+
+  if (!changedFiles.some(file => file.path === journalPath)) {
+    failures.push({
+      code: "journal_untouched",
+      detail: `${journalPath} was not modified this wake; a wake that leaves no journal entry did not happen, as far as the record is concerned`
+    });
+  }
+
+  failures.push(...scanForSecrets(changedFiles, denylist));
 
   // Anything that could publish a secret blocks the push: a confirmed
   // denylisted literal, or a change we could not scan at all.

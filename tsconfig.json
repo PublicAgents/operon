@@ -20,6 +20,12 @@
     },
     {
       "path": "./packages/worker-kit"
+    },
+    {
+      "path": "./packages/gatekeepers/deploy"
+    },
+    {
+      "path": "./packages/gatekeepers/pr"
     }
   ]
 }

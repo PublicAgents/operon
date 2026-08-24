@@ -19,24 +19,25 @@ async function initRepo(): Promise<string> {
 }
 
 describe("stageAndCollect (real git)", () => {
-  it("collects staged blob content, symlink target strings, and deletions", async () => {
+  it("collects staged blob content and symlink target strings; reports deletions separately", async () => {
     const dir = await initRepo();
     try {
       await writeFile(join(dir, "JOURNAL.md"), "## Wake 1\n");
-      // The blob git pushes for a symlink is its TARGET STRING; a secret
-      // embedded there must reach the verifier even though the resolved
-      // path does not exist.
+      // git pushes a symlink's TARGET STRING as its blob; a secret there
+      // must reach the verifier.
       await symlink("../secret-super-secret-token-path", join(dir, "leaky-link"));
       await rm(join(dir, "base.md"));
 
-      const files = await stageAndCollect(dir);
-      const byPath = new Map(files.map(f => [f.path, f.content]));
+      const { changed, deleted } = await stageAndCollect(dir);
+      const byPath = new Map(changed.map(f => [f.path, f.content]));
 
       expect(byPath.get("JOURNAL.md")).toBe("## Wake 1\n");
       expect(byPath.get("leaky-link")).toContain("super-secret-token");
-      expect(byPath.get("base.md")).toBe("");
+      expect(deleted).toEqual(["base.md"]);
+      // Deleted files are not in the changed set.
+      expect(byPath.has("base.md")).toBe(false);
 
-      const result = verifyPresleep(files, ["super-secret-token"]);
+      const result = verifyPresleep(changed, ["super-secret-token"]);
       expect(result.blockPush).toBe(true);
       expect(result.failures.some(f => f.detail.includes("leaky-link"))).toBe(true);
     } finally {
@@ -51,10 +52,8 @@ describe("stageAndCollect (real git)", () => {
       await git("mv", "base.md", "spaced name (v2).md");
       await writeFile(join(dir, "JOURNAL.md"), "## Wake 1\n");
 
-      const files = await stageAndCollect(dir);
-      const paths = files.map(f => f.path);
-      expect(paths).toContain("spaced name (v2).md");
-      const renamed = files.find(f => f.path === "spaced name (v2).md");
+      const { changed } = await stageAndCollect(dir);
+      const renamed = changed.find(f => f.path === "spaced name (v2).md");
       expect(renamed?.content).toBe("base\n");
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -64,7 +63,7 @@ describe("stageAndCollect (real git)", () => {
   it("returns an empty set when nothing changed", async () => {
     const dir = await initRepo();
     try {
-      expect(await stageAndCollect(dir)).toEqual([]);
+      expect(await stageAndCollect(dir)).toEqual({ changed: [], deleted: [] });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -26,7 +26,8 @@
   //   GITHUB_APP_ID             the GitHub App's numeric id
   //   GITHUB_APP_PRIVATE_KEY    the App's private key, PKCS8 PEM
   //   GITHUB_INSTALLATION_ID    the installation on the org holding state repos
-  //   TOKEN_SERVICE_TOKEN       bearer accepted on POST /token (unused by
-  //                             service-binding callers, required for any
-  //                             direct HTTP exposure; keep it set regardless)
+  //   TOKEN_SERVICE_TOKEN       bearer for POST /token (scheduler, service binding)
+  //   COMMIT_SERVICE_TOKEN      bearer for POST /commit (the wake container calls
+  //                             this over a public route to persist state; a
+  //                             container cannot use a service binding)
 }
