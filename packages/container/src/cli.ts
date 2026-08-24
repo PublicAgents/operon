@@ -14,6 +14,18 @@ const HELP = `operon: the doors out of this wake
                                          assigned host ("@" is the zone apex);
                                          dir defaults to "site". Swept for secrets
                                          before anything leaves the container.
+  operon email --to <addr> --subject <s> --body <b>
+                                         send an email (disclosed as an AI agent,
+                                         rate-limited; a first email to a new
+                                         recipient is held for the operator). Your
+                                         inbound mail is in inbox/ each wake.
+  operon status                          your open PRs and issues and the latest
+                                         comments on them, so you can follow the
+                                         conversation on what you proposed
+  operon issue <owner/repo> <bodyfile> --title <t>
+                                         open an issue on an allowlisted repo; the
+                                         body is read from bodyfile (a markdown file
+                                         in your repo). Swept before it leaves.
   operon pr <owner/repo> [dir] --title <t> --body <b>
                                          propose a change to an allowlisted repo: the
                                          files in dir (default "pr") are added/updated
@@ -61,6 +73,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
   switch (command) {
     case "capabilities":
       return { path: "/capabilities", payload: {} };
+    case "status":
+      return { path: "/status", payload: {} };
     case "notify": {
       const text = rest.join(" ").trim();
       if (!text) throw new CliUsageError("usage: operon notify <text...>");
@@ -70,6 +84,23 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       const host = flagValue(rest, "--host");
       if (!host) throw new CliUsageError("usage: operon publish [dir] --host <host>");
       return { path: "/publish", payload: { dir: positionals(rest)[0] ?? "site", host } };
+    }
+    case "email": {
+      const to = flagValue(rest, "--to");
+      const subject = flagValue(rest, "--subject");
+      const body = flagValue(rest, "--body");
+      if (!to || !to.includes("@") || !subject || !body) {
+        throw new CliUsageError("usage: operon email --to <addr> --subject <s> --body <b>");
+      }
+      return { path: "/email", payload: { to, subject, text: body } };
+    }
+    case "issue": {
+      const [repo, bodyFile] = positionals(rest);
+      const title = flagValue(rest, "--title");
+      if (!repo || !repo.includes("/") || !bodyFile || !title) {
+        throw new CliUsageError("usage: operon issue <owner/repo> <bodyfile> --title <t>");
+      }
+      return { path: "/issue", payload: { repo, bodyFile, title } };
     }
     case "pr": {
       const [repo, dir] = positionals(rest);

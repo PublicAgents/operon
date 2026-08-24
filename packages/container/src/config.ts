@@ -28,7 +28,9 @@ export const ENV = {
   persistToken: "OPERON_PERSIST_TOKEN",
   prUrl: "OPERON_PR_URL",
   prToken: "OPERON_PR_TOKEN",
-  prRepos: "OPERON_PR_REPOS"
+  prRepos: "OPERON_PR_REPOS",
+  emailUrl: "OPERON_EMAIL_URL",
+  emailToken: "OPERON_EMAIL_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -62,6 +64,9 @@ export interface WakeConfig {
   prToken?: string;
   /** Allowlisted "owner/repo" PR targets. */
   prRepos: string[];
+  /** Email Gatekeeper endpoint + bearer; absent means the email doors are closed. */
+  emailUrl?: string;
+  emailToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -127,7 +132,9 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     prRepos: (env[ENV.prRepos] ?? "")
       .split(",")
       .map(repo => repo.trim())
-      .filter(repo => repo.length > 0)
+      .filter(repo => repo.length > 0),
+    emailUrl: env[ENV.emailUrl],
+    emailToken: env[ENV.emailToken]
   };
 }
 

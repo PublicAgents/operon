@@ -12,3 +12,11 @@ useDefault = true
 # part of the pushed change set.
 [[allowlists]]
 paths = ['''(^|/)\.git/''']
+
+# Publishable keys (pk_...) are public by design: they ship in page source
+# and are safe in a repo, so they are not secrets. Allowlist the prefix so
+# an agent's pages carrying the org publishable key are not a false
+# positive. Scoped to the pk_ prefix only; it grants no private access.
+[[allowlists]]
+regexTarget = "match"
+regexes = ['''pk_[A-Za-z0-9]{16,}''']

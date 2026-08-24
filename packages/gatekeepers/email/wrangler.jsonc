@@ -1,0 +1,30 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-email",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // The wake reaches /send, /pull, /approve over HTTPS, so a public host.
+  // Inbound mail arrives via an Email Routing rule (configured in the
+  // dashboard) that points the agents.<zone> catch-all at this Worker.
+  "workers_dev": false,
+  "routes": [{ "pattern": "email-gk.livevariant.ai", "custom_domain": true }],
+  "send_email": [{ "name": "EMAIL" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MAILBOX", "class_name": "Mailbox" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox", "Ledger"] }],
+  "vars": {
+    // ROSTER injected by scripts/deploy.mjs. EMAIL_DOMAIN is the subdomain
+    // whose MX routes to this Worker (NOT the apex, which is Workspace).
+    "EMAIL_DOMAIN": "agents.livevariant.ai"
+  }
+  // Secrets (wrangler secret put -c workers/gatekeeper-email/wrangler.jsonc):
+  //   EMAIL_SERVICE_TOKEN   internal bearer the wake presents (send/pull/approve)
+  //   NOTIFY_TOKEN          bearer for the telegram Gatekeeper /notify
+  //   OPERATOR_EMAIL        optional: fixed operator copy address; if unset,
+  //                         copies go to <agent-name>@<zone> (catch-all)
+  // Vars set per deployment: NOTIFY_URL (telegram Gatekeeper /notify).
+}

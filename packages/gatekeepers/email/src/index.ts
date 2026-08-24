@@ -1,0 +1,288 @@
+import { findAgent, parseRoster } from "@operon/core";
+import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
+import PostalMime from "postal-mime";
+import { Mailbox, type AttachmentMeta } from "./mailbox.js";
+import { identityForAgent, identityForRecipient } from "./identity.js";
+import { disclosureFooter, fromName, normalizeAddress } from "./policy.js";
+
+export { Mailbox, Ledger };
+export * from "./identity.js";
+export * from "./policy.js";
+
+/**
+ * The email Gatekeeper. Inbound: Email Routing delivers to email(); we store
+ * the message in the agent's per-agent Mailbox and forward a full copy to
+ * the operator. Outbound: the wake POSTs /send; we enforce the outbound
+ * policy (disclosure appended, first contact held for the operator, rate
+ * limited), send through the Email Service binding, and BCC the operator.
+ * The wake never holds a mail credential; it only sends data over a bearer.
+ */
+
+interface Env {
+  ROSTER: string;
+  EMAIL_DOMAIN: string;
+  EMAIL_SERVICE_TOKEN?: string;
+  OPERATOR_EMAIL?: string;
+  NOTIFY_URL?: string;
+  NOTIFY_TOKEN?: string;
+  EMAIL: {
+    send(message: {
+      to: string;
+      from: string;
+      subject: string;
+      text: string;
+      html?: string;
+    }): Promise<{ messageId?: string }>;
+  };
+  MAILBOX: DurableObjectNamespace<Mailbox>;
+  LEDGER: DurableObjectNamespace<Ledger>;
+}
+
+function mailbox(env: Env, agentId: string) {
+  return env.MAILBOX.get(env.MAILBOX.idFromName(agentId));
+}
+
+function ledger(env: Env) {
+  return env.LEDGER.get(env.LEDGER.idFromName("email"));
+}
+
+/** Address the operator's copy lands at: OPERATOR_EMAIL, else <name>@<zone> (catch-all). */
+function operatorCopy(env: Env, localPart: string, zone: string): string {
+  return env.OPERATOR_EMAIL && env.OPERATOR_EMAIL.length > 0
+    ? env.OPERATOR_EMAIL
+    : `${localPart}@${zone}`;
+}
+
+async function notifyOperator(env: Env, text: string): Promise<void> {
+  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
+  try {
+    await fetch(env.NOTIFY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
+      body: JSON.stringify({ text })
+    });
+  } catch (error) {
+    console.error("email gatekeeper notify failed", error);
+  }
+}
+
+async function handleSend(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; to?: string; subject?: string; text?: string }>(
+    request
+  );
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, to, subject, text } = body.value;
+
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent", String(agentId));
+  if (typeof to !== "string" || !to.includes("@")) return errorResponse(400, "invalid_to");
+  if (typeof subject !== "string" || !subject) return errorResponse(400, "missing_subject");
+  if (typeof text !== "string" || !text) return errorResponse(400, "missing_text");
+
+  const identity = identityForAgent(agent, env.EMAIL_DOMAIN, roster.zone);
+  const recipient = normalizeAddress(to);
+  const box = mailbox(env, agent.id);
+  const now = new Date().toISOString();
+
+  // Atomic check-and-reserve in the DO: two overlapping sends near the cap
+  // cannot both pass, and the slot is reserved before delivery.
+  const reservation = await box.reserveSend(recipient, subject, now, false);
+  if (reservation.action === "reject") {
+    return errorResponse(429, "rate_limited", `daily send cap is ${box.dailyCap}`);
+  }
+  if (reservation.action === "hold") {
+    const held = await box.hold({ to: recipient, subject, text }, now);
+    await notifyOperator(
+      env,
+      `[${agent.id}] first-contact email HELD to ${recipient}: "${subject}". Approve id ${held.id} or it will not send.`
+    );
+    return json({ ok: true, status: "held_for_approval", heldId: held.id });
+  }
+
+  return deliver(env, agent.id, identity, roster.zone, { to: recipient, subject, text }, now, reservation.count);
+}
+
+/**
+ * Deliver a reserved send. The recipient send is the authoritative action;
+ * once it succeeds the send is real and counted, so the operator copy and
+ * notify must never undo it: a copy failure falls back to a Telegram notify
+ * carrying the content, so oversight is preserved through the other channel.
+ * A recipient-send failure releases the reserved slot.
+ */
+async function deliver(
+  env: Env,
+  agentId: string,
+  identity: { address: string; name: string; siteUrl: string; localPart: string },
+  zone: string,
+  msg: { to: string; subject: string; text: string },
+  now: string,
+  count: number
+): Promise<Response> {
+  const from = `${fromName(identity.name)} <${identity.address}>`;
+  const footer = disclosureFooter(identity.name, identity.address, identity.siteUrl);
+
+  let result: { messageId?: string };
+  try {
+    result = await env.EMAIL.send({ to: msg.to, from, subject: msg.subject, text: msg.text + footer });
+  } catch (error) {
+    await mailbox(env, agentId).release(now); // give the reserved slot back
+    return errorResponse(502, "send_failed", String(error).slice(0, 300));
+  }
+
+  // Sent for real from here on. The durable operator-visible record already
+  // exists: reserveSend wrote an outbox row in the DO, before this network
+  // send, readable via /outbox. So every channel here is best-effort and
+  // non-throwing (a failure can neither hide the send nor, for an approved
+  // send, strand the claimed message): the ledger, the operator email copy,
+  // and the Telegram notify are richer surfaces layered on the outbox.
+  console.log(`email_sent agent=${agentId} to=${msg.to} count=${count}`);
+  try {
+    await ledger(env).append("email_sent", { agentId, to: msg.to, subject: msg.subject, count });
+  } catch (error) {
+    console.error("email ledger append failed", error);
+  }
+
+  const copyTo = operatorCopy(env, identity.localPart, zone);
+  let copied = true;
+  try {
+    await env.EMAIL.send({
+      to: copyTo,
+      from,
+      subject: `[${identity.name} sent] ${msg.subject}`,
+      text: `To: ${msg.to}\n\n${msg.text}${footer}`
+    });
+  } catch {
+    copied = false;
+  }
+  await notifyOperator(
+    env,
+    `[${agentId}] emailed ${msg.to}: "${msg.subject}" (send ${count} today)` +
+      (copied ? "" : `\nOPERATOR EMAIL COPY FAILED. Content:\n${msg.text.slice(0, 1500)}`)
+  );
+  return json({ ok: true, status: "sent", messageId: result.messageId, sentToday: count, copied });
+}
+
+async function handleApprove(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; heldId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, heldId } = body.value;
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
+  if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
+  const box = mailbox(env, agent.id);
+  // Atomically claim: only the first concurrent approval of this id gets the
+  // message, so it can never be sent twice. Failure unclaims for retry.
+  const held = await box.claimHeld(heldId);
+  if (!held) return errorResponse(409, "held_unavailable", "already claimed or not found");
+
+  const now = new Date().toISOString();
+  const reservation = await box.reserveSend(held.to, held.subject, now, true);
+  if (reservation.action === "reject") {
+    await box.unclaimHeld(heldId);
+    return errorResponse(429, "rate_limited", `daily send cap is ${box.dailyCap}`);
+  }
+  const identity = identityForAgent(agent, env.EMAIL_DOMAIN, roster.zone);
+  const response = await deliver(
+    env,
+    agent.id,
+    identity,
+    roster.zone,
+    { to: held.to, subject: held.subject, text: held.text },
+    now,
+    reservation.action === "send" ? reservation.count : 0
+  );
+  if (response.ok) {
+    // Delivered. Cleanup is best-effort: a failed delete leaves a claimed
+    // orphan, which the claim keeps from ever resending, so it must not turn
+    // a successful delivery into an error. Unclaim only on delivery failure,
+    // so the message can be retried.
+    try {
+      await box.deleteHeld(heldId);
+    } catch (error) {
+      console.error(`held cleanup failed after delivery (claimed, will not resend): ${String(error)}`);
+    }
+  } else {
+    await box.unclaimHeld(heldId).catch(() => undefined);
+  }
+  return response;
+}
+
+async function handlePull(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof body.value.agentId === "string" ? findAgent(roster, body.value.agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  return json({ ok: true, messages: await mailbox(env, agent.id).pull() });
+}
+
+async function handleAck(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; ids?: string[] }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof body.value.agentId === "string" ? findAgent(roster, body.value.agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  const ids = Array.isArray(body.value.ids) ? body.value.ids.filter(i => typeof i === "string") : [];
+  await mailbox(env, agent.id).ack(ids);
+  return json({ ok: true, acked: ids.length });
+}
+
+async function handleOutbox(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof body.value.agentId === "string" ? findAgent(roster, body.value.agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  return json({ ok: true, outbox: await mailbox(env, agent.id).outbox() });
+}
+
+export default {
+  async email(message, env, ctx): Promise<void> {
+    const roster = parseRoster(env.ROSTER);
+    const identity = identityForRecipient(roster, env.EMAIL_DOMAIN, message.to);
+    if (!identity) {
+      message.setReject("No such mailbox");
+      return;
+    }
+    const parsed = await PostalMime.parse(message.raw);
+    const attachments: AttachmentMeta[] = (parsed.attachments ?? []).map(a => ({
+      filename: a.filename ?? "attachment",
+      mimeType: a.mimeType ?? "application/octet-stream",
+      size: typeof a.content === "string" ? a.content.length : (a.content?.byteLength ?? 0)
+    }));
+    await mailbox(env, identity.agentId).deliver({
+      from: parsed.from?.address ?? message.from,
+      subject: parsed.subject ?? "(no subject)",
+      date: parsed.date ?? new Date().toISOString(),
+      text: (parsed.text ?? "").slice(0, 100_000),
+      messageId: parsed.messageId,
+      attachments: attachments.length ? attachments : undefined
+    });
+    // Full copy (attachments and all) to the operator's catch-all box.
+    const copyTo = operatorCopy(env, identity.localPart, roster.zone);
+    ctx.waitUntil(message.forward(copyTo).catch(err => console.error("forward failed", err)));
+  },
+
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "POST") {
+      if (url.pathname === "/gatekeeper/email/send") return handleSend(request, env);
+      if (url.pathname === "/gatekeeper/email/pull") return handlePull(request, env);
+      if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
+      if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
+      if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
+    }
+    return errorResponse(404, "not_found");
+  }
+} satisfies ExportedHandler<Env>;

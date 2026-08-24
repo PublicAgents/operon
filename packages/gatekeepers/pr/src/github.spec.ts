@@ -70,3 +70,44 @@ describe("openPullRequest", () => {
     ).rejects.toThrow(/github_api_error/);
   });
 });
+
+describe("listActivity", () => {
+  it("lists the account's PRs/issues with latest comments and merged state", async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const path = url.replace("https://api.github.com", "");
+      const respond = (d: unknown) => new Response(JSON.stringify(d), { status: 200 });
+      if (path === "/user") return respond({ login: "prior-agent" });
+      if (path.startsWith("/search/issues"))
+        return respond({
+          items: [
+            {
+              html_url: "https://github.com/org/repo/pull/59",
+              title: "Add server.json",
+              state: "closed",
+              number: 59,
+              comments: 1,
+              updated_at: "2026-08-24T20:00:00Z",
+              repository_url: "https://api.github.com/repos/org/repo",
+              pull_request: { merged_at: "2026-08-24T21:00:00Z" }
+            }
+          ]
+        });
+      if (path === "/repos/org/repo/issues/59/comments?per_page=30")
+        return respond([{ user: { login: "maintainer" }, created_at: "2026-08-24T20:30:00Z", body: "thanks!" }]);
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const { listActivity } = await import("./github.js");
+    const items = await listActivity({ token: "pat", userAgent: "test", fetch: fetchImpl });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "pr",
+      number: 59,
+      state: "closed",
+      merged: true,
+      commentCount: 1
+    });
+    expect(items[0].recentComments[0]).toMatchObject({ user: "maintainer", body: "thanks!" });
+  });
+});

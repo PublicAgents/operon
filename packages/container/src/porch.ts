@@ -83,6 +83,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     notify: Boolean(config.notifyUrl && config.notifyToken),
     publish: Boolean(config.publishUrl && config.publishToken),
     pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
+    email: Boolean(config.emailUrl && config.emailToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -142,6 +143,9 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);
       if (request.method === "POST" && url.pathname === "/publish") return await this.publish(body);
       if (request.method === "POST" && url.pathname === "/pr") return await this.pr(body);
+      if (request.method === "POST" && url.pathname === "/issue") return await this.issue(body);
+      if (request.method === "POST" && url.pathname === "/status") return await this.status();
+      if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -282,6 +286,74 @@ export class Porch {
     const resultText = (await response.text()).slice(0, 800);
     if (!response.ok) return fail(502, "pr_rejected", `${response.status}: ${resultText}`);
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async issue(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config, stateDir, denylist, log } = this.context;
+    if (!config.prUrl || !config.prToken || config.prRepos.length === 0) {
+      return fail(503, "issue_not_wired");
+    }
+    const { repo, title, bodyFile } = body;
+    if (typeof repo !== "string" || !config.prRepos.includes(repo)) {
+      return fail(403, "repo_not_allowlisted", `allowed: ${config.prRepos.join(", ")}`);
+    }
+    if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
+    if (typeof bodyFile !== "string" || bodyFile.includes("..") || bodyFile.startsWith("/")) {
+      return fail(400, "invalid_body_file");
+    }
+    let issueBody: string;
+    try {
+      issueBody = await readFile(join(stateDir, bodyFile), "utf8");
+    } catch {
+      return fail(404, "body_file_not_found", bodyFile);
+    }
+    // Sweep the body like any outbound content.
+    const secretFailures = scanForSecrets([{ path: bodyFile, content: issueBody }], denylist);
+    if (secretFailures.length > 0) {
+      return fail(422, "blocked_by_sweep", secretFailures.map(f => f.detail).join("; "));
+    }
+
+    log(`opening issue on ${repo}`);
+    const response = await fetch(`${config.prUrl.replace(/\/gatekeeper\/pr$/, "")}/gatekeeper/issue`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
+      body: JSON.stringify({ agentId: config.agentId, repo, title, body: issueBody })
+    });
+    const resultText = (await response.text()).slice(0, 500);
+    if (!response.ok) return fail(502, "issue_rejected", `${response.status}: ${resultText}`);
+    return ok({ repo, gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async status(): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.prUrl || !config.prToken) return fail(503, "status_not_wired");
+    const response = await fetch(`${config.prUrl.replace(/\/gatekeeper\/pr$/, "")}/gatekeeper/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
+      body: JSON.stringify({ agentId: config.agentId })
+    });
+    const resultText = (await response.text()).slice(0, 20000);
+    if (!response.ok) return fail(502, "status_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async email(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config, log } = this.context;
+    if (!config.emailUrl || !config.emailToken) return fail(503, "email_not_wired");
+    const { to, subject, text } = body;
+    if (typeof to !== "string" || !to.includes("@")) return fail(400, "invalid_to");
+    if (typeof subject !== "string" || subject.length === 0) return fail(400, "missing_subject");
+    if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+
+    log(`sending email to ${to}`);
+    const response = await fetch(`${config.emailUrl}/gatekeeper/email/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
+      body: JSON.stringify({ agentId: config.agentId, to, subject, text })
+    });
+    const resultText = (await response.text()).slice(0, 500);
+    if (!response.ok) return fail(502, "email_rejected", `${response.status}: ${resultText}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 }
 

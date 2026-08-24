@@ -72,3 +72,7 @@ jobs:
       - name: Wrangler dry-run (PR Gatekeeper)
         working-directory: packages/gatekeepers/pr
         run: npx wrangler deploy --dry-run --outdir /tmp/bundle-pr
+
+      - name: Wrangler dry-run (email Gatekeeper)
+        working-directory: packages/gatekeepers/email
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-email
