@@ -57,8 +57,10 @@ export function contentTypeFor(path: string): string {
 export interface PorchContext {
   config: WakeConfig;
   stateDir: string;
-  /** Where clones for the PR door live. */
+  /** Where mind-editable PR clones live (mind-owned). */
   reposDir: string;
+  /** Root-only (0700) base for clean-push mirrors; the mind cannot enter it. */
+  mirrorsDir: string;
   /** The auto-denylist the presleep gate uses; the publish sweep shares it. */
   denylist: string[];
   /** Overrides the image's gitleaks config path (tests run outside the image). */
@@ -360,7 +362,9 @@ export class Porch {
     // with the token in its environment (see cleanPushToGithub).
     await cleanPushToGithub({
       sourceDir: dir,
-      mirrorDir: `${dir}.mirror`,
+      // Under the root-only mirrors dir, never beside the mind-owned clone:
+      // the mind cannot replace a mirror it cannot even traverse to.
+      mirrorDir: join(this.context.mirrorsDir, `pr-${name}-${crypto.randomUUID()}`),
       repo: `${user}/${name}`,
       branch,
       token: this.context.config.prToken ?? "",

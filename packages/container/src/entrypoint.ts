@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
@@ -25,8 +25,14 @@ import {
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
 const REPOS_DIR = join(WORKDIR, "repos");
-// Root-owned scratch for clean push mirrors; the mind never touches it.
-const MIRROR_DIR = "/tmp/operon-push-mirror";
+/**
+ * Root-owned, mode-0700 base for every clean-push mirror. 0700 means the
+ * mind's uid cannot enter or write it, so it cannot replace a freshly
+ * cloned mirror between clone and the credentialed push (the porch runs
+ * concurrently with the session, so this must resist a live race, not just
+ * a stale directory). Never chowned to the mind.
+ */
+const MIRRORS_DIR = "/tmp/operon-mirrors";
 
 /**
  * The privilege split: the entrypoint (and its porch) run as root and hold
@@ -120,9 +126,16 @@ async function git(args: string[], env?: Record<string, string>): Promise<string
   return stdout;
 }
 
+async function ensureMirrorsDir(): Promise<void> {
+  await mkdir(MIRRORS_DIR, { recursive: true });
+  // mkdir mode is subject to umask; force 0700 explicitly.
+  await chmod(MIRRORS_DIR, 0o700);
+}
+
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
   await mkdir(REPOS_DIR, { recursive: true });
+  await ensureMirrorsDir();
   // Clean URL: the token travels in the git child's env via the credential
   // helper, so nothing in .git/config ever carries it.
   await runCapture(
@@ -263,7 +276,7 @@ async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<vo
   const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
   await cleanPushToGithub({
     sourceDir: STATE_DIR,
-    mirrorDir: MIRROR_DIR,
+    mirrorDir: join(MIRRORS_DIR, "state"),
     repo: config.stateRepo,
     branch,
     token: config.githubToken,
@@ -310,6 +323,7 @@ async function main(): Promise<number> {
     config,
     stateDir: STATE_DIR,
     reposDir: REPOS_DIR,
+    mirrorsDir: MIRRORS_DIR,
     denylist: autoDenylist(config),
     chownForSession: chownToMind,
     log
