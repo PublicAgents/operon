@@ -1,0 +1,124 @@
+/**
+ * The roster is the deployment's list of tenants. It arrives as JSON (the
+ * deployment repo's roster.jsonc with comments stripped, or a plain JSON
+ * string in a Worker var) and is validated loudly: a roster that fails
+ * validation names the agent and field that failed, because a silently
+ * skipped agent is an agent that never wakes again.
+ */
+
+export interface RosterAgent {
+  /** Stable slug, [a-z0-9-]; the agent's self-chosen name is cosmetic on top. */
+  id: string;
+  /** Private state repository, "owner/repo". */
+  stateRepo: string;
+  /** Cron expression; must also be registered as a trigger in the deployment. */
+  cadence: string;
+  /** Harness adapter id, e.g. "claude-code" or "codex". */
+  harness: string;
+  /** Pinned model for the mind. */
+  model: string;
+  /** Model to fall back to; a degraded wake beats a missed wake. */
+  fallbackModel?: string;
+  /** Zone hosts this agent may publish to: "@" for the apex, otherwise subdomain labels. */
+  hosts: string[];
+  enabled: boolean;
+}
+
+export interface Roster {
+  /** The colony zone, e.g. "example-colony.com". */
+  zone: string;
+  agents: RosterAgent[];
+}
+
+export class RosterError extends Error {
+  override name = "RosterError";
+}
+
+const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
+const STATE_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const HOST = /^(@|[a-z0-9]([a-z0-9-]*[a-z0-9])?)$/;
+const ZONE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+
+function fail(path: string, problem: string): never {
+  throw new RosterError(`roster: ${path} ${problem}`);
+}
+
+function requireString(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    fail(path, "must be a non-empty string");
+  }
+  return value;
+}
+
+function parseAgent(value: unknown, index: number): RosterAgent {
+  const path = `agents[${index}]`;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail(path, "must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+
+  const id = requireString(raw.id, `${path}.id`);
+  if (!AGENT_ID.test(id)) fail(`${path}.id`, `"${id}" is not a valid slug`);
+
+  const stateRepo = requireString(raw.stateRepo, `${path}.stateRepo`);
+  if (!STATE_REPO.test(stateRepo)) {
+    fail(`${path}.stateRepo`, `"${stateRepo}" is not "owner/repo"`);
+  }
+
+  const cadence = requireString(raw.cadence, `${path}.cadence`);
+  const harness = requireString(raw.harness, `${path}.harness`);
+  const model = requireString(raw.model, `${path}.model`);
+
+  let fallbackModel: string | undefined;
+  if (raw.fallbackModel !== undefined) {
+    fallbackModel = requireString(raw.fallbackModel, `${path}.fallbackModel`);
+  }
+
+  if (!Array.isArray(raw.hosts) || raw.hosts.length === 0) {
+    fail(`${path}.hosts`, "must be a non-empty array");
+  }
+  const hosts = raw.hosts.map((host, hostIndex) => {
+    const value = requireString(host, `${path}.hosts[${hostIndex}]`);
+    if (!HOST.test(value)) {
+      fail(`${path}.hosts[${hostIndex}]`, `"${value}" is not "@" or a subdomain label`);
+    }
+    return value;
+  });
+
+  if (typeof raw.enabled !== "boolean") {
+    fail(`${path}.enabled`, "must be a boolean");
+  }
+
+  return { id, stateRepo, cadence, harness, model, fallbackModel, hosts, enabled: raw.enabled };
+}
+
+export function parseRoster(json: string): Roster {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch (error) {
+    throw new RosterError(`roster: not valid JSON (${(error as Error).message})`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail("root", "must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+
+  const zone = requireString(raw.zone, "zone");
+  if (!ZONE.test(zone)) fail("zone", `"${zone}" is not a registrable domain`);
+
+  if (!Array.isArray(raw.agents)) fail("agents", "must be an array");
+  const agents = raw.agents.map(parseAgent);
+
+  const seen = new Set<string>();
+  for (const agent of agents) {
+    if (seen.has(agent.id)) fail(`agents`, `duplicate agent id "${agent.id}"`);
+    seen.add(agent.id);
+  }
+
+  return { zone, agents };
+}
+
+export function findAgent(roster: Roster, agentId: string): RosterAgent | undefined {
+  return roster.agents.find(agent => agent.id === agentId);
+}

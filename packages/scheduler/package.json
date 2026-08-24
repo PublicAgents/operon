@@ -1,0 +1,42 @@
+{
+  "name": "@operon/scheduler",
+  "version": "0.0.0",
+  "description": "The chassis scheduler: Cron Triggers wake due agents, a per-agent WakeContainer Durable Object serializes wakes and supervises the container lifecycle, and an authenticated HTTP surface triggers manual wakes and reads the wake ledger",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": ["^build"],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "operon-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Deployments register every distinct cadence in the roster here; the
+  // scheduled handler matches agents by the exact cron string that fired.
+  "triggers": {
+    "crons": ["0 6,12,18 * * *"]
+  },
+  "containers": [
+    {
+      "class_name": "WakeContainer",
+      "image": "../container/Dockerfile",
+      "max_instances": 4,
+      // The manual's hard-won sizing: agent tooling is memory-hungry and
+      // 1 GB produces silent OOM kills that look like flakiness.
+      "instance_type": {
+        "vcpu": 1,
+        "memory_mib": 2048,
+        "disk_mb": 4000
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WAKE_CONTAINER",
+        "class_name": "WakeContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WakeContainer"]
+    }
+  ],
+  "vars": {
+    // Deployments override with their real roster JSON.
+    "ROSTER": "{\"zone\":\"example-colony.com\",\"agents\":[]}"
+  }
+  // Secrets, set per deployment (wrangler secret put):
+  //   WAKE_TRIGGER_TOKEN        bearer for POST /wake/:agentId and GET /wakes/:agentId
+  //   MIND_CREDENTIAL_CLAUDE_CODE  subscription OAuth token for claude-code minds
+  //   GITHUB_TOKEN_SERVICE_TOKEN   bearer presented to the github Gatekeeper
+  //   NOTIFY_TOKEN              bearer the container uses against the telegram Gatekeeper
+  // Vars, set per deployment:
+  //   NOTIFY_URL                telegram Gatekeeper /notify endpoint
+  //   SECRET_DENYLIST           comma-separated literals for the presleep sweep
+  //   HARNESS_EXTRA_ARGS        JSON array of extra harness CLI args; operator-owned
+  //                             session policy (e.g. permission settings)
+  // Service bindings, set per deployment:
+  //   GITHUB_GATEKEEPER         the github Gatekeeper Worker (mints state-repo tokens)
+}

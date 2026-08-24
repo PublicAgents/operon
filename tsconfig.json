@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compileOnSave": false,
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/scheduler"
+    },
+    {
+      "path": "./packages/gatekeepers/telegram"
+    },
+    {
+      "path": "./packages/gatekeepers/github"
+    },
+    {
+      "path": "./packages/container"
+    },
+    {
+      "path": "./packages/worker-kit"
+    }
+  ]
+}

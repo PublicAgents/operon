@@ -1,0 +1,158 @@
+import { dueAgents, findAgent, parseRoster, type RosterAgent } from "@operon/core";
+import { errorResponse, json, requireBearer } from "@operon/worker-kit";
+import {
+  LaunchPreconditionError,
+  prepareLaunch,
+  type LaunchContext
+} from "./launch.js";
+import { WakeContainer } from "./wake-container.js";
+
+export { WakeContainer };
+export { mindCredentialVar, prepareLaunch, LaunchPreconditionError } from "./launch.js";
+
+/** A running wake older than this is reported stale (chassis spec 5.1). */
+const STALE_AFTER_MS = 45 * 60 * 1000;
+
+interface Env {
+  ROSTER: string;
+  WAKE_TRIGGER_TOKEN?: string;
+  NOTIFY_URL?: string;
+  NOTIFY_TOKEN?: string;
+  SECRET_DENYLIST?: string;
+  HARNESS_EXTRA_ARGS?: string;
+  WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
+  GITHUB_GATEKEEPER?: Fetcher;
+  [secretName: string]: unknown;
+}
+
+function launchContext(env: Env): LaunchContext {
+  return {
+    getSecret(name) {
+      const value = env[name];
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    },
+    async getGithubToken(agent: RosterAgent) {
+      if (!env.GITHUB_GATEKEEPER) {
+        throw new LaunchPreconditionError(
+          "github_gatekeeper_unbound",
+          "no GITHUB_GATEKEEPER service binding; a wake cannot reach its state repo"
+        );
+      }
+      const serviceToken = env.GITHUB_TOKEN_SERVICE_TOKEN;
+      if (typeof serviceToken !== "string" || serviceToken.length === 0) {
+        throw new LaunchPreconditionError(
+          "github_service_token_missing",
+          "secret GITHUB_TOKEN_SERVICE_TOKEN is not configured"
+        );
+      }
+      const response = await env.GITHUB_GATEKEEPER.fetch(
+        "https://github-gatekeeper.internal/token",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${serviceToken}`
+          },
+          body: JSON.stringify({ agentId: agent.id })
+        }
+      );
+      if (!response.ok) {
+        throw new LaunchPreconditionError(
+          "github_token_mint_failed",
+          `gatekeeper answered ${response.status}: ${await response.text()}`
+        );
+      }
+      const { token } = (await response.json()) as { token: string };
+      return token;
+    },
+    options: {
+      notifyUrl: env.NOTIFY_URL,
+      notifyToken: env.NOTIFY_TOKEN,
+      secretDenylist: env.SECRET_DENYLIST,
+      harnessExtraArgs: env.HARNESS_EXTRA_ARGS
+    }
+  };
+}
+
+async function wake(
+  env: Env,
+  agent: RosterAgent,
+  trigger: "cron" | "manual"
+): Promise<{ status: string; wakeId?: string; detail?: string }> {
+  const wakeId = crypto.randomUUID();
+  const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
+  try {
+    const prepared = await prepareLaunch(agent, trigger, wakeId, launchContext(env));
+    const result = await stub.launch({ ...prepared, staleAfterMs: STALE_AFTER_MS });
+    if (result.status === "locked") {
+      const detail = result.stale
+        ? `wake ${result.wakeId} running since ${result.startedAt} is past the stale threshold`
+        : `wake ${result.wakeId} still running`;
+      await notify(env, `[${agent.id}] wake skipped: ${detail}`);
+      return { status: "locked", wakeId: result.wakeId, detail };
+    }
+    if (result.status === "error") {
+      await notify(env, `[${agent.id}] wake ${wakeId} failed to start: ${result.error}`);
+      return { status: "error", wakeId, detail: result.error };
+    }
+    return { status: "started", wakeId };
+  } catch (error) {
+    const detail =
+      error instanceof LaunchPreconditionError ? error.message : String(error);
+    await stub.recordFailure({ wakeId, agentId: agent.id, trigger }, detail);
+    await notify(env, `[${agent.id}] wake ${wakeId} failed preconditions: ${detail}`);
+    return { status: "error", wakeId, detail };
+  }
+}
+
+/** Best-effort operator alert through the telegram Gatekeeper; never throws. */
+async function notify(env: Env, text: string): Promise<void> {
+  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
+  try {
+    await fetch(env.NOTIFY_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${env.NOTIFY_TOKEN}`
+      },
+      body: JSON.stringify({ text })
+    });
+  } catch (error) {
+    console.error("notify failed", error);
+  }
+}
+
+export default {
+  async scheduled(controller, env, ctx) {
+    const roster = parseRoster(env.ROSTER);
+    const due = dueAgents(roster, controller.cron);
+    console.log(`cron "${controller.cron}": ${due.length} agent(s) due`);
+    for (const agent of due) {
+      ctx.waitUntil(wake(env, agent, "cron"));
+    }
+  },
+
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const wakeMatch = /^\/wake\/([a-z0-9-]+)$/.exec(url.pathname);
+    if (wakeMatch && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const roster = parseRoster(env.ROSTER);
+      const agent = findAgent(roster, wakeMatch[1]);
+      if (!agent) return errorResponse(404, "unknown_agent", wakeMatch[1]);
+      if (!agent.enabled) return errorResponse(409, "agent_disabled", agent.id);
+      return json(await wake(env, agent, "manual"));
+    }
+
+    const wakesMatch = /^\/wakes\/([a-z0-9-]+)$/.exec(url.pathname);
+    if (wakesMatch && request.method === "GET") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(wakesMatch[1]));
+      return json(await stub.wakes());
+    }
+
+    return errorResponse(404, "not_found");
+  }
+} satisfies ExportedHandler<Env>;

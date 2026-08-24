@@ -1,0 +1,24 @@
+{
+  "name": "@operon/container",
+  "version": "0.0.0",
+  "description": "The wake container: a self-contained Node entrypoint that clones the agent's state repo, runs one headless mind session through a harness adapter, verifies its own output (presleep gate), pushes state, and notifies the operator",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "devDependencies": {
+    "@operon/core": "0.0.0"
+  }
+}

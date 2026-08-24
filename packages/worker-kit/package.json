@@ -1,0 +1,21 @@
+{
+  "name": "@operon/worker-kit",
+  "version": "0.0.0",
+  "description": "Shared Worker-side building blocks: the append-only Ledger Durable Object, bearer auth, and JSON response helpers used by the scheduler and every Gatekeeper",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"]
+}
