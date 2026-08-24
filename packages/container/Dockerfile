@@ -27,6 +27,10 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN useradd --create-home agent
 COPY --from=build /app/dist /opt/operon
 COPY gitleaks.toml /opt/operon/gitleaks.toml
+# The wake's door handle: a thin client for the entrypoint's loopback
+# porch; it holds no credentials (see porch.ts).
+RUN printf '#!/bin/sh\nexec node /opt/operon/cli.js "$@"\n' > /usr/local/bin/operon \
+  && chmod +x /usr/local/bin/operon
 USER agent
 WORKDIR /home/agent
 ENTRYPOINT ["node", "/opt/operon/entrypoint.js"]

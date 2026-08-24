@@ -6,6 +6,7 @@ import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect } from "./staging.js";
+import { Porch } from "./porch.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -36,6 +37,7 @@ function wakePrompt(budgetMinutes: number): string {
   return (
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
+    "Your doors to the world are the operon CLI: run operon --help to see which are live this wake. " +
     "Act as you see fit, and when your journal entry is written, stop."
   );
 }
@@ -139,11 +141,28 @@ async function verifyModel(
   }
 }
 
+/**
+ * Every secret the container itself holds, auto-added to the sweep: the
+ * operator's list covers what the operator knows about, this covers what
+ * the wake was given. Neither should ever appear in state or a publish.
+ */
+function autoDenylist(config: WakeConfig): string[] {
+  return [
+    ...config.secretDenylist,
+    config.mindCredential,
+    config.githubToken,
+    ...(config.notifyToken ? [config.notifyToken] : []),
+    ...(config.publishToken ? [config.publishToken] : []),
+    ...(config.prToken ? [config.prToken] : [])
+  ];
+}
+
 async function runSession(
   adapter: HarnessAdapter,
   config: WakeConfig,
   model: string,
-  degraded: boolean
+  degraded: boolean,
+  porchUrl: string
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
@@ -157,10 +176,12 @@ async function runSession(
   // The timeout enforces the budget the prompt promised: past it the
   // session receives SIGTERM while the entrypoint still has the wrap-up
   // margin to verify, push, and notify, so the wake's work survives even
-  // when the mind ran long.
+  // when the mind ran long. OPERON_PORCH is a loopback address, not a
+  // credential: the session's env still contains only its own mind
+  // credential; every other token stays behind the porch.
   return runStreaming(spec.command, [...spec.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...spec.env },
+    env: { ...sessionBaseEnv(), ...spec.env, OPERON_PORCH: porchUrl },
     timeoutMs: budgetMinutes * 60_000
   });
 }
@@ -206,21 +227,29 @@ async function main(): Promise<number> {
     ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
     : verified.answer;
 
+  // The porch opens before the session and closes after it: the wake's
+  // doors exist exactly while a mind is awake to use them.
+  const porch = new Porch({
+    config,
+    stateDir: STATE_DIR,
+    reposDir: join(WORKDIR, "repos"),
+    denylist: autoDenylist(config),
+    log
+  });
+  const porchUrl = await porch.start();
+  log(`${label}: porch open at ${porchUrl}`);
+
   log(`${label}: session starting (model ${verified.model})`);
-  const sessionExit = await runSession(adapter, config, verified.model, verified.degraded);
+  let sessionExit: number;
+  try {
+    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl);
+  } finally {
+    await porch.close();
+  }
   log(`${label}: session exited ${sessionExit}`);
 
   const staged = await stageAndCollect(STATE_DIR, sessionBaseEnv());
-  // The container auto-denylists every secret it itself holds: the
-  // operator's list covers what the operator knows about, this covers what
-  // the wake was given. Neither should ever appear in state.
-  const denylist = [
-    ...config.secretDenylist,
-    config.mindCredential,
-    config.githubToken,
-    ...(config.notifyToken ? [config.notifyToken] : [])
-  ];
-  const verification = verifyPresleep(staged, denylist);
+  const verification = verifyPresleep(staged, autoDenylist(config));
 
   // Generic layer: gitleaks catches secrets nobody listed. A scanner error
   // fails closed as unscannable: an unscanned push must not happen.

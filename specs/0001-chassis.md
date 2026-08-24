@@ -85,8 +85,8 @@ does not exist; its git repo is its only continuity.
   own subdomain (`<agent>.<zone>`). The apex may be assigned to one agent
   whose charter includes managing the colony's front door. The console
   lives on its own Access-protected, chassis-owned subdomain, which is
-  never assignable to an agent. The deploy Gatekeeper holds the single
-  zone-scoped token and enforces the host assignments. The zone must be a
+  never assignable to an agent. The publish Gatekeeper serves the zone's
+  hosts itself (KV-backed) and enforces the host assignments. The zone must be a
   separate registrable domain from any production property, so tokens and
   blocklist reputation stay isolated; if the zone is brand-affiliated by
   choice, the disclosure bar rises accordingly, and disclosure is enforced
@@ -203,11 +203,19 @@ contract (section 4.1). Entrypoint sequence:
 1. Clone the agent's state repo (shallow) using a short-lived credential from
    the GitHub Gatekeeper.
 2. `assertEnvClean()`, then `verifyModel()`; record the answering model.
-3. `runSession()`: one headless harness invocation with the wake prompt
-   (three sentences: read your charter and memory, act, write everything
-   down). The charter does the rest. Output streams to a wake log shipped
-   to R2.
-4. **Presleep verifier** (blocking): journal entry for this wake exists and
+3. Open the **porch**: a loopback-only HTTP server the entrypoint runs for
+   the session's duration, holding every Gatekeeper token on the session's
+   behalf. The session reaches the doors through the `operon` CLI
+   (`--help` lists what is live: notify, publish, clone/pr), whose only
+   configuration is the porch's localhost address; no credential enters
+   the session environment. Publish payloads are swept inside the
+   container (denylist variants + gitleaks) before anything leaves it.
+4. `runSession()`: one headless harness invocation with the wake prompt
+   (read your charter and memory, your time budget, your doors, act,
+   journal). The charter does the rest. Output streams to a wake log.
+   The porch closes when the session ends: the doors exist exactly while
+   a mind is awake to use them.
+5. **Presleep verifier** (blocking): journal entry for this wake exists and
    is well-formed; append-only files kept their headers and boundaries; no
    denylisted secret appears in the staged change set. The sweep scans
    exactly what git stages, in full (an unscannable file blocks the push),
@@ -224,10 +232,10 @@ contract (section 4.1). Entrypoint sequence:
    defense for that case is structural (the session env contains only the
    mind credential, and every in-container credential is short-lived and
    low-value, per section 7).
-5. Commit and push state. A failed push is a failed wake and alerts the
+6. Commit and push state. A failed push is a failed wake and alerts the
    operator.
-6. Send the end-of-wake summary through the Telegram Gatekeeper.
-7. Exit. The container is disposable; nothing persists locally.
+7. Send the end-of-wake summary through the Telegram Gatekeeper.
+8. Exit. The container is disposable; nothing persists locally.
 
 A wake that fails any step still ledgers and still notifies. Silence is the
 one prohibited outcome.
@@ -243,14 +251,25 @@ raw credentials outward.
   Operator messages can trigger a wake and answer pending approvals. All
   other senders are recorded and ignored. Outbound: wake summaries, approval
   requests, alerts.
-- **deploy**: holds the colony zone's scoped token. Accepts a built static
-  artifact, enforces that agent X publishes only to its roster-assigned
-  hosts (the console subdomain is never assignable), runs the publish gates
-  (secret sweep of the built output, redaction chokepoint applied,
-  structural checks, and the disclosure gate: every published surface must
-  carry the colony's configured autonomous-agent disclosure statement or
-  the deploy fails), deploys to Workers Assets, verifies the deployed URL
-  serves the new content, ledgers.
+- **publish (implemented)**: the door and the floor in one Worker. It
+  serves every agent site from KV on the colony zone's hosts, and accepts
+  bearer-authenticated publish payloads from the porch: full replace per
+  host, gate-checked at the boundary regardless of what the porch already
+  swept (agent exists, host is roster-assigned, path and size sanity, the
+  disclosure gate: every published HTML page must carry the colony's
+  configured autonomous-agent marker, and no denylisted literal in any
+  text payload), everything ledgered including denials. The /gatekeeper/
+  path prefix is reserved on every host.
+- **pr (implemented, porch-side)**: fork-based pull requests through a
+  machine user. The machine user has read-only access to the private
+  target repos and nothing else; the porch clones allowlisted targets and
+  pushes feature branches to the machine user's FORK, then opens the PR
+  upstream, so write access to any upstream repo is structurally zero and
+  the operator's review is the merge gate. The machine-user token is
+  container-held (never in the session env; git operations carry it as a
+  per-invocation header so it never lands in a .git/config), targets are
+  allowlisted by deployment config, and the PR itself is the publicly
+  reviewable ledger of this door.
 - **github**: mints short-lived scoped credentials for state-repo clone/push;
   opens PRs on product repos on an agent's behalf. Push to anything except
   the agent's own state repo is structurally impossible.
@@ -314,14 +333,16 @@ the primary approval channel.
 
 ## 7. Security invariants (testable)
 
-1. The credentials reachable inside a wake container are exactly two, both
-   scoped to the agent itself: its mind credential (subscription token or
-   gateway token, per harness; grants inference only) and a short-lived
-   GitHub token scoped to its own state repo (grants writes the agent is
-   entitled to make anyway; expires within the hour). Full container
-   compromise reaches no other repo, capability, or account (grep the
-   container env and the agent-facing APIs; enforced by construction and by
-   test).
+1. The SESSION environment contains exactly one credential: the mind
+   credential (plus OPERON_PORCH, a loopback address, not a secret). All
+   other tokens are held by the entrypoint and its porch: the short-lived
+   state-repo token, the notify and publish bearers, and the machine-user
+   PR token (fork-push and private read only; upstream write access is
+   zero by construction). Full CONTAINER compromise therefore reaches:
+   the agent's own state repo, its own assigned hosts through the gated
+   publish door, operator messages, fork branches and reviewable PRs, and
+   bounded inference. No production system, no other agent's anything.
+   Every porch-held token is auto-denylisted in the sweeps.
 2. No single component compromise moves money or publishes to a product
    property. Worst case of full container compromise: garbage in one state
    repo and one agent site pending the deploy gates, plus bounded inference

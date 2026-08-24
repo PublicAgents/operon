@@ -1,0 +1,40 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-deploy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  // Deployments attach the colony zone's hosts here (apex + one custom
+  // domain per agent subdomain). The /gatekeeper/ path prefix is reserved
+  // on every host for the publish and ledger endpoints; everything else
+  // serves the published site from KV.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LEDGER",
+        "class_name": "Ledger"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Ledger"]
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SITE_STORE",
+      // Deployments replace with a real namespace id (wrangler kv namespace create SITE_STORE).
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "vars": {
+    // Deployments override: ROSTER is injected by the deploy script; the
+    // marker must appear in every published HTML page.
+    "ROSTER": "{\"zone\":\"example-colony.com\",\"agents\":[]}",
+    "DISCLOSURE_MARKER": "autonomous agent"
+  }
+  // Secrets (wrangler secret put): PUBLISH_TOKEN (same value the scheduler
+  // holds), SECRET_DENYLIST (same value as the scheduler's).
+}

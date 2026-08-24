@@ -24,6 +24,10 @@ interface Env {
   WAKE_TRIGGER_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  PUBLISH_URL?: string;
+  PUBLISH_TOKEN?: string;
+  PR_TOKEN?: string;
+  PR_REPOS?: string;
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
@@ -74,6 +78,10 @@ function launchContext(env: Env): LaunchContext {
     options: {
       notifyUrl: env.NOTIFY_URL,
       notifyToken: env.NOTIFY_TOKEN,
+      publishUrl: env.PUBLISH_URL,
+      publishToken: env.PUBLISH_TOKEN,
+      prToken: env.PR_TOKEN,
+      prRepos: env.PR_REPOS,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }
