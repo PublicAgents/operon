@@ -21,8 +21,42 @@ export interface ChannelEntry {
 
 /** How many transcript entries a wake receives regardless of cursor. */
 export const CONTEXT_WINDOW = 30;
-/** How many entries the channel retains before pruning the oldest. */
+/** How many entries the channel retains before pruning acked ones. */
 export const RETENTION = 400;
+/**
+ * Absolute bound on channel size. Below it, only entries every known agent
+ * has acked are pruned, so a long-idle agent cannot silently lose unread
+ * operator instructions; at the bound, oldest entries go regardless (the
+ * DO must stay bounded) and the drop is logged loudly, never silent.
+ */
+export const HARD_RETENTION = 2000;
+
+/**
+ * Which entries may be deleted. Normal pruning removes oldest entries
+ * beyond RETENTION only when acked by every known cursor (no cursors yet
+ * means nothing was ever delivered, so nothing is safely prunable). If the
+ * log still exceeds HARD_RETENTION, the overflow is dropped oldest-first
+ * regardless; the caller logs that unacked entries were lost.
+ */
+export function prunableIds(
+  entries: ChannelEntry[],
+  cursors: number[]
+): { ids: number[]; droppedUnacked: number } {
+  if (entries.length <= RETENTION) return { ids: [], droppedUnacked: 0 };
+  const sorted = [...entries].sort((a, b) => a.id - b.id);
+  const excess = sorted.slice(0, entries.length - RETENTION);
+  const minAcked = cursors.length > 0 ? Math.min(...cursors) : 0;
+  const acked = excess.filter(entry => entry.id <= minAcked).map(entry => entry.id);
+
+  const remaining = entries.length - acked.length;
+  if (remaining <= HARD_RETENTION) return { ids: acked, droppedUnacked: 0 };
+  const ackedSet = new Set(acked);
+  const forced = sorted
+    .filter(entry => !ackedSet.has(entry.id))
+    .slice(0, remaining - HARD_RETENTION)
+    .map(entry => entry.id);
+  return { ids: [...acked, ...forced], droppedUnacked: forced.length };
+}
 
 /** Is this entry part of the given agent's conversation? */
 export function concernsAgent(entry: ChannelEntry, agentId: string): boolean {

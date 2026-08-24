@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { concernsAgent, transcriptFor, CONTEXT_WINDOW, type ChannelEntry } from "./channel.js";
+import { concernsAgent, prunableIds, transcriptFor, CONTEXT_WINDOW, HARD_RETENTION, RETENTION, type ChannelEntry } from "./channel.js";
 
 function entry(partial: Partial<ChannelEntry> & { id: number }): ChannelEntry {
   return {
@@ -69,5 +69,41 @@ describe("transcriptFor", () => {
     expect(t.entries).toEqual([]);
     expect(t.newOperatorIds).toEqual([]);
     expect(t.upTo).toBe(5);
+  });
+});
+
+describe("prunableIds", () => {
+  function makeEntries(count: number): ChannelEntry[] {
+    return Array.from({ length: count }, (_, i) => entry({ id: i + 1 }));
+  }
+
+  it("prunes nothing below retention", () => {
+    expect(prunableIds(makeEntries(RETENTION), [RETENTION])).toEqual({
+      ids: [],
+      droppedUnacked: 0
+    });
+  });
+
+  it("prunes only entries acked by every known cursor", () => {
+    const entries = makeEntries(RETENTION + 20);
+    // Slowest agent has acked through 10: only 1..10 are safely prunable
+    // even though 20 entries are beyond retention.
+    const result = prunableIds(entries, [10, 300]);
+    expect(result.ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(result.droppedUnacked).toBe(0);
+  });
+
+  it("prunes nothing while no agent has ever acked", () => {
+    expect(prunableIds(makeEntries(RETENTION + 50), [])).toEqual({
+      ids: [],
+      droppedUnacked: 0
+    });
+  });
+
+  it("drops unacked overflow only at the hard bound, and reports it", () => {
+    const entries = makeEntries(HARD_RETENTION + 5);
+    const result = prunableIds(entries, []);
+    expect(result.droppedUnacked).toBe(5);
+    expect(result.ids).toEqual([1, 2, 3, 4, 5]);
   });
 });

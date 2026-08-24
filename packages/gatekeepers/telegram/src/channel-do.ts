@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  RETENTION,
+  prunableIds,
   transcriptFor,
   type AgentTranscript,
   type ChannelEntry
@@ -17,12 +17,21 @@ export class Channel extends DurableObject {
     const stored: ChannelEntry = { id: nextId, ...entry };
     await this.ctx.storage.put(`e:${String(nextId).padStart(10, "0")}`, stored);
     await this.ctx.storage.put("nextId", nextId + 1);
-    // Prune beyond retention; the channel is a recent-context window, not
-    // an archive (the ledger and the agents' own journals are the archive).
-    const entries = await this.ctx.storage.list({ prefix: "e:" });
-    if (entries.size > RETENTION) {
-      const keys = [...entries.keys()].slice(0, entries.size - RETENTION);
-      await this.ctx.storage.delete(keys);
+    // Prune cursor-aware: only entries every known agent has acked are
+    // dropped at the normal retention (a long-idle agent must not lose
+    // unread instructions), with a hard bound as the logged backstop. The
+    // channel is a recent-context window, not an archive (the ledger and
+    // the agents' own journals are the archive).
+    const entries = [...(await this.ctx.storage.list<ChannelEntry>({ prefix: "e:" })).values()];
+    const cursors = [...(await this.ctx.storage.list<number>({ prefix: "cursor:" })).values()];
+    const { ids, droppedUnacked } = prunableIds(entries, cursors);
+    if (ids.length > 0) {
+      if (droppedUnacked > 0) {
+        console.error(
+          `channel hard retention: dropping ${droppedUnacked} entries never delivered to some agent`
+        );
+      }
+      await this.ctx.storage.delete(ids.map(id => `e:${String(id).padStart(10, "0")}`));
     }
     return stored;
   }
