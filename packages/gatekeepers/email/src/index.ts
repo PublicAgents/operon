@@ -196,8 +196,19 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
     now,
     reservation.action === "send" ? reservation.count : 0
   );
-  if (response.ok) await box.deleteHeld(heldId);
-  else await box.unclaimHeld(heldId);
+  if (response.ok) {
+    // Delivered. Cleanup is best-effort: a failed delete leaves a claimed
+    // orphan, which the claim keeps from ever resending, so it must not turn
+    // a successful delivery into an error. Unclaim only on delivery failure,
+    // so the message can be retried.
+    try {
+      await box.deleteHeld(heldId);
+    } catch (error) {
+      console.error(`held cleanup failed after delivery (claimed, will not resend): ${String(error)}`);
+    }
+  } else {
+    await box.unclaimHeld(heldId).catch(() => undefined);
+  }
   return response;
 }
 
