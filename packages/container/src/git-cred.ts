@@ -80,6 +80,76 @@ export function githubRepoUrl(repo: string): string {
   return `${GITHUB_ORIGIN}/${repo}.git`;
 }
 
+export interface CleanPushOptions {
+  /** The mind-owned working repo whose committed HEAD we want to publish. */
+  sourceDir: string;
+  /** A scratch directory that only root ever owns; overwritten each call. */
+  mirrorDir: string;
+  /** "owner/repo" of the github push target. */
+  repo: string;
+  /** Remote branch to push HEAD to. */
+  branch: string;
+  token: string;
+  /**
+   * Runs a git command; injected so this module needs no direct dependency
+   * on the exec layer. Must reject on nonzero exit.
+   */
+  run(args: string[], env: Record<string, string>): Promise<unknown>;
+  rm(dir: string): Promise<void>;
+}
+
+/**
+ * Push a mind-authored commit to github WITHOUT ever running git with the
+ * token in a repo whose config the mind controls. The token lives in the
+ * git process environment, and every credential helper git spawns inherits
+ * that environment, so a mind that adds `url.<evil>.insteadOf` plus a
+ * `credential.<evil>.helper` to its `.git/config` would get that helper run
+ * as root with the token present. Host-scoping our own helper does not
+ * help, because the mind's helper still inherits the env.
+ *
+ * The defense: never push from the mind-owned repo. Clone it LOCALLY into a
+ * root-owned mirror first (a local clone needs no token and generates a
+ * fresh, clean config: no insteadOf, no helpers, no sshCommand), then push
+ * from the mirror, where the only configuration in effect is the hardened
+ * flags and our own scoped helper.
+ */
+export async function cleanPushToGithub(options: CleanPushOptions): Promise<void> {
+  const { sourceDir, mirrorDir, repo, branch, token, run, rm } = options;
+  await rm(mirrorDir);
+  // Local clone: file protocol allowed for THIS step only, no token in env,
+  // hooks still disabled. The mirror's config is git-generated and clean.
+  await run(
+    [
+      "-c",
+      "protocol.file.allow=always",
+      "-c",
+      `core.hooksPath=${ensureEmptyHooksDir()}`,
+      "clone",
+      "--local",
+      "--no-hardlinks",
+      sourceDir,
+      mirrorDir
+    ],
+    { PATH: process.env.PATH ?? "" }
+  );
+  try {
+    await run(
+      [
+        ...hardenedGitFlags(),
+        "-C",
+        mirrorDir,
+        "push",
+        "--no-verify",
+        githubRepoUrl(repo),
+        `HEAD:${branch}`
+      ],
+      gitCredentialEnv({ PATH: process.env.PATH ?? "" }, token)
+    );
+  } finally {
+    await rm(mirrorDir);
+  }
+}
+
 /** Environment for a credentialed git child. */
 export function gitCredentialEnv(
   base: Record<string, string>,

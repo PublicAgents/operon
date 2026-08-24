@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { runCapture } from "./exec.js";
-import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
+import { cleanPushToGithub, gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 import { runGitleaks } from "./gitleaks.js";
 import { scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
@@ -354,26 +354,19 @@ export class Porch {
     }
     if (!forkReady) return fail(502, "fork_unavailable", `${user}/${name} did not appear`);
 
-    // --no-verify plus the hardened flags: nothing the session wrote into
-    // the clone (hooks, fsmonitor, helpers) executes during this push, and
-    // the token exists only in this child's environment.
-    await runCapture(
-      "git",
-      [
-        ...hardenedGitFlags(),
-        "-C",
-        dir,
-        "push",
-        "--no-verify",
-        "--force-with-lease",
-        githubRepoUrl(`${user}/${name}`),
-        `HEAD:${branch}`
-      ],
-      {
-        env: gitCredentialEnv({ PATH: process.env.PATH ?? "" }, this.context.config.prToken ?? ""),
-        timeoutMs: 5 * 60 * 1000
-      }
-    );
+    // Push from a clean root-owned mirror, never from the mind-writable
+    // clone: a mind that added url.insteadOf + a scoped credential helper
+    // to the clone's config would otherwise get that helper run as root
+    // with the token in its environment (see cleanPushToGithub).
+    await cleanPushToGithub({
+      sourceDir: dir,
+      mirrorDir: `${dir}.mirror`,
+      repo: `${user}/${name}`,
+      branch,
+      token: this.context.config.prToken ?? "",
+      run: (args, env) => runCapture("git", args, { env, timeoutMs: 5 * 60 * 1000 }),
+      rm: target => rm(target, { recursive: true, force: true })
+    });
 
     const upstream = await this.github(`/repos/${repo}`);
     const { default_branch } = (await upstream.json()) as { default_branch: string };

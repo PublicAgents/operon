@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
@@ -7,7 +7,12 @@ import { runGitleaks } from "./gitleaks.js";
 import { verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect } from "./staging.js";
 import { Porch } from "./porch.js";
-import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
+import {
+  cleanPushToGithub,
+  gitCredentialEnv,
+  githubRepoUrl,
+  hardenedGitFlags
+} from "./git-cred.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -20,6 +25,8 @@ import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
 const REPOS_DIR = join(WORKDIR, "repos");
+// Root-owned scratch for clean push mirrors; the mind never touches it.
+const MIRROR_DIR = "/tmp/operon-push-mirror";
 
 /**
  * The privilege split: the entrypoint (and its porch) run as root and hold
@@ -109,16 +116,6 @@ async function git(args: string[], env?: Record<string, string>): Promise<string
   const { stdout } = await runCapture("git", [...hardenedGitFlags(), ...args], {
     cwd: STATE_DIR,
     env: { ...gitBaseEnv(), ...env }
-  });
-  return stdout;
-}
-
-/** A credentialed git run: token in the child env only, never argv or disk. */
-async function gitWithToken(args: string[], token: string): Promise<string> {
-  const { stdout } = await runCapture("git", [...hardenedGitFlags(), ...args], {
-    cwd: STATE_DIR,
-    env: gitCredentialEnv(sessionBaseEnv(), token),
-    timeoutMs: 5 * 60 * 1000
   });
   return stdout;
 }
@@ -264,10 +261,15 @@ async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<vo
   // mind can rewrite origin's URL/transport in .git/config, and this
   // process runs as root.
   const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
-  await gitWithToken(
-    ["push", "--no-verify", githubRepoUrl(config.stateRepo), `HEAD:${branch}`],
-    config.githubToken
-  );
+  await cleanPushToGithub({
+    sourceDir: STATE_DIR,
+    mirrorDir: MIRROR_DIR,
+    repo: config.stateRepo,
+    branch,
+    token: config.githubToken,
+    run: (args, env) => runCapture("git", args, { env, timeoutMs: 5 * 60 * 1000 }),
+    rm: dir => rm(dir, { recursive: true, force: true })
+  });
   log("state pushed");
 }
 
