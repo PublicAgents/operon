@@ -56,6 +56,23 @@ describe("parseRoster", () => {
     expect(() => parseRoster(JSON.stringify(broken))).toThrowError(/hosts/);
   });
 
+  it("accepts and validates maxWakeMinutes", () => {
+    const withWall = structuredClone(valid) as {
+      agents: Array<Record<string, unknown>>;
+    };
+    withWall.agents[0].maxWakeMinutes = 90;
+    expect(parseRoster(JSON.stringify(withWall)).agents[0].maxWakeMinutes).toBe(90);
+
+    withWall.agents[0].maxWakeMinutes = 0;
+    expect(() => parseRoster(JSON.stringify(withWall))).toThrowError(
+      /maxWakeMinutes/
+    );
+    withWall.agents[0].maxWakeMinutes = "60";
+    expect(() => parseRoster(JSON.stringify(withWall))).toThrowError(
+      /maxWakeMinutes/
+    );
+  });
+
   it("rejects duplicate agent ids", () => {
     const broken = structuredClone(valid);
     broken.agents.push(structuredClone(broken.agents[0]));

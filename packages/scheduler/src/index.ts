@@ -6,11 +6,17 @@ import {
   type LaunchContext
 } from "./launch.js";
 import { WakeContainer } from "./wake-container.js";
+import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };
 export { mindCredentialVar, prepareLaunch, LaunchPreconditionError } from "./launch.js";
 
-/** A running wake older than this is reported stale (chassis spec 5.1). */
+/**
+ * A running wake older than this is REPORTED stale to the operator; nothing
+ * is touched. The hard wall that actually stops a wake is separate,
+ * generous, and per-agent (roster maxWakeMinutes, default 2h): stopping
+ * loses unpushed work, so awareness comes early and force comes late.
+ */
 const STALE_AFTER_MS = 45 * 60 * 1000;
 
 interface Env {
@@ -83,7 +89,13 @@ async function wake(
   const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
   try {
     const prepared = await prepareLaunch(agent, trigger, wakeId, launchContext(env));
-    const result = await stub.launch({ ...prepared, staleAfterMs: STALE_AFTER_MS });
+    const result = await stub.launch({
+      ...prepared,
+      staleAfterMs: STALE_AFTER_MS,
+      hardWallMs: agent.maxWakeMinutes
+        ? agent.maxWakeMinutes * 60_000
+        : DEFAULT_HARD_WALL_MS
+    });
     if (result.status === "locked") {
       const detail = result.stale
         ? `wake ${result.wakeId} running since ${result.startedAt} is past the stale threshold`
@@ -109,7 +121,7 @@ async function wake(
 async function notify(env: Env, text: string): Promise<void> {
   if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
   try {
-    await fetch(env.NOTIFY_URL, {
+    const response = await fetch(env.NOTIFY_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -117,6 +129,11 @@ async function notify(env: Env, text: string): Promise<void> {
       },
       body: JSON.stringify({ text })
     });
+    if (!response.ok) {
+      console.error(
+        `notify rejected: ${response.status} ${(await response.text()).slice(0, 200)}`
+      );
+    }
   } catch (error) {
     console.error("notify failed", error);
   }

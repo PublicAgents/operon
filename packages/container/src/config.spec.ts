@@ -48,6 +48,16 @@ describe("readWakeConfig", () => {
     expect(config.harnessExtraArgs).toEqual([]);
   });
 
+  it("defaults maxWakeMinutes to 120 and rejects malformed values", () => {
+    expect(readWakeConfig(complete).maxWakeMinutes).toBe(120);
+    expect(
+      readWakeConfig({ ...complete, OPERON_MAX_WAKE_MINUTES: "90" }).maxWakeMinutes
+    ).toBe(90);
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_MAX_WAKE_MINUTES: "soon" })
+    ).toThrowError(/OPERON_MAX_WAKE_MINUTES/);
+  });
+
   it("rejects malformed extra args loudly instead of splitting on spaces", () => {
     expect(() =>
       readWakeConfig({ ...complete, OPERON_HARNESS_EXTRA_ARGS: "--not-json" })

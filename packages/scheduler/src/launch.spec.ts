@@ -48,6 +48,7 @@ describe("prepareLaunch", () => {
     expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
     expect(prepared.env[WAKE_ENV.notifyUrl]).toBe("https://tg/notify");
     expect(prepared.env[WAKE_ENV.secretDenylist]).toBe("a,b");
+    expect(prepared.env[WAKE_ENV.maxWakeMinutes]).toBe("120");
   });
 
   it("fails closed with a named error when the mind credential is missing", async () => {

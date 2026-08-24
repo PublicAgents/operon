@@ -9,6 +9,7 @@ export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
 export {
   wakeEnv,
   WAKE_ENV,
+  DEFAULT_MAX_WAKE_MINUTES,
   type WakeInit,
   type WakeSecrets,
   type WakeOptions,

@@ -18,14 +18,40 @@ import { stageAndCollect } from "./staging.js";
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
 
-const WAKE_PROMPT =
-  "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
-  "Act as you see fit, then record what you did and decided by appending to JOURNAL.md before you finish. " +
-  "When your journal entry is written, stop.";
+/**
+ * Minutes reserved between the session's end and the wake's hard wall, for
+ * presleep verification, commit, push, and notify. The session budget is
+ * the wall minus this, so a wake that runs long is stopped while its work
+ * can still be verified and pushed, instead of dying at the wall with
+ * everything unpushed.
+ */
+const WRAP_UP_MARGIN_MINUTES = 10;
+const MIN_SESSION_MINUTES = 5;
+
+function sessionBudgetMinutes(maxWakeMinutes: number): number {
+  return Math.max(MIN_SESSION_MINUTES, maxWakeMinutes - WRAP_UP_MARGIN_MINUTES);
+}
+
+function wakePrompt(budgetMinutes: number): string {
+  return (
+    "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
+    `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
+    "Act as you see fit, and when your journal entry is written, stop."
+  );
+}
 
 function log(message: string): void {
   console.log(`[operon] ${new Date().toISOString()} ${message}`);
 }
+
+// As PID 1, node ignores SIGTERM by kernel default while children in the
+// process group still receive it: a platform stop would kill the session
+// silently under us. Logging the signal makes a platform-initiated stop
+// distinguishable from a harness crash in the wake log; the session's
+// nonzero exit then flows through the normal failure path and notify.
+process.on("SIGTERM", () => {
+  log("SIGTERM received: the platform is stopping this container");
+});
 
 /** Minimal child env: the mind session sees its credential and nothing else of ours. */
 function sessionBaseEnv(): Record<string, string> {
@@ -71,15 +97,21 @@ async function verifyModel(adapter: HarnessAdapter, config: WakeConfig): Promise
 }
 
 async function runSession(adapter: HarnessAdapter, config: WakeConfig): Promise<number> {
+  const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
-    WAKE_PROMPT,
+    wakePrompt(budgetMinutes),
     config.model,
     config.mindCredential,
     config.fallbackModel
   );
+  // The timeout enforces the budget the prompt promised: past it the
+  // session receives SIGTERM while the entrypoint still has the wrap-up
+  // margin to verify, push, and notify, so the wake's work survives even
+  // when the mind ran long.
   return runStreaming(spec.command, [...spec.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...spec.env }
+    env: { ...sessionBaseEnv(), ...spec.env },
+    timeoutMs: budgetMinutes * 60_000
   });
 }
 
