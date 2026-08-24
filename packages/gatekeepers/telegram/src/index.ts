@@ -42,6 +42,15 @@ function protectedAgents(env: Env): string[] | undefined {
   }
 }
 
+const OPERATOR_HELP =
+  "Commands:\n" +
+  "/wake <agent-id> — wake an agent now\n" +
+  "/tell <agent-id> <message> — message one agent (delivered on its next wake)\n" +
+  "/disable <agent-id> — KILL SWITCH: refuse all wakes (cron and manual) and kill a wake in flight\n" +
+  "/enable <agent-id> — lift the kill switch\n" +
+  "/help — this text\n" +
+  "A plain message goes to ALL agents on their next wakes.";
+
 async function sendToOperator(env: Env, text: string): Promise<boolean> {
   if (!env.TELEGRAM_BOT_TOKEN || !env.OPERATOR_CHAT_ID) return false;
   const response = await fetch(
@@ -136,12 +145,43 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       await sendToOperator(env, "queued for all agents; delivered on their next wakes");
       return json({ ok: true });
     }
+    case "toggle": {
+      if (!env.SCHEDULER || !env.WAKE_TRIGGER_TOKEN) {
+        await sendToOperator(env, `cannot ${action.disabled ? "disable" : "enable"} ${action.agentId}: scheduler not bound`);
+        return json({ ok: true });
+      }
+      const verb = action.disabled ? "disable" : "enable";
+      const response = await env.SCHEDULER.fetch(`https://scheduler.internal/${verb}/${action.agentId}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.WAKE_TRIGGER_TOKEN}` }
+      });
+      const resultText = await response.text();
+      await ledger(env).append("operator_toggle", {
+        agentId: action.agentId,
+        disabled: action.disabled,
+        status: response.status,
+        result: resultText.slice(0, 300)
+      });
+      if (!response.ok) {
+        await sendToOperator(env, `${verb} ${action.agentId} failed: ${resultText.slice(0, 200)}`);
+      } else if (action.disabled) {
+        const killed = resultText.includes("killedWakeId");
+        await sendToOperator(
+          env,
+          `${action.agentId} DISABLED: all wakes refused until /enable ${action.agentId}.` +
+            (killed ? " A running wake was killed." : "")
+        );
+      } else {
+        await sendToOperator(env, `${action.agentId} enabled: cron and /wake work again`);
+      }
+      return json({ ok: true });
+    }
+    case "help":
+      await sendToOperator(env, OPERATOR_HELP);
+      return json({ ok: true });
     case "unknown_command":
       await ledger(env).append("unknown_command", { text: action.text.slice(0, 200) });
-      await sendToOperator(
-        env,
-        "commands: /wake <agent-id>, /tell <agent-id> <message>. A plain message goes to all agents."
-      );
+      await sendToOperator(env, OPERATOR_HELP);
       return json({ ok: true });
   }
 }

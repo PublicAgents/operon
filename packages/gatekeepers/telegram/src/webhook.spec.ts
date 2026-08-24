@@ -61,6 +61,26 @@ describe("triageUpdate", () => {
     ).toBe("unknown_command");
   });
 
+  it("parses the kill switch and help", () => {
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/disable promoter" } }, OPERATOR)).toEqual({
+      kind: "toggle",
+      agentId: "promoter",
+      disabled: true
+    });
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/enable promoter" } }, OPERATOR)).toEqual({
+      kind: "toggle",
+      agentId: "promoter",
+      disabled: false
+    });
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/help" } }, OPERATOR)).toEqual({
+      kind: "help"
+    });
+    // Malformed targets are typos, not broadcasts and not toggles.
+    expect(
+      triageUpdate({ message: { chat: { id: 12345 }, text: "/disable ../etc" } }, OPERATOR).kind
+    ).toBe("unknown_command");
+  });
+
   it("noops on whitespace-only operator text", () => {
     expect(
       triageUpdate({ message: { chat: { id: 12345 }, text: "   " } }, OPERATOR).kind

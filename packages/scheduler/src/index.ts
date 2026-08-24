@@ -180,6 +180,19 @@ export default {
       return json(await wake(env, agent, "manual"));
     }
 
+    const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);
+    if (toggleMatch && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const roster = parseRoster(env.ROSTER);
+      const agent = findAgent(roster, toggleMatch[2]);
+      if (!agent) return errorResponse(404, "unknown_agent", toggleMatch[2]);
+      const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
+      const result = await stub.setDisabled(toggleMatch[1] === "disable");
+      console.log(`operator ${toggleMatch[1]}: ${agent.id}`, JSON.stringify(result));
+      return json({ agentId: agent.id, ...result });
+    }
+
     const wakesMatch = /^\/wakes\/([a-z0-9-]+)$/.exec(url.pathname);
     if (wakesMatch && request.method === "GET") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);

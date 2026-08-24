@@ -36,6 +36,7 @@ export interface LaunchArgs {
 export type LaunchResult =
   | { status: "started"; wakeId: string }
   | { status: "locked"; wakeId: string; startedAt: string; stale: boolean }
+  | { status: "disabled" }
   | { status: "error"; error: string };
 
 interface WakeEnv {
@@ -45,6 +46,13 @@ interface WakeEnv {
 
 const CURRENT = "current";
 const HARD_WALL = "hardWallMs";
+/**
+ * The operator kill switch. Set over Telegram (/disable) through the
+ * scheduler; while present, launch() refuses every wake (cron and manual
+ * alike) regardless of the roster, and setting it kills any wake already
+ * running. Cleared only by an explicit /enable.
+ */
+const OPERATOR_DISABLED = "operatorDisabled";
 
 function rowKey(record: WakeRecord): string {
   return `wake:${record.startedAt}:${record.wakeId}`;
@@ -62,6 +70,9 @@ export class WakeContainer extends DurableObject<WakeEnv> {
   private finishedWakeIds = new Set<string>();
 
   async launch(args: LaunchArgs): Promise<LaunchResult> {
+    if (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) {
+      return { status: "disabled" };
+    }
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (current) {
       if (!this.ctx.container?.running) {
@@ -143,6 +154,34 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       }
     }
     return { status: "started", wakeId: record.wakeId };
+  }
+
+  /**
+   * The operator kill switch. Disabling refuses all future wakes AND kills
+   * a wake in flight: the container is destroyed, and the monitor callback
+   * then finishes the record as failed. Work in that wake that was not yet
+   * persisted is lost, which is what a kill switch means.
+   */
+  async setDisabled(disabled: boolean): Promise<{ disabled: boolean; killedWakeId?: string }> {
+    if (!disabled) {
+      await this.ctx.storage.delete(OPERATOR_DISABLED);
+      return { disabled: false };
+    }
+    await this.ctx.storage.put(OPERATOR_DISABLED, true);
+    const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
+    if (current && this.ctx.container?.running) {
+      try {
+        this.ctx.container.destroy();
+      } catch (error) {
+        console.error("kill on disable failed", error);
+      }
+      return { disabled: true, killedWakeId: current.wakeId };
+    }
+    return { disabled: true };
+  }
+
+  async isDisabled(): Promise<boolean> {
+    return (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) === true;
   }
 
   override async alarm(): Promise<void> {

@@ -15,6 +15,8 @@ export type WebhookAction =
   | { kind: "ignored"; chatId: string; text: string }
   | { kind: "wake"; agentId: string }
   | { kind: "tell"; agentId: string; text: string }
+  | { kind: "toggle"; agentId: string; disabled: boolean }
+  | { kind: "help" }
   | { kind: "broadcast"; text: string }
   | { kind: "unknown_command"; text: string }
   | { kind: "noop" };
@@ -34,6 +36,13 @@ export function triageUpdate(update: TelegramUpdate, operatorChatId: string): We
 
   const tellCommand = /^\/tell\s+([a-z0-9-]+)\s+([\s\S]+)$/.exec(text);
   if (tellCommand) return { kind: "tell", agentId: tellCommand[1], text: tellCommand[2].trim() };
+
+  const toggleCommand = /^\/(disable|enable)\s+([a-z0-9-]+)\s*$/.exec(text);
+  if (toggleCommand) {
+    return { kind: "toggle", agentId: toggleCommand[2], disabled: toggleCommand[1] === "disable" };
+  }
+
+  if (/^\/help\s*$/.test(text)) return { kind: "help" };
 
   // Any other slash input is a command typo, not a message for the agents.
   if (text.startsWith("/")) return { kind: "unknown_command", text };
