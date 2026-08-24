@@ -174,9 +174,15 @@ becomes attractive; revisit then (decision 8.1).
 - Reads the roster, determines due agents per cadence, starts one wake
   container per due agent.
 - A per-agent Durable Object holds the wake lock: a manual wake (via
-  Telegram) and a scheduled wake must never run concurrently. Lock acquisition
-  is recorded; a lock held past a hard timeout (default 45 min) is surfaced
-  to the operator, not silently broken.
+  Telegram) and a scheduled wake must never run concurrently.
+- While a wake runs, the Durable Object re-arms an alarm heartbeat. This is
+  load-bearing: a wake receives no requests for minutes, an idle DO is
+  evicted, and an evicted DO's container is stopped mid-session (observed
+  as the harness dying with SIGTERM). The heartbeat also enforces the hard
+  wall: a wake past 45 minutes is stopped, recorded as failed, and the
+  operator notified (only a hung session can get there, since healthy wakes
+  are kept alive), and it reconciles honestly (failed, outcome unknown) if
+  the supervisor ever restarts mid-wake and loses the container exit.
 - Ledgers every wake: agent, trigger (cron/manual), start, end, exit status,
   log location.
 

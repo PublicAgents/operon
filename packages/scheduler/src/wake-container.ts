@@ -1,5 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import type { WakeRecord, WakeTrigger } from "@operon/core";
+import {
+  decideAlarmAction,
+  HEARTBEAT_INTERVAL_MS,
+  HARD_WALL_MS
+} from "./wake-lifecycle.js";
 
 /**
  * One WakeContainer Durable Object per agent (id = agent id). It is the wake
@@ -7,9 +12,13 @@ import type { WakeRecord, WakeTrigger } from "@operon/core";
  * Durable Objects serialize access per id, so two wakes for the same agent
  * can never race, and the ledger lives next to the thing it records.
  *
- * A held lock is surfaced, never silently broken: a wake that outlives the
- * stale threshold is reported to the caller (who alerts the operator) and
- * stays locked until the container actually exits.
+ * While a wake runs, an alarm heartbeat re-arms every HEARTBEAT_INTERVAL_MS.
+ * This is load-bearing: without it the idle DO is evicted and its container
+ * is stopped mid-session (observed in production as the harness dying with
+ * SIGTERM/exit 143). The heartbeat also enforces the hard wall (a hung
+ * session is stopped and the failure recorded and notified, rather than
+ * holding the agent's wake lock forever) and reconciles state if the DO
+ * ever restarts mid-wake and loses the monitor callback.
  */
 
 export interface LaunchArgs {
@@ -18,7 +27,7 @@ export interface LaunchArgs {
   trigger: WakeTrigger;
   /** Full environment for the container process; assembled by the scheduler. */
   env: Record<string, string>;
-  /** A running wake older than this is reported stale. */
+  /** A running wake older than this is reported stale to callers. */
   staleAfterMs: number;
 }
 
@@ -27,13 +36,18 @@ export type LaunchResult =
   | { status: "locked"; wakeId: string; startedAt: string; stale: boolean }
   | { status: "error"; error: string };
 
+interface WakeEnv {
+  NOTIFY_URL?: string;
+  NOTIFY_TOKEN?: string;
+}
+
 const CURRENT = "current";
 
 function rowKey(record: WakeRecord): string {
   return `wake:${record.startedAt}:${record.wakeId}`;
 }
 
-export class WakeContainer extends DurableObject {
+export class WakeContainer extends DurableObject<WakeEnv> {
   async launch(args: LaunchArgs): Promise<LaunchResult> {
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (current) {
@@ -71,6 +85,10 @@ export class WakeContainer extends DurableObject {
       return { status: "error", error: `container_start_failed: ${String(error)}` };
     }
 
+    // The heartbeat that keeps this DO (and therefore the container) alive
+    // for the duration of the wake.
+    await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
+
     this.ctx.waitUntil(
       this.ctx.container.monitor().then(
         () => this.finish(record, "completed"),
@@ -78,6 +96,42 @@ export class WakeContainer extends DurableObject {
       )
     );
     return { status: "started", wakeId: record.wakeId };
+  }
+
+  override async alarm(): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
+    const action = decideAlarmAction(
+      current,
+      this.ctx.container?.running ?? false,
+      Date.now()
+    );
+    switch (action.kind) {
+      case "idle":
+        return;
+      case "rearm":
+        await this.ctx.storage.setAlarm(action.atMs);
+        return;
+      case "hard_timeout": {
+        const record = current as WakeRecord;
+        try {
+          this.ctx.container?.destroy();
+        } catch {
+          // Destroy failing must not stop the bookkeeping below.
+        }
+        const detail = `hard_timeout: wake exceeded ${HARD_WALL_MS / 60000} minutes and was stopped`;
+        await this.finish(record, "failed", detail);
+        await this.notify(`[${record.agentId}] wake ${record.wakeId} ${detail}`);
+        return;
+      }
+      case "reconcile": {
+        const record = current as WakeRecord;
+        const detail =
+          "outcome_unknown: the supervisor restarted mid-wake and the container exit was not observed";
+        await this.finish(record, "failed", detail);
+        await this.notify(`[${record.agentId}] wake ${record.wakeId} ${detail}`);
+        return;
+      }
+    }
   }
 
   /** Ledger a wake that failed before the container could start (e.g. no credential). */
@@ -120,5 +174,23 @@ export class WakeContainer extends DurableObject {
     };
     await this.ctx.storage.put(rowKey(record), finished);
     await this.ctx.storage.delete(CURRENT);
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  /** Best-effort operator alert through the telegram Gatekeeper; never throws. */
+  private async notify(text: string): Promise<void> {
+    if (!this.env.NOTIFY_URL || !this.env.NOTIFY_TOKEN) return;
+    try {
+      await fetch(this.env.NOTIFY_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.env.NOTIFY_TOKEN}`
+        },
+        body: JSON.stringify({ text })
+      });
+    } catch (error) {
+      console.error("wake-container notify failed", error);
+    }
   }
 }

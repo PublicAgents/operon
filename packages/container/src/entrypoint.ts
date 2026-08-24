@@ -27,6 +27,15 @@ function log(message: string): void {
   console.log(`[operon] ${new Date().toISOString()} ${message}`);
 }
 
+// As PID 1, node ignores SIGTERM by kernel default while children in the
+// process group still receive it: a platform stop would kill the session
+// silently under us. Logging the signal makes a platform-initiated stop
+// distinguishable from a harness crash in the wake log; the session's
+// nonzero exit then flows through the normal failure path and notify.
+process.on("SIGTERM", () => {
+  log("SIGTERM received: the platform is stopping this container");
+});
+
 /** Minimal child env: the mind session sees its credential and nothing else of ours. */
 function sessionBaseEnv(): Record<string, string> {
   const passthrough = ["PATH", "HOME", "TERM", "LANG"];

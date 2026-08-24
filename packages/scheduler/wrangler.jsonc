@@ -13,11 +13,12 @@
       "class_name": "WakeContainer",
       "image": "../container/Dockerfile",
       "max_instances": 4,
-      // The manual's hard-won sizing: agent tooling is memory-hungry and
-      // 1 GB produces silent OOM kills that look like flakiness.
+      // Platform floor: at least 3 GiB memory per vCPU (first 4 vCPUs);
+      // the headroom also fits the workload (agent tooling is
+      // memory-hungry, and OOM kills look like flakiness).
       "instance_type": {
         "vcpu": 1,
-        "memory_mib": 2048,
+        "memory_mib": 3072,
         "disk_mb": 4000
       }
     }
