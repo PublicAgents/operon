@@ -169,7 +169,10 @@ export class Porch {
         "content-type": "application/json",
         authorization: `Bearer ${config.notifyToken}`
       },
-      body: JSON.stringify({ text: `[${config.agentId}] ${text}`.slice(0, 4000) })
+      body: JSON.stringify({
+        agentId: config.agentId,
+        text: `[${config.agentId}] ${text}`.slice(0, 4000)
+      })
     });
     if (!response.ok) {
       return fail(502, "notify_rejected", `${response.status}: ${(await response.text()).slice(0, 200)}`);

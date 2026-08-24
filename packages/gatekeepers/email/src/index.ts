@@ -1,5 +1,5 @@
 import { findAgent, parseRoster } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import PostalMime from "postal-mime";
 import { Mailbox, type AttachmentMeta } from "./mailbox.js";
 import { identityForAgent, identityForRecipient } from "./identity.js";
@@ -23,6 +23,7 @@ interface Env {
   EMAIL_DOMAIN: string;
   EMAIL_SERVICE_TOKEN?: string;
   OPERATOR_EMAIL?: string;
+  OPERATOR_API_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
   EMAIL: {
@@ -282,6 +283,11 @@ export default {
       if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
       if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
       if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
+    }
+    if (url.pathname === "/gatekeeper/email/ledger" && request.method === "GET") {
+      const denied = requireAnyBearer(request, [env.EMAIL_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);
+      if (denied) return denied;
+      return json(await ledger(env).recent());
     }
     return errorResponse(404, "not_found");
   }
