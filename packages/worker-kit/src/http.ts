@@ -55,6 +55,28 @@ export function requireBearer(request: Request, expected: string | undefined): R
   return null;
 }
 
+/**
+ * Accept any one of several bearers (e.g. an internal service token or the
+ * operator API token). Unconfigured entries are skipped; all entries
+ * unconfigured fails closed like requireBearer.
+ */
+export function requireAnyBearer(
+  request: Request,
+  expected: Array<string | undefined>
+): Response | null {
+  const configured = expected.filter((token): token is string => Boolean(token));
+  if (configured.length === 0) {
+    return errorResponse(500, "auth_not_configured", "server has no token configured");
+  }
+  let denied: Response | null = null;
+  for (const token of configured) {
+    const result = requireBearer(request, token);
+    if (result === null) return null;
+    denied = result;
+  }
+  return denied;
+}
+
 function timingSafeEqualString(a: string, b: string): boolean {
   const encoder = new TextEncoder();
   const bufferA = encoder.encode(a);

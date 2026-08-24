@@ -3,7 +3,7 @@ import {
   errorResponse,
   json,
   readJson,
-  requireBearer,
+  requireBearer, requireAnyBearer,
   Ledger,
   commitToBranch,
   GitDataError,
@@ -28,6 +28,7 @@ export { signAppJwt, pemToPkcs8Bytes } from "./app-jwt.js";
  */
 
 interface Env {
+  OPERATOR_API_TOKEN?: string;
   ROSTER: string;
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
@@ -186,7 +187,7 @@ export default {
     if (url.pathname === "/token" && request.method === "POST") return mintCloneToken(request, env);
     if (url.pathname === "/commit" && request.method === "POST") return commitState(request, env);
     if (url.pathname === "/ledger" && request.method === "GET") {
-      const denied = requireBearer(request, env.TOKEN_SERVICE_TOKEN);
+      const denied = requireAnyBearer(request, [env.TOKEN_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);
       if (denied) return denied;
       return json(await ledger(env).recent());
     }

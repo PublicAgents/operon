@@ -14,7 +14,9 @@ export interface TelegramUpdate {
 export type WebhookAction =
   | { kind: "ignored"; chatId: string; text: string }
   | { kind: "wake"; agentId: string }
-  | { kind: "operator_note"; text: string }
+  | { kind: "tell"; agentId: string; text: string }
+  | { kind: "broadcast"; text: string }
+  | { kind: "unknown_command"; text: string }
   | { kind: "noop" };
 
 export function triageUpdate(update: TelegramUpdate, operatorChatId: string): WebhookAction {
@@ -30,5 +32,13 @@ export function triageUpdate(update: TelegramUpdate, operatorChatId: string): We
   const wakeCommand = /^\/wake\s+([a-z0-9-]+)\s*$/.exec(text);
   if (wakeCommand) return { kind: "wake", agentId: wakeCommand[1] };
 
-  return { kind: "operator_note", text };
+  const tellCommand = /^\/tell\s+([a-z0-9-]+)\s+([\s\S]+)$/.exec(text);
+  if (tellCommand) return { kind: "tell", agentId: tellCommand[1], text: tellCommand[2].trim() };
+
+  // Any other slash input is a command typo, not a message for the agents.
+  if (text.startsWith("/")) return { kind: "unknown_command", text };
+
+  // A plain message in the operator chat goes to every agent.
+  if (text.trim().length > 0) return { kind: "broadcast", text: text.trim() };
+  return { kind: "noop" };
 }

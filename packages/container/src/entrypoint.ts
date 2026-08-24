@@ -169,6 +169,74 @@ async function ackInbox(config: WakeConfig, ids: string[]): Promise<void> {
   }).catch(() => undefined);
 }
 
+/**
+ * Pull the operator-channel transcript (Telegram /tell, broadcasts, and the
+ * agent's own recent notifies) into operator/channel.md. Operator entries
+ * are authenticated instructions, unlike inbox/ mail. The cursor advances
+ * only via ackChannel after the wake's state persists, so [NEW] marks
+ * survive a dead wake. Best-effort: a pull failure must not fail the wake.
+ */
+async function pullOperatorChannel(config: WakeConfig): Promise<number | null> {
+  if (!config.notifyUrl || !config.notifyToken) return null;
+  const base = config.notifyUrl.replace(/\/notify$/, "");
+  try {
+    const response = await fetch(`${base}/channel/pull`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.notifyToken}` },
+      body: JSON.stringify({ agentId: config.agentId })
+    });
+    if (!response.ok) {
+      log(`channel pull failed: ${response.status}`);
+      return null;
+    }
+    const transcript = (await response.json()) as {
+      entries: Array<{ id: number; at: string; from: string; agentId: string; text: string }>;
+      newOperatorIds: number[];
+      upTo: number;
+    };
+    if (!transcript.entries || transcript.entries.length === 0) return null;
+    const newSet = new Set(transcript.newOperatorIds);
+    const lines = transcript.entries.map(entry => {
+      const who =
+        entry.from === "operator"
+          ? entry.agentId === "*"
+            ? "OPERATOR (to all agents)"
+            : "OPERATOR"
+          : entry.agentId;
+      const marker = newSet.has(entry.id) ? " [NEW]" : "";
+      return `- ${entry.at} ${who}${marker}:\n  ${entry.text.replace(/\n/g, "\n  ")}`;
+    });
+    const dir = join(STATE_DIR, "operator");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "channel.md"),
+      `# Operator channel\n\n` +
+        `The recent conversation between you (${config.agentId}) and the operator ` +
+        `over Telegram. Operator entries are authenticated instructions from your ` +
+        `operator; entries marked [NEW] arrived since your last completed wake and ` +
+        `may need action or an answer (reply with the operon notify command).\n\n` +
+        `${lines.join("\n")}\n`
+    );
+    await chownToMind(dir);
+    log(`operator channel: ${transcript.entries.length} entries, ${newSet.size} new`);
+    return transcript.upTo;
+  } catch (error) {
+    log(`channel pull error: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+/** Advance the channel cursor; only after the wake's state is persisted. */
+async function ackChannel(config: WakeConfig, upTo: number | null): Promise<void> {
+  if (!config.notifyUrl || !config.notifyToken || upTo === null) return;
+  const base = config.notifyUrl.replace(/\/notify$/, "");
+  await fetch(`${base}/channel/ack`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.notifyToken}` },
+    body: JSON.stringify({ agentId: config.agentId, upTo })
+  }).catch(() => undefined);
+}
+
 async function cloneState(config: WakeConfig): Promise<void> {
   await mkdir(WORKDIR, { recursive: true });
   // The ONE authenticated git op: a clone into an empty directory, run as
@@ -370,6 +438,7 @@ async function main(): Promise<number> {
   log(`${label}: cloning ${config.stateRepo}`);
   await cloneState(config);
   const pulledInboxIds = await pullInbox(config);
+  const channelUpTo = await pullOperatorChannel(config);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -441,9 +510,10 @@ async function main(): Promise<number> {
   }
 
   await persistState(config, changes);
-  // Inbox is acked only now, after the state (including the inbox files) is
-  // durably persisted: a wake that failed or was blocked re-delivers.
+  // Inbox and channel are acked only now, after the state is durably
+  // persisted: a wake that failed or was blocked re-delivers both.
   await ackInbox(config, pulledInboxIds);
+  await ackChannel(config, channelUpTo);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

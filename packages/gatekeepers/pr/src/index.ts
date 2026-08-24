@@ -2,7 +2,7 @@ import {
   errorResponse,
   json,
   readJson,
-  requireBearer,
+  requireBearer, requireAnyBearer,
   Ledger,
   GitDataError
 } from "@operon/worker-kit";
@@ -32,6 +32,7 @@ export * from "./github.js";
  */
 
 interface Env {
+  OPERATOR_API_TOKEN?: string;
   MACHINE_PAT?: string;
   PR_SERVICE_TOKEN?: string;
   PR_REPOS?: string;
@@ -396,7 +397,7 @@ export default {
       return handlePush(request, env);
     }
     if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
-      const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+      const denied = requireAnyBearer(request, [env.PR_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);
       if (denied) return denied;
       return json(await ledger(env).recent());
     }

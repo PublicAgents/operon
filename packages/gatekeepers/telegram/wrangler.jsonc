@@ -8,6 +8,10 @@
       {
         "name": "LEDGER",
         "class_name": "Ledger"
+      },
+      {
+        "name": "CHANNEL",
+        "class_name": "Channel"
       }
     ]
   },
@@ -15,6 +19,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["Ledger"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Channel"]
     }
   ]
   // Secrets, set per deployment (wrangler secret put):
@@ -22,6 +30,9 @@
   //   TELEGRAM_WEBHOOK_SECRET   secret_token registered with setWebhook
   //   NOTIFY_TOKEN              bearer accepted on POST /notify
   //   WAKE_TRIGGER_TOKEN        bearer this Gatekeeper presents to the scheduler
+  //   OPERATOR_API_TOKEN        bearer for an operator UI: channel send and
+  //                             transcript, ledger tailing. Telegram is one
+  //                             transport over the same channel; a UI is another.
   // Vars, set per deployment:
   //   OPERATOR_CHAT_ID          the one chat identity that is the operator
   // Service bindings, set per deployment:

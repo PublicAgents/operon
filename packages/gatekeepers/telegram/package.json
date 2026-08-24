@@ -17,7 +17,10 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "!**/*.tsbuildinfo"],
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
   "nx": {
     "includedScripts": [],
     "targets": {
@@ -26,13 +29,16 @@
         "options": {
           "cwd": "{projectRoot}"
         },
-        "dependsOn": ["^build"],
+        "dependsOn": [
+          "^build"
+        ],
         "continuous": true
       }
     }
   },
   "dependencies": {
-    "@operon/worker-kit": "0.0.0"
+    "@operon/worker-kit": "0.0.0",
+    "@operon/core": "0.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260801.1",

@@ -1,5 +1,5 @@
 import { parseRoster } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import {
   hostLabel,
   storagePath,
@@ -20,6 +20,7 @@ export * from "./gates.js";
  */
 
 interface Env {
+  OPERATOR_API_TOKEN?: string;
   ROSTER: string;
   PUBLISH_TOKEN?: string;
   DISCLOSURE_MARKER?: string;
@@ -122,7 +123,7 @@ export default {
       return handlePublish(request, env);
     }
     if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
-      const denied = requireBearer(request, env.PUBLISH_TOKEN);
+      const denied = requireAnyBearer(request, [env.PUBLISH_TOKEN, env.OPERATOR_API_TOKEN]);
       if (denied) return denied;
       return json(await ledger(env).recent());
     }
