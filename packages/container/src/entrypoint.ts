@@ -140,6 +140,14 @@ async function pullInbox(config: WakeConfig): Promise<void> {
       await writeFile(join(dir, `${m.date.slice(0, 19).replace(/[:]/g, "")}-${m.id.slice(0, 8)}.md`), body);
     }
     await chownToMind(dir);
+    // Ack only after the files are durably written: an interrupted pull or
+    // a failed write leaves the messages to be re-delivered next wake
+    // (writing the same file again is idempotent).
+    await fetch(`${config.emailUrl}/gatekeeper/email/ack`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
+      body: JSON.stringify({ agentId: config.agentId, ids: messages.map(m => m.id) })
+    }).catch(() => undefined);
     log(`pulled ${messages.length} inbound email(s) into inbox/`);
   } catch (error) {
     log(`inbox pull error: ${String(error).slice(0, 200)}`);

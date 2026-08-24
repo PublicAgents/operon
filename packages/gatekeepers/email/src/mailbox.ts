@@ -1,5 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { DAILY_SEND_CAP } from "./policy.js";
+import { DAILY_SEND_CAP, decideSend, type SendDecision } from "./policy.js";
+
+export type SendReservation =
+  | { action: "send"; count: number }
+  | Exclude<SendDecision, { action: "send" }>;
 
 /**
  * One Mailbox Durable Object per agent: the inbox (pending inbound
@@ -57,37 +61,68 @@ export class Mailbox extends DurableObject {
     }
   }
 
-  /** Return pending inbound messages and clear them (the wake has them now). */
+  /**
+   * Return pending inbound messages WITHOUT deleting them. Delivery is
+   * at-least-once: the caller writes them to files, then calls ack(ids).
+   * If the caller crashes before ack, they are re-delivered next wake, and
+   * writing the same inbox file again is idempotent. Nothing is lost by an
+   * interrupted response or a failed write.
+   */
   async pull(): Promise<InboundMessage[]> {
     const entries = await this.ctx.storage.list<InboundMessage>({ prefix: "in:" });
-    const messages = [...entries.values()];
-    if (entries.size > 0) await this.ctx.storage.delete([...entries.keys()]);
-    return messages;
+    return [...entries.values()];
+  }
+
+  /** Delete inbound messages the caller has durably taken. */
+  async ack(ids: string[]): Promise<void> {
+    const wanted = new Set(ids);
+    const entries = await this.ctx.storage.list<InboundMessage>({ prefix: "in:" });
+    const keys = [...entries.entries()].filter(([, m]) => wanted.has(m.id)).map(([k]) => k);
+    if (keys.length > 0) await this.ctx.storage.delete(keys);
   }
 
   async correspondents(): Promise<string[]> {
     return (await this.ctx.storage.get<string[]>("correspondents")) ?? [];
   }
 
-  async sentToday(nowIso: string): Promise<number> {
-    const window = await this.ctx.storage.get<SendWindow>("sendWindow");
-    return window && window.day === today(nowIso) ? window.count : 0;
-  }
-
-  /** Record a successful send against the daily window; returns the new count. */
-  async recordSend(to: string, nowIso: string): Promise<number> {
+  /**
+   * Atomically apply the send policy and, if it says send, RESERVE the slot
+   * (increment the daily counter and record the correspondent) in one DO
+   * turn. Because a Durable Object runs one method call at a time, two
+   * overlapping sends near the cap cannot both pass. A caller whose actual
+   * delivery then fails calls release() to give the slot back.
+   */
+  async reserveSend(to: string, nowIso: string, approved: boolean): Promise<SendReservation> {
     const day = today(nowIso);
     const window = await this.ctx.storage.get<SendWindow>("sendWindow");
-    const count = window && window.day === day ? window.count + 1 : 1;
-    await this.ctx.storage.put("sendWindow", { day, count });
-    // A recipient we send to becomes a correspondent (replies flow after).
+    const sentToday = window && window.day === day ? window.count : 0;
     const correspondents = (await this.ctx.storage.get<string[]>("correspondents")) ?? [];
+
+    const decision = decideSend({
+      to,
+      correspondents: new Set(correspondents),
+      sentToday,
+      approved
+    });
+    if (decision.action !== "send") return decision;
+
+    const count = sentToday + 1;
+    await this.ctx.storage.put("sendWindow", { day, count });
     const recipient = to.toLowerCase();
     if (!correspondents.includes(recipient)) {
       correspondents.push(recipient);
       await this.ctx.storage.put("correspondents", correspondents);
     }
-    return count;
+    return { action: "send", count };
+  }
+
+  /** Return a reserved-but-undelivered slot to the daily counter. */
+  async release(nowIso: string): Promise<void> {
+    const day = today(nowIso);
+    const window = await this.ctx.storage.get<SendWindow>("sendWindow");
+    if (window && window.day === day && window.count > 0) {
+      await this.ctx.storage.put("sendWindow", { day, count: window.count - 1 });
+    }
   }
 
   async hold(send: Omit<HeldSend, "id" | "queuedAt">, nowIso: string): Promise<HeldSend> {
@@ -96,10 +131,13 @@ export class Mailbox extends DurableObject {
     return held;
   }
 
-  async takeHeld(id: string): Promise<HeldSend | undefined> {
-    const held = await this.ctx.storage.get<HeldSend>(`held:${id}`);
-    if (held) await this.ctx.storage.delete(`held:${id}`);
-    return held;
+  /** Read a held send without removing it; delete only after it is delivered. */
+  async getHeld(id: string): Promise<HeldSend | undefined> {
+    return this.ctx.storage.get<HeldSend>(`held:${id}`);
+  }
+
+  async deleteHeld(id: string): Promise<void> {
+    await this.ctx.storage.delete(`held:${id}`);
   }
 
   async listHeld(): Promise<HeldSend[]> {

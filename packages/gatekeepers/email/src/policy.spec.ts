@@ -15,9 +15,9 @@ describe("decideSend", () => {
   });
 
   it("sends to a known correspondent", () => {
-    expect(
-      decideSend({ ...base, correspondents: new Set(["a@x.com"]) })
-    ).toEqual({ action: "send" });
+    expect(decideSend({ ...base, correspondents: new Set(["a@x.com"]) })).toEqual({
+      action: "send"
+    });
   });
 
   it("sends a held first-contact once approved", () => {
