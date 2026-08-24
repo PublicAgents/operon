@@ -48,16 +48,37 @@ function rowKey(record: WakeRecord): string {
 }
 
 export class WakeContainer extends DurableObject<WakeEnv> {
+  /**
+   * Synchronous single-finisher guard. The hard-wall alarm and the monitor
+   * callback are both in-flight coroutines inside this DO, so input gates
+   * do not serialize them: both could read a matching CURRENT before
+   * either deletes it. Membership here is checked and set with no await in
+   * between, which is what makes the first finisher win atomically. The
+   * storage guard in finish() still covers cross-restart staleness.
+   */
+  private finishedWakeIds = new Set<string>();
+
   async launch(args: LaunchArgs): Promise<LaunchResult> {
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (current) {
-      const age = Date.now() - Date.parse(current.startedAt);
-      return {
-        status: "locked",
-        wakeId: current.wakeId,
-        startedAt: current.startedAt,
-        stale: age > args.staleAfterMs
-      };
+      if (!this.ctx.container?.running) {
+        // Lock held but no container: the outcome was lost (eviction with
+        // a failed heartbeat, or any supervisor gap). Self-heal here so a
+        // lock can never be permanent, then proceed with this launch.
+        await this.finish(
+          current,
+          "failed",
+          "outcome_unknown: lock held with no running container; reconciled at next launch"
+        );
+      } else {
+        const age = Date.now() - Date.parse(current.startedAt);
+        return {
+          status: "locked",
+          wakeId: current.wakeId,
+          startedAt: current.startedAt,
+          stale: age > args.staleAfterMs
+        };
+      }
     }
 
     if (!this.ctx.container) {
@@ -95,17 +116,27 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       )
     );
 
+    // The heartbeat that keeps this DO (and therefore the container) alive
+    // for the duration of the wake. Arming it is REQUIRED: without it the
+    // wake dies by eviction mid-session and, because reconciliation is
+    // itself alarm-driven, the lock could stand until the next launch. A
+    // wake that cannot heartbeat is aborted, not limped.
     try {
-      // The heartbeat that keeps this DO (and therefore the container)
-      // alive for the duration of the wake.
       await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
-    } catch (error) {
-      // The wake proceeds under monitor supervision, but without the
-      // heartbeat it can be evicted mid-session: the operator should know.
-      console.error("heartbeat arming failed", error);
-      await this.notify(
-        `[${record.agentId}] wake ${record.wakeId}: heartbeat arming failed (${String(error).slice(0, 200)}); the wake may be stopped early by eviction`
-      );
+    } catch {
+      try {
+        await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
+      } catch (error) {
+        try {
+          this.ctx.container.destroy();
+        } catch {
+          // Bookkeeping below must run regardless.
+        }
+        const detail = `heartbeat_arm_failed: ${String(error).slice(0, 200)}`;
+        await this.finish(record, "failed", detail);
+        await this.notify(`[${record.agentId}] wake ${record.wakeId} aborted: ${detail}`);
+        return { status: "error", error: detail };
+      }
     }
     return { status: "started", wakeId: record.wakeId };
   }
@@ -174,18 +205,21 @@ export class WakeContainer extends DurableObject<WakeEnv> {
   }
 
   /**
-   * Finalize a wake exactly once. The hard-wall alarm and the monitor
-   * callback can race to finish the same record (destroy makes the monitor
-   * settle right after the alarm already recorded hard_timeout), and a
-   * stale monitor callback could otherwise clear a LATER wake's lock and
-   * heartbeat. The guard makes the first finisher win and every other call
-   * a no-op.
+   * Finalize a wake exactly once. First line of defense is the synchronous
+   * finishedWakeIds check (atomic between in-flight coroutines: no await
+   * before membership is recorded); the storage comparison covers a DO
+   * restart, where the in-memory set is empty but a stale callback cannot
+   * exist either. Cleanup order matters: the alarm is deleted BEFORE the
+   * lock clears, so no later launch can have armed its own heartbeat in
+   * between and lost it to this wake's cleanup.
    */
   private async finish(
     record: WakeRecord,
     status: "completed" | "failed",
     reason?: string
   ): Promise<void> {
+    if (this.finishedWakeIds.has(record.wakeId)) return;
+    this.finishedWakeIds.add(record.wakeId);
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (!current || current.wakeId !== record.wakeId) return;
     const finished: WakeRecord & { reason?: string } = {
@@ -195,8 +229,8 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       ...(reason ? { reason } : {})
     };
     await this.ctx.storage.put(rowKey(record), finished);
-    await this.ctx.storage.delete(CURRENT);
     await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.delete(CURRENT);
   }
 
   /** Best-effort operator alert through the telegram Gatekeeper; never throws. */
