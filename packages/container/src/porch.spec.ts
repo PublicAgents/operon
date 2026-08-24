@@ -142,6 +142,19 @@ describe("porch doors", () => {
     expect(((await message.json()) as { error: string }).error).toBe("blocked_by_sweep");
   });
 
+  it("sweeps the email recipient, subject, and body", async () => {
+    const { url } = await startPorch(
+      config({ emailUrl: "http://never-reached", emailToken: "t" }),
+      ["super-secret-token"]
+    );
+    const viaRecipient = await fetch(`${url}/email`, {
+      method: "POST",
+      body: JSON.stringify({ to: "super-secret-token@x.com", subject: "hi", text: "hello" })
+    });
+    expect(viaRecipient.status).toBe(422);
+    expect(((await viaRecipient.json()) as { error: string }).error).toBe("blocked_by_sweep");
+  });
+
   it("forwards notify with the agent prefix and the bearer", async () => {
     const stub = await startStub(() => ({ status: 200, body: "{}" }));
     const { url } = await startPorch(

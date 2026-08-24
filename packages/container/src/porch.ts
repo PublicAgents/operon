@@ -470,7 +470,10 @@ export class Porch {
     if (typeof to !== "string" || !to.includes("@")) return fail(400, "invalid_to");
     if (typeof subject !== "string" || subject.length === 0) return fail(400, "missing_subject");
     if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
-    const blocked = this.sweepFields({ subject, text });
+    // The recipient is outbound text too: a denylisted secret smuggled into
+    // the address (its local part reaches the external mail service) must
+    // block exactly like one in the subject or body.
+    const blocked = this.sweepFields({ to, subject, text });
     if (blocked) return blocked;
 
     log(`sending email to ${to}`);
