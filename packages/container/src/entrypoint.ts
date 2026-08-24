@@ -80,29 +80,79 @@ async function cloneState(config: WakeConfig): Promise<void> {
   await git(["config", "user.email", `${config.agentId}@operon.invalid`]);
 }
 
-async function verifyModel(adapter: HarnessAdapter, config: WakeConfig): Promise<string> {
-  const spec = adapter.probe(config.model, config.mindCredential);
+interface VerifiedModel {
+  /** The model the session should actually run on. */
+  model: string;
+  /** What the probe reported. */
+  answer: string;
+  /** True when the pinned model failed and the fallback answered instead. */
+  degraded: boolean;
+}
+
+async function probe(
+  adapter: HarnessAdapter,
+  model: string,
+  credential: string
+): Promise<string> {
+  const spec = adapter.probe(model, credential);
+  const { stdout } = await runCapture(spec.command, spec.args, {
+    cwd: STATE_DIR,
+    env: { ...sessionBaseEnv(), ...spec.env },
+    timeoutMs: 5 * 60 * 1000
+  });
+  return stdout.trim().slice(0, 200);
+}
+
+/**
+ * Verify the pinned model answers; if it does not and a fallback is
+ * pinned, verify the fallback and run the wake degraded on it. A degraded
+ * wake beats a missed wake, and the degradation is stamped into the log
+ * and the end-of-wake summary rather than happening silently.
+ */
+async function verifyModel(
+  adapter: HarnessAdapter,
+  config: WakeConfig
+): Promise<VerifiedModel> {
   try {
-    const { stdout } = await runCapture(spec.command, spec.args, {
-      cwd: STATE_DIR,
-      env: { ...sessionBaseEnv(), ...spec.env },
-      timeoutMs: 5 * 60 * 1000
-    });
-    const answer = stdout.trim().slice(0, 200);
+    const answer = await probe(adapter, config.model, config.mindCredential);
     log(`model probe answered: ${answer}`);
-    return answer;
-  } catch (error) {
-    throw new Error(`model_probe_failed: ${String(error)}`, { cause: error });
+    return { model: config.model, answer, degraded: false };
+  } catch (primaryError) {
+    if (!config.fallbackModel) {
+      throw new Error(`model_probe_failed: ${String(primaryError)}`, {
+        cause: primaryError
+      });
+    }
+    log(
+      `pinned model ${config.model} failed to answer (${String(primaryError).slice(0, 300)}); probing fallback ${config.fallbackModel}`
+    );
+    try {
+      const answer = await probe(adapter, config.fallbackModel, config.mindCredential);
+      log(`fallback model probe answered: ${answer} (wake runs DEGRADED)`);
+      return { model: config.fallbackModel, answer, degraded: true };
+    } catch (fallbackError) {
+      throw new Error(
+        `model_probe_failed: pinned ${config.model}: ${String(primaryError).slice(0, 300)}; fallback ${config.fallbackModel}: ${String(fallbackError).slice(0, 300)}`,
+        { cause: fallbackError }
+      );
+    }
   }
 }
 
-async function runSession(adapter: HarnessAdapter, config: WakeConfig): Promise<number> {
+async function runSession(
+  adapter: HarnessAdapter,
+  config: WakeConfig,
+  model: string,
+  degraded: boolean
+): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
     wakePrompt(budgetMinutes),
-    config.model,
+    model,
     config.mindCredential,
-    config.fallbackModel
+    // When already running on the fallback there is nothing further to
+    // fall back to; passing it again would be a lie in the flags.
+    degraded ? undefined : config.fallbackModel
   );
   // The timeout enforces the budget the prompt promised: past it the
   // session receives SIGTERM while the entrypoint still has the wrap-up
@@ -151,10 +201,13 @@ async function main(): Promise<number> {
   log(`${label}: cloning ${config.stateRepo}`);
   await cloneState(config);
 
-  const probedModel = await verifyModel(adapter, config);
+  const verified = await verifyModel(adapter, config);
+  const probedModel = verified.degraded
+    ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
+    : verified.answer;
 
-  log(`${label}: session starting (model ${config.model})`);
-  const sessionExit = await runSession(adapter, config);
+  log(`${label}: session starting (model ${verified.model})`);
+  const sessionExit = await runSession(adapter, config, verified.model, verified.degraded);
   log(`${label}: session exited ${sessionExit}`);
 
   const staged = await stageAndCollect(STATE_DIR, sessionBaseEnv());
