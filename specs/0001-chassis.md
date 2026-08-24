@@ -195,8 +195,16 @@ contract (section 4.1). Entrypoint sequence:
    to R2.
 4. **Presleep verifier** (blocking): journal entry for this wake exists and
    is well-formed; append-only files kept their headers and boundaries; no
-   string matching the secret denylist appears in any changed file; every
-   ledger the session claims to have written parses.
+   denylisted secret appears in the staged change set. The sweep scans
+   exactly what git stages, in full (an unscannable file blocks the push),
+   covers whitespace-split, cross-file-split, base64/base64url/hex forms of
+   each literal, and auto-includes every secret the container itself holds
+   (mind credential, state-repo token, notify token) on top of the
+   operator's denylist. Honest scope: this is a mistake-catcher, and a
+   deliberately exfiltrating mind can encode past any string filter; the
+   defense for that case is structural (the session env contains only the
+   mind credential, and every in-container credential is short-lived and
+   low-value, per section 7).
 5. Commit and push state. A failed push is a failed wake and alerts the
    operator.
 6. Send the end-of-wake summary through the Telegram Gatekeeper.

@@ -43,6 +43,60 @@ describe("verifyPresleep", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("catches a secret wrapped across lines", () => {
+    const result = verifyPresleep(
+      [{ path: "JOURNAL.md", content: "note: super-sec\nret-token was used" }],
+      ["super-secret-token"]
+    );
+    expect(result.blockPush).toBe(true);
+    expect(result.failures[0].detail).toMatch(/whitespace-split/);
+  });
+
+  it("catches base64, base64url, and hex encodings of a secret", () => {
+    const literal = "super-secret-token";
+    for (const encoded of [
+      Buffer.from(literal).toString("base64"),
+      Buffer.from(literal).toString("base64url"),
+      Buffer.from(literal).toString("hex").toUpperCase()
+    ]) {
+      const result = verifyPresleep(
+        [{ path: "JOURNAL.md", content: `data: ${encoded}` }],
+        [literal]
+      );
+      expect(result.blockPush).toBe(true);
+    }
+  });
+
+  it("catches a secret split across two files", () => {
+    const result = verifyPresleep(
+      [
+        { path: "JOURNAL.md", content: "first half: super-secr" },
+        { path: "notes.md", content: "et-token is the rest" }
+      ],
+      ["super-secret-token"]
+    );
+    expect(result.blockPush).toBe(true);
+    expect(result.failures.some(f => f.detail.includes("split across files"))).toBe(true);
+  });
+
+  it("does not expand variants for short literals", () => {
+    // 5 chars: raw match only; its base64 appearing is not flagged.
+    const result = verifyPresleep(
+      [{ path: "JOURNAL.md", content: Buffer.from("abcde").toString("base64") }],
+      ["abcde"]
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("still reports masked, never the secret, for variant matches", () => {
+    const literal = "super-secret-token";
+    const result = verifyPresleep(
+      [{ path: "JOURNAL.md", content: Buffer.from(literal).toString("base64") }],
+      [literal]
+    );
+    expect(JSON.stringify(result)).not.toContain(literal);
+  });
+
   it("blocks the push when a changed file could not be scanned", () => {
     const result = verifyPresleep(
       [

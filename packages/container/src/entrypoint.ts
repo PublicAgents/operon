@@ -170,7 +170,16 @@ async function main(): Promise<number> {
   log(`${label}: session exited ${sessionExit}`);
 
   const staged = await stageAndCollect();
-  const verification = verifyPresleep(staged, config.secretDenylist);
+  // The container auto-denylists every secret it itself holds: the
+  // operator's list covers what the operator knows about, this covers what
+  // the wake was given. Neither should ever appear in state.
+  const denylist = [
+    ...config.secretDenylist,
+    config.mindCredential,
+    config.githubToken,
+    ...(config.notifyToken ? [config.notifyToken] : [])
+  ];
+  const verification = verifyPresleep(staged, denylist);
   for (const failure of verification.failures) {
     log(`presleep ${failure.code}: ${failure.detail}`);
   }
