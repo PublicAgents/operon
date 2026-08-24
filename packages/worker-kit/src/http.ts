@@ -11,6 +11,22 @@ export function json(data: unknown, status = 200): Response {
   });
 }
 
+/**
+ * Parse a request body as JSON without throwing. A malformed body must not
+ * reject before a handler's ledger/failure path runs: an unaudited crash is
+ * exactly the invisible failure the ledger exists to prevent. Returns a
+ * discriminated result the caller handles explicitly.
+ */
+export async function readJson<T = unknown>(
+  request: Request
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  try {
+    return { ok: true, value: (await request.json()) as T };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export function errorResponse(status: number, code: string, detail?: string): Response {
   return json({ error: code, ...(detail ? { detail } : {}) }, status);
 }

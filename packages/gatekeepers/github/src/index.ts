@@ -1,5 +1,5 @@
 import { findAgent, parseRoster } from "@operon/core";
-import { errorResponse, json, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import { signAppJwt } from "./app-jwt.js";
 
 export { Ledger };
@@ -25,7 +25,12 @@ async function mintToken(request: Request, env: Env): Promise<Response> {
     return denied;
   }
 
-  const { agentId } = (await request.json()) as { agentId?: string };
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) {
+    await ledger(env).append("token_failed", { reason: "malformed_json" });
+    return errorResponse(400, "malformed_json");
+  }
+  const { agentId } = body.value;
   if (typeof agentId !== "string") {
     await ledger(env).append("token_failed", { reason: "missing_agent_id" });
     return errorResponse(400, "missing_agent_id");

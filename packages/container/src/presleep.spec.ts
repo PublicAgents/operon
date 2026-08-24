@@ -42,6 +42,30 @@ describe("verifyPresleep", () => {
     const result = verifyPresleep([{ path: "JOURNAL.md", content: "anything" }], [""]);
     expect(result.ok).toBe(true);
   });
+
+  it("blocks the push when a changed file could not be scanned", () => {
+    const result = verifyPresleep(
+      [
+        { path: "JOURNAL.md", content: "## Wake 1" },
+        { path: "big.bin", content: null }
+      ],
+      []
+    );
+    expect(result.ok).toBe(false);
+    expect(result.blockPush).toBe(true);
+    expect(result.failures.map(f => f.code)).toContain("unscannable");
+  });
+
+  it("counts a staged deletion (empty content) for the journal check without blocking", () => {
+    const result = verifyPresleep(
+      [
+        { path: "JOURNAL.md", content: "## Wake 1" },
+        { path: "old.md", content: "" }
+      ],
+      ["secret"]
+    );
+    expect(result).toEqual({ ok: true, failures: [], blockPush: false });
+  });
 });
 
 describe("maskSecret", () => {

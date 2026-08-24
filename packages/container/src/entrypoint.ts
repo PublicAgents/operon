@@ -15,7 +15,11 @@ import { verifyPresleep, type ChangedFile } from "./presleep.js";
 
 const WORKDIR = "/tmp/operon-wake";
 const STATE_DIR = join(WORKDIR, "state");
-const MAX_SCANNED_FILE_BYTES = 512 * 1024;
+// A changed file larger than this is not partially scanned (which would let
+// a secret past the cap ride along in the full file git pushes); it is
+// treated as unscannable and blocks the push. State files are small text by
+// design, so a multi-MB change is itself worth a human look.
+const MAX_SCANNED_FILE_BYTES = 4 * 1024 * 1024;
 
 const WAKE_PROMPT =
   "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
@@ -82,33 +86,49 @@ async function runSession(adapter: HarnessAdapter, config: WakeConfig): Promise<
   });
 }
 
-async function changedFiles(): Promise<ChangedFile[]> {
-  const status = await git(["status", "--porcelain"]);
-  const paths = status
-    .split("\n")
-    .map(line => line.slice(3).trim())
-    .filter(path => path.length > 0);
+/** NUL-separated raw paths from a `--name-only -z` diff; no quoting, no rename arrows. */
+function splitZ(output: string): string[] {
+  return output.split("\0").filter(entry => entry.length > 0);
+}
+
+/**
+ * Scan exactly what will be pushed. Stage first, then read the staged set
+ * from git's own NUL-separated path list (correct for renames and paths
+ * with special characters), reading each file in full. A file too large to
+ * scan, or one that fails to read for any reason other than being a staged
+ * deletion, is returned with null content, which blocks the push. Nothing
+ * is scanned as a truncated proxy for what git actually stages.
+ */
+async function stageAndCollect(): Promise<ChangedFile[]> {
+  await git(["add", "-A"]);
+  const staged = splitZ(await git(["diff", "--cached", "--name-only", "-z"]));
+  const deleted = new Set(
+    splitZ(await git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z"]))
+  );
+
   const files: ChangedFile[] = [];
-  for (const path of paths) {
+  for (const path of staged) {
+    if (deleted.has(path)) {
+      // A staged deletion publishes no content; the path still counts for
+      // the journal check via its presence in the change set.
+      files.push({ path, content: "" });
+      continue;
+    }
     try {
       const buffer = await readFile(join(STATE_DIR, path));
       files.push({
         path,
-        content: buffer.subarray(0, MAX_SCANNED_FILE_BYTES).toString("utf8")
+        content: buffer.byteLength > MAX_SCANNED_FILE_BYTES ? null : buffer.toString("utf8")
       });
     } catch {
-      // Deleted files have no content to scan; the path itself still counts
-      // for the journal check via its presence in the change set.
-      files.push({ path, content: "" });
+      files.push({ path, content: null });
     }
   }
   return files;
 }
 
-async function pushState(config: WakeConfig): Promise<void> {
-  await git(["add", "-A"]);
-  const staged = await git(["status", "--porcelain"]);
-  if (staged.trim().length === 0) {
+async function commitAndPush(config: WakeConfig, hasStaged: boolean): Promise<void> {
+  if (!hasStaged) {
     log("no changes to push");
     return;
   }
@@ -149,7 +169,8 @@ async function main(): Promise<number> {
   const sessionExit = await runSession(adapter, config);
   log(`${label}: session exited ${sessionExit}`);
 
-  const verification = verifyPresleep(await changedFiles(), config.secretDenylist);
+  const staged = await stageAndCollect();
+  const verification = verifyPresleep(staged, config.secretDenylist);
   for (const failure of verification.failures) {
     log(`presleep ${failure.code}: ${failure.detail}`);
   }
@@ -157,12 +178,14 @@ async function main(): Promise<number> {
   if (verification.blockPush) {
     await notify(
       config,
-      `${label}: PUSH WITHHELD, presleep found a denylisted secret in changed files. Model ${probedModel}. Investigate the container log.`
+      `${label}: PUSH WITHHELD, presleep blocked the push (${verification.failures
+        .map(f => f.code)
+        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was pushed.`
     );
     return 2;
   }
 
-  await pushState(config);
+  await commitAndPush(config, staged.length > 0);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

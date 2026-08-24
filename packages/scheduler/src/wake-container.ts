@@ -62,7 +62,10 @@ export class WakeContainer extends DurableObject {
     await this.ctx.storage.put(rowKey(record), record);
 
     try {
-      this.ctx.container.start({ env: args.env, enableInternet: true });
+      // Awaited so an asynchronous rejection is caught here: otherwise the
+      // already-persisted CURRENT lock would never clear and every later
+      // wake for this agent would be blocked or stale indefinitely.
+      await this.ctx.container.start({ env: args.env, enableInternet: true });
     } catch (error) {
       await this.finish(record, "failed", String(error));
       return { status: "error", error: `container_start_failed: ${String(error)}` };

@@ -10,11 +10,16 @@
 
 export interface ChangedFile {
   path: string;
-  content: string;
+  /**
+   * The file's full content, or null when it could not be fully read (too
+   * large, or the read failed). null is treated as unscannable and blocks
+   * the push: a file we cannot scan is a file we must not publish.
+   */
+  content: string | null;
 }
 
 export interface PresleepFailure {
-  code: "journal_untouched" | "secret_found";
+  code: "journal_untouched" | "secret_found" | "unscannable";
   detail: string;
 }
 
@@ -48,6 +53,13 @@ export function verifyPresleep(
   }
 
   for (const file of changedFiles) {
+    if (file.content === null) {
+      failures.push({
+        code: "unscannable",
+        detail: `${file.path} could not be fully read for scanning; the push is blocked rather than publish an unscanned change`
+      });
+      continue;
+    }
     for (const literal of denylist) {
       if (literal.length > 0 && file.content.includes(literal)) {
         failures.push({
@@ -58,6 +70,10 @@ export function verifyPresleep(
     }
   }
 
-  const blockPush = failures.some(failure => failure.code === "secret_found");
+  // Anything that could publish a secret blocks the push: a confirmed
+  // denylisted literal, or a change we could not scan at all.
+  const blockPush = failures.some(
+    failure => failure.code === "secret_found" || failure.code === "unscannable"
+  );
   return { ok: failures.length === 0, failures, blockPush };
 }

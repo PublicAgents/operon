@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorResponse, json, requireBearer } from "./http.js";
+import { errorResponse, json, readJson, requireBearer } from "./http.js";
 
 function request(auth?: string): Request {
   return new Request("https://example.com/", {
@@ -28,6 +28,18 @@ describe("requireBearer", () => {
 
   it("returns null on a valid token", () => {
     expect(requireBearer(request("Bearer right"), "right")).toBeNull();
+  });
+});
+
+describe("readJson", () => {
+  it("returns the parsed value on valid JSON", async () => {
+    const request = new Request("https://x/", { method: "POST", body: '{"a":1}' });
+    expect(await readJson<{ a: number }>(request)).toEqual({ ok: true, value: { a: 1 } });
+  });
+
+  it("does not throw on malformed JSON, so the ledger path can run", async () => {
+    const request = new Request("https://x/", { method: "POST", body: "{not json" });
+    expect(await readJson(request)).toEqual({ ok: false });
   });
 });
 

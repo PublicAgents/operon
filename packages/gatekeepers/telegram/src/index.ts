@@ -1,4 +1,4 @@
-import { errorResponse, json, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import { triageUpdate, type TelegramUpdate } from "./webhook.js";
 
 export { Ledger };
@@ -41,8 +41,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     return errorResponse(500, "operator_chat_unconfigured");
   }
 
-  const update = (await request.json()) as TelegramUpdate;
-  const action = triageUpdate(update, env.OPERATOR_CHAT_ID);
+  const body = await readJson<TelegramUpdate>(request);
+  if (!body.ok) {
+    await ledger(env).append("webhook_failed", { reason: "malformed_json" });
+    // Ack anyway: Telegram retries non-2xx, and a malformed body will never
+    // parse on retry. The failure is recorded; the delivery is done.
+    return json({ ok: true });
+  }
+  const action = triageUpdate(body.value, env.OPERATOR_CHAT_ID);
 
   switch (action.kind) {
     case "noop":
@@ -93,7 +99,12 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("notify_denied", { status: denied.status });
     return denied;
   }
-  const { text } = (await request.json()) as { text?: string };
+  const body = await readJson<{ text?: string }>(request);
+  if (!body.ok) {
+    await ledger(env).append("notify_failed", { reason: "malformed_json" });
+    return errorResponse(400, "malformed_json");
+  }
+  const { text } = body.value;
   if (typeof text !== "string" || text.length === 0) {
     await ledger(env).append("notify_failed", { reason: "empty_text" });
     return errorResponse(400, "empty_text");
