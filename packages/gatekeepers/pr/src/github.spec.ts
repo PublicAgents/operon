@@ -95,11 +95,14 @@ describe("listActivity", () => {
         });
       if (path === "/repos/org/repo/issues/59/comments?per_page=30")
         return respond([{ user: { login: "maintainer" }, created_at: "2026-08-24T20:30:00Z", body: "thanks!" }]);
+      if (path === "/repos/org/repo/pulls/59/comments?per_page=30")
+        return respond([{ user: { login: "maintainer" }, created_at: "2026-08-24T20:31:00Z", body: "inline nit" }]);
       return new Response("unexpected", { status: 500 });
     }) as typeof fetch;
 
     const { listActivity } = await import("./github.js");
-    const items = await listActivity({ token: "pat", userAgent: "test", fetch: fetchImpl });
+    const { mine: items, watched } = await listActivity({ token: "pat", userAgent: "test", fetch: fetchImpl });
+    expect(watched).toEqual([]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "pr",
@@ -109,5 +112,78 @@ describe("listActivity", () => {
       commentCount: 1
     });
     expect(items[0].recentComments[0]).toMatchObject({ user: "maintainer", body: "thanks!" });
+    expect(items[0].recentReviewComments?.[0]).toMatchObject({ user: "maintainer", body: "inline nit" });
+  });
+});
+
+describe("getThread", () => {
+  it("merges comments, reviews, and inline review comments chronologically", async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const path = (typeof input === "string" ? input : input.toString()).replace(
+        "https://api.github.com",
+        ""
+      );
+      const respond = (d: unknown) => new Response(JSON.stringify(d), { status: 200 });
+      if (path === "/repos/org/repo/issues/7")
+        return respond({
+          html_url: "https://github.com/org/repo/pull/7",
+          title: "t",
+          state: "open",
+          body: "the body",
+          user: { login: "prior-livevariant-bot" },
+          pull_request: { merged_at: null }
+        });
+      if (path === "/repos/org/repo/issues/7/comments?per_page=100")
+        return respond([
+          { id: 1, user: { login: "alice" }, created_at: "2026-08-25T10:00:00Z", body: "conversation" }
+        ]);
+      if (path === "/repos/org/repo/pulls/7/reviews?per_page=100")
+        return respond([
+          { id: 2, user: { login: "bob" }, submitted_at: "2026-08-25T09:00:00Z", body: "looks off", state: "CHANGES_REQUESTED" },
+          { id: 3, user: { login: "bob" }, submitted_at: "2026-08-25T09:30:00Z", body: "", state: "COMMENTED" }
+        ]);
+      if (path === "/repos/org/repo/pulls/7/comments?per_page=100")
+        return respond([
+          { id: 4, user: { login: "bob" }, created_at: "2026-08-25T09:10:00Z", body: "fix this line", path: "a.ts", line: 12 }
+        ]);
+      return new Response("unexpected: " + path, { status: 500 });
+    }) as typeof fetch;
+
+    const { getThread } = await import("./github.js");
+    const thread = await getThread({ token: "pat", userAgent: "test", fetch: fetchImpl }, "org/repo", 7);
+    expect(thread.kind).toBe("pr");
+    expect(thread.author).toBe("prior-livevariant-bot");
+    // Chronological: review (09:00), review-comment (09:10), comment (10:00).
+    // The empty COMMENTED container review is dropped.
+    expect(thread.items.map(i => i.kind)).toEqual(["review", "review-comment", "comment"]);
+    expect(thread.items[0].verdict).toBe("CHANGES_REQUESTED");
+    expect(thread.items[1]).toMatchObject({ path: "a.ts", line: 12, id: 4 });
+  });
+});
+
+describe("getIssueRef", () => {
+  it("returns author and, for PRs, the head fork and branch", async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const path = (typeof input === "string" ? input : input.toString()).replace(
+        "https://api.github.com",
+        ""
+      );
+      const respond = (d: unknown) => new Response(JSON.stringify(d), { status: 200 });
+      if (path === "/repos/org/repo/issues/9")
+        return respond({ user: { login: "prior-livevariant-bot" }, state: "open", pull_request: {} });
+      if (path === "/repos/org/repo/pulls/9")
+        return respond({ head: { ref: "operon/x", repo: { full_name: "prior-livevariant-bot/repo" } } });
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const { getIssueRef } = await import("./github.js");
+    const ref = await getIssueRef({ token: "pat", userAgent: "test", fetch: fetchImpl }, "org/repo", 9);
+    expect(ref).toEqual({
+      kind: "pr",
+      author: "prior-livevariant-bot",
+      state: "open",
+      headRepo: "prior-livevariant-bot/repo",
+      headBranch: "operon/x"
+    });
   });
 });

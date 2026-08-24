@@ -19,22 +19,41 @@ const HELP = `operon: the doors out of this wake
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
-  operon status                          your open PRs and issues and the latest
-                                         comments on them, so you can follow the
-                                         conversation on what you proposed
-  operon issue <owner/repo> <bodyfile> --title <t>
-                                         open an issue on an allowlisted repo; the
-                                         body is read from bodyfile (a markdown file
-                                         in your repo). Swept before it leaves.
-  operon pr <owner/repo> [dir] --title <t> --body <b>
+
+GitHub doors (a Gatekeeper holds the credential and does the writes; you
+submit data). Your account authored a thing = you may update it anywhere;
+allowlisted repos = you may read and comment on anything in them.
+
+  operon github status                   two lists: your own PRs/issues with their
+                                         state and latest (review) comments, and
+                                         recently active items by OTHERS in the
+                                         allowlisted repos, so new issues and
+                                         review feedback reach you each wake
+  operon github thread <owner/repo> <n>  the full conversation on one PR/issue:
+                                         body, comments, reviews, inline review
+                                         comments (with their ids, for replies)
+  operon github comment <owner/repo> <n> --body <text> | --body-file <f> [--reply-to <id>]
+                                         comment on a PR/issue (yours anywhere, or
+                                         any in an allowlisted repo); --reply-to
+                                         answers inside an inline review thread
+  operon github pr <owner/repo> [dir] --title <t> --body <b>
                                          propose a change to an allowlisted repo: the
                                          files in dir (default "pr") are added/updated
-                                         on a branch and a pull request is opened. Swept
-                                         like publish. No git and no token run here; a
-                                         Gatekeeper does the commit and PR via the API.
+                                         on a branch and a pull request is opened.
                                          For an EXISTING file, put the full new content
                                          at the same path; fetch its current form off
                                          the public repo yourself first.
+  operon github push <owner/repo> <n> [dir] --message <m>
+                                         push follow-up files to YOUR OWN open PR's
+                                         branch (answer review feedback with commits);
+                                         dir defaults to "pr", swept like publish
+  operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]
+                                         edit YOUR OWN PR/issue title or body, or
+                                         close/reopen it
+  operon github issue <owner/repo> <bodyfile> --title <t>
+                                         open an issue on an allowlisted repo; the
+                                         body is read from bodyfile (a markdown file
+                                         in your repo). Swept before it leaves.
 
 Doors answer with named errors when something is wrong; an error names
 what to fix. A door that is not wired yet answers *_not_wired.`;
@@ -73,8 +92,7 @@ export function parseArgs(argv: string[]): CliCall | "help" {
   switch (command) {
     case "capabilities":
       return { path: "/capabilities", payload: {} };
-    case "status":
-      return { path: "/status", payload: {} };
+
     case "notify": {
       const text = rest.join(" ").trim();
       if (!text) throw new CliUsageError("usage: operon notify <text...>");
@@ -94,27 +112,111 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       }
       return { path: "/email", payload: { to, subject, text: body } };
     }
-    case "issue": {
-      const [repo, bodyFile] = positionals(rest);
-      const title = flagValue(rest, "--title");
-      if (!repo || !repo.includes("/") || !bodyFile || !title) {
-        throw new CliUsageError("usage: operon issue <owner/repo> <bodyfile> --title <t>");
+    case "github":
+      return parseGithub(rest);
+    default:
+      throw new CliUsageError(`unknown command "${command}"; run operon --help`);
+  }
+}
+
+function parseGithub(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  const intNumber = (raw: string | undefined): number => {
+    const n = Number(raw);
+    if (!raw || !Number.isInteger(n) || n <= 0) {
+      throw new CliUsageError("expected a PR/issue number");
+    }
+    return n;
+  };
+  switch (sub) {
+    case "status":
+      return { path: "/github/status", payload: {} };
+    case "thread": {
+      const [repo, num] = positionals(rest);
+      if (!repo || !repo.includes("/")) {
+        throw new CliUsageError("usage: operon github thread <owner/repo> <number>");
       }
-      return { path: "/issue", payload: { repo, bodyFile, title } };
+      return { path: "/github/thread", payload: { repo, number: intNumber(num) } };
+    }
+    case "comment": {
+      const [repo, num] = positionals(rest);
+      const body = flagValue(rest, "--body");
+      const bodyFile = flagValue(rest, "--body-file");
+      const replyTo = flagValue(rest, "--reply-to");
+      if (!repo || !repo.includes("/") || (!body && !bodyFile)) {
+        throw new CliUsageError(
+          "usage: operon github comment <owner/repo> <number> --body <text> | --body-file <f> [--reply-to <id>]"
+        );
+      }
+      return {
+        path: "/github/comment",
+        payload: {
+          repo,
+          number: intNumber(num),
+          ...(body ? { body } : {}),
+          ...(bodyFile ? { bodyFile } : {}),
+          ...(replyTo ? { replyTo: intNumber(replyTo) } : {})
+        }
+      };
     }
     case "pr": {
       const [repo, dir] = positionals(rest);
       const title = flagValue(rest, "--title");
       const body = flagValue(rest, "--body");
       if (!repo || !repo.includes("/") || !title || !body) {
+        throw new CliUsageError("usage: operon github pr <owner/repo> [dir] --title <t> --body <b>");
+      }
+      return { path: "/github/pr", payload: { repo, dir: dir ?? "pr", title, body } };
+    }
+    case "push": {
+      const [repo, num, dir] = positionals(rest);
+      const message = flagValue(rest, "--message");
+      if (!repo || !repo.includes("/") || !message) {
         throw new CliUsageError(
-          "usage: operon pr <owner/repo> [dir] --title <t> --body <b>"
+          "usage: operon github push <owner/repo> <number> [dir] --message <m>"
         );
       }
-      return { path: "/pr", payload: { repo, dir: dir ?? "pr", title, body } };
+      return {
+        path: "/github/push",
+        payload: { repo, number: intNumber(num), dir: dir ?? "pr", message }
+      };
+    }
+    case "update": {
+      const [repo, num] = positionals(rest);
+      const title = flagValue(rest, "--title");
+      const bodyFile = flagValue(rest, "--body-file");
+      const state = flagValue(rest, "--state");
+      if (!repo || !repo.includes("/") || (!title && !bodyFile && !state)) {
+        throw new CliUsageError(
+          "usage: operon github update <owner/repo> <number> [--title <t>] [--body-file <f>] [--state open|closed]"
+        );
+      }
+      if (state && state !== "open" && state !== "closed") {
+        throw new CliUsageError("--state must be open or closed");
+      }
+      return {
+        path: "/github/update",
+        payload: {
+          repo,
+          number: intNumber(num),
+          ...(title ? { title } : {}),
+          ...(bodyFile ? { bodyFile } : {}),
+          ...(state ? { state } : {})
+        }
+      };
+    }
+    case "issue": {
+      const [repo, bodyFile] = positionals(rest);
+      const title = flagValue(rest, "--title");
+      if (!repo || !repo.includes("/") || !bodyFile || !title) {
+        throw new CliUsageError("usage: operon github issue <owner/repo> <bodyfile> --title <t>");
+      }
+      return { path: "/github/issue", payload: { repo, bodyFile, title } };
     }
     default:
-      throw new CliUsageError(`unknown command "${command}"; run operon --help`);
+      throw new CliUsageError(
+        'unknown github subcommand; expected one of: status, thread, comment, pr, push, update, issue'
+      );
   }
 }
 

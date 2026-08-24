@@ -6,7 +6,19 @@ import {
   Ledger,
   GitDataError
 } from "@operon/worker-kit";
-import { listActivity, openIssue, openPullRequest, type PrRequest } from "./github.js";
+import {
+  authenticatedLogin,
+  getIssueRef,
+  getThread,
+  listActivity,
+  openIssue,
+  openPullRequest,
+  postComment,
+  pushToPr,
+  replyToReviewComment,
+  updateIssue,
+  type PrRequest
+} from "./github.js";
 
 export { Ledger };
 export * from "./github.js";
@@ -165,11 +177,197 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   const pat = typeof body.value.agentId === "string" ? patForAgent(env, body.value.agentId) : undefined;
   if (!pat) return errorResponse(500, "credential_unconfigured");
   try {
-    const items = await listActivity({ token: pat, userAgent: "operon-gatekeeper-pr" });
-    return json({ ok: true, items });
+    const activity = await listActivity({ token: pat, userAgent: "operon-gatekeeper-pr" }, allowlist(env));
+    return json({ ok: true, ...activity });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
     return errorResponse(502, "status_failed", detail.slice(0, 300));
+  }
+}
+
+
+/**
+ * Conversation policy. Reading a thread or commenting is allowed on any
+ * item in an allowlisted repo (answering users' issues is the point) and
+ * on any item this agent's own account authored anywhere (its own PRs on
+ * outside repos). Updating or pushing to an item requires AUTHORSHIP, not
+ * just the allowlist: an agent must never rewrite or close someone else's
+ * thread, and pushes additionally require the PR's head to live on the
+ * agent's own account (its fork), never a branch of the upstream repo.
+ */
+
+async function conversationAccess(
+  env: Env,
+  pat: string,
+  repo: string,
+  number: number
+): Promise<{ ref: Awaited<ReturnType<typeof getIssueRef>>; own: boolean } | Response> {
+  const login = await authenticatedLogin({ token: pat, userAgent: "operon-gatekeeper-pr" });
+  const ref = await getIssueRef({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number);
+  const own = ref.author === login;
+  if (!own && !allowlist(env).includes(repo)) {
+    return errorResponse(403, "not_own_and_not_allowlisted", `${repo}#${number}`);
+  }
+  return { ref, own };
+}
+
+async function handleThread(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; repo?: string; number?: number }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const access = await conversationAccess(env, pat, repo, number);
+    if (access instanceof Response) return access;
+    return json({ ok: true, thread: await getThread({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number) });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    return errorResponse(502, "thread_failed", detail.slice(0, 300));
+  }
+}
+
+async function handleComment(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{
+    agentId?: string;
+    repo?: string;
+    number?: number;
+    body?: string;
+    replyTo?: number;
+  }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number, body: text, replyTo } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  if (typeof text !== "string" || !text) return errorResponse(400, "missing_body");
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const access = await conversationAccess(env, pat, repo, number);
+    if (access instanceof Response) {
+      await ledger(env).append("comment_denied", { agentId, repo, number });
+      return access;
+    }
+    const api = { token: pat, userAgent: "operon-gatekeeper-pr" };
+    const result =
+      typeof replyTo === "number"
+        ? await replyToReviewComment(api, repo, number, replyTo, text)
+        : await postComment(api, repo, number, text);
+    await ledger(env).append("comment_posted", { agentId, repo, number, replyTo, url: result.url });
+    return json({ ok: true, ...result });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    await ledger(env).append("comment_failed", { agentId, repo, number, detail: detail.slice(0, 300) });
+    return errorResponse(502, "comment_failed", detail.slice(0, 300));
+  }
+}
+
+async function handleUpdate(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{
+    agentId?: string;
+    repo?: string;
+    number?: number;
+    title?: string;
+    body?: string;
+    state?: string;
+  }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number, title, body: text, state } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  if (state !== undefined && state !== "open" && state !== "closed") {
+    return errorResponse(400, "invalid_state");
+  }
+  const patch: { title?: string; body?: string; state?: "open" | "closed" } = {};
+  if (typeof title === "string" && title) patch.title = title;
+  if (typeof text === "string" && text) patch.body = text;
+  if (state) patch.state = state;
+  if (Object.keys(patch).length === 0) return errorResponse(400, "empty_patch");
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const access = await conversationAccess(env, pat, repo, number);
+    if (access instanceof Response) return access;
+    if (!access.own) {
+      await ledger(env).append("update_denied", { agentId, repo, number, reason: "not_author" });
+      return errorResponse(403, "not_author", "only the item's own author may update it");
+    }
+    const result = await updateIssue({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number, patch);
+    await ledger(env).append("item_updated", { agentId, repo, number, fields: Object.keys(patch) });
+    return json({ ok: true, ...result });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    return errorResponse(502, "update_failed", detail.slice(0, 300));
+  }
+}
+
+async function handlePush(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{
+    agentId?: string;
+    repo?: string;
+    number?: number;
+    message?: string;
+    files?: Array<{ path?: string; contentBase64?: string }>;
+  }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number, message, files } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  if (typeof message !== "string" || !message) return errorResponse(400, "missing_message");
+  if (!Array.isArray(files) || files.length === 0) return errorResponse(400, "no_files");
+  for (const file of files) {
+    if (
+      typeof file?.path !== "string" ||
+      !SAFE_PATH.test(file.path) ||
+      file.path.includes("..") ||
+      file.path.startsWith("/") ||
+      typeof file.contentBase64 !== "string"
+    ) {
+      return errorResponse(400, "invalid_file", String(file?.path));
+    }
+  }
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const api = { token: pat, userAgent: "operon-gatekeeper-pr" };
+    const login = await authenticatedLogin(api);
+    const ref = await getIssueRef(api, repo, number);
+    if (ref.kind !== "pr") return errorResponse(400, "not_a_pr");
+    if (ref.author !== login) {
+      await ledger(env).append("push_denied", { agentId, repo, number, reason: "not_author" });
+      return errorResponse(403, "not_author", "only the PR's own author may push to it");
+    }
+    if (!ref.headRepo || !ref.headBranch || !ref.headRepo.startsWith(`${login}/`)) {
+      await ledger(env).append("push_denied", { agentId, repo, number, reason: "head_not_own_fork" });
+      return errorResponse(403, "head_not_own_fork", String(ref.headRepo));
+    }
+    const result = await pushToPr(
+      api,
+      ref.headRepo,
+      ref.headBranch,
+      message,
+      files as Array<{ path: string; contentBase64: string }>
+    );
+    await ledger(env).append("pr_pushed", { agentId, repo, number, commit: result.commitSha, files: files.length });
+    return json({ ok: true, ...result });
+  } catch (error) {
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    await ledger(env).append("push_failed", { agentId, repo, number, detail: detail.slice(0, 300) });
+    return errorResponse(502, "push_failed", detail.slice(0, 300));
   }
 }
 
@@ -184,6 +382,18 @@ export default {
     }
     if (url.pathname === "/gatekeeper/status" && request.method === "POST") {
       return handleStatus(request, env);
+    }
+    if (url.pathname === "/gatekeeper/thread" && request.method === "POST") {
+      return handleThread(request, env);
+    }
+    if (url.pathname === "/gatekeeper/comment" && request.method === "POST") {
+      return handleComment(request, env);
+    }
+    if (url.pathname === "/gatekeeper/update" && request.method === "POST") {
+      return handleUpdate(request, env);
+    }
+    if (url.pathname === "/gatekeeper/push" && request.method === "POST") {
+      return handlePush(request, env);
     }
     if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
       const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
