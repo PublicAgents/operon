@@ -3,7 +3,7 @@ import type { WakeRecord } from "@operon/core";
 import {
   decideAlarmAction,
   HEARTBEAT_INTERVAL_MS,
-  HARD_WALL_MS
+  DEFAULT_HARD_WALL_MS
 } from "./wake-lifecycle.js";
 
 const now = Date.parse("2026-08-24T12:00:00Z");
@@ -31,10 +31,20 @@ describe("decideAlarmAction", () => {
   });
 
   it("re-arms right up to the hard wall, then stops the wake past it", () => {
-    expect(decideAlarmAction(running(HARD_WALL_MS - 1), true, now).kind).toBe("rearm");
-    expect(decideAlarmAction(running(HARD_WALL_MS + 1), true, now)).toEqual({
+    expect(decideAlarmAction(running(DEFAULT_HARD_WALL_MS - 1), true, now).kind).toBe(
+      "rearm"
+    );
+    expect(decideAlarmAction(running(DEFAULT_HARD_WALL_MS + 1), true, now)).toEqual({
       kind: "hard_timeout"
     });
+  });
+
+  it("honors a per-agent wall instead of the default", () => {
+    const wall = 30 * 60_000;
+    expect(decideAlarmAction(running(wall - 1), true, now, wall).kind).toBe("rearm");
+    expect(decideAlarmAction(running(wall + 1), true, now, wall).kind).toBe(
+      "hard_timeout"
+    );
   });
 
   it("reconciles a running record whose container is gone (lost monitor)", () => {

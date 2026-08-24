@@ -19,6 +19,13 @@ export interface RosterAgent {
   model: string;
   /** Model to fall back to; a degraded wake beats a missed wake. */
   fallbackModel?: string;
+  /**
+   * Hard wall for one wake, minutes (default 120). A wake past it is
+   * stopped and its unpushed work is lost, so size generously: this is a
+   * hung-session backstop, not a productivity budget. Keep it under the
+   * agent's cadence gap.
+   */
+  maxWakeMinutes?: number;
   /** Zone hosts this agent may publish to: "@" for the apex, otherwise subdomain labels. */
   hosts: string[];
   enabled: boolean;
@@ -74,6 +81,18 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     fallbackModel = requireString(raw.fallbackModel, `${path}.fallbackModel`);
   }
 
+  let maxWakeMinutes: number | undefined;
+  if (raw.maxWakeMinutes !== undefined) {
+    if (
+      typeof raw.maxWakeMinutes !== "number" ||
+      !Number.isInteger(raw.maxWakeMinutes) ||
+      raw.maxWakeMinutes < 1
+    ) {
+      fail(`${path}.maxWakeMinutes`, "must be a positive integer (minutes)");
+    }
+    maxWakeMinutes = raw.maxWakeMinutes;
+  }
+
   if (!Array.isArray(raw.hosts) || raw.hosts.length === 0) {
     fail(`${path}.hosts`, "must be a non-empty array");
   }
@@ -89,7 +108,17 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     fail(`${path}.enabled`, "must be a boolean");
   }
 
-  return { id, stateRepo, cadence, harness, model, fallbackModel, hosts, enabled: raw.enabled };
+  return {
+    id,
+    stateRepo,
+    cadence,
+    harness,
+    model,
+    fallbackModel,
+    maxWakeMinutes,
+    hosts,
+    enabled: raw.enabled
+  };
 }
 
 export function parseRoster(json: string): Roster {

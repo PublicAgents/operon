@@ -8,6 +8,9 @@ import type { RosterAgent } from "./roster.js";
 
 export type WakeTrigger = "cron" | "manual";
 
+/** Default hard wall per wake, minutes; roster maxWakeMinutes overrides. */
+export const DEFAULT_MAX_WAKE_MINUTES = 120;
+
 export interface WakeInit {
   wakeId: string;
   trigger: WakeTrigger;
@@ -52,7 +55,8 @@ export const WAKE_ENV = {
   notifyUrl: "OPERON_NOTIFY_URL",
   notifyToken: "OPERON_NOTIFY_TOKEN",
   secretDenylist: "OPERON_SECRET_DENYLIST",
-  harnessExtraArgs: "OPERON_HARNESS_EXTRA_ARGS"
+  harnessExtraArgs: "OPERON_HARNESS_EXTRA_ARGS",
+  maxWakeMinutes: "OPERON_MAX_WAKE_MINUTES"
 } as const;
 
 export function wakeEnv(
@@ -68,7 +72,10 @@ export function wakeEnv(
     [WAKE_ENV.harness]: init.agent.harness,
     [WAKE_ENV.model]: init.agent.model,
     [WAKE_ENV.githubToken]: secrets.githubToken,
-    [WAKE_ENV.mindCredential]: secrets.mindCredential
+    [WAKE_ENV.mindCredential]: secrets.mindCredential,
+    [WAKE_ENV.maxWakeMinutes]: String(
+      init.agent.maxWakeMinutes ?? DEFAULT_MAX_WAKE_MINUTES
+    )
   };
   if (init.agent.fallbackModel) env[WAKE_ENV.fallbackModel] = init.agent.fallbackModel;
   if (options.notifyUrl) env[WAKE_ENV.notifyUrl] = options.notifyUrl;

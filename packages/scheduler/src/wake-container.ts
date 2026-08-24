@@ -3,7 +3,7 @@ import type { WakeRecord, WakeTrigger } from "@operon/core";
 import {
   decideAlarmAction,
   HEARTBEAT_INTERVAL_MS,
-  HARD_WALL_MS
+  DEFAULT_HARD_WALL_MS
 } from "./wake-lifecycle.js";
 
 /**
@@ -29,6 +29,8 @@ export interface LaunchArgs {
   env: Record<string, string>;
   /** A running wake older than this is reported stale to callers. */
   staleAfterMs: number;
+  /** Hard wall for this wake in ms; past it the container is stopped. */
+  hardWallMs: number;
 }
 
 export type LaunchResult =
@@ -42,6 +44,7 @@ interface WakeEnv {
 }
 
 const CURRENT = "current";
+const HARD_WALL = "hardWallMs";
 
 function rowKey(record: WakeRecord): string {
   return `wake:${record.startedAt}:${record.wakeId}`;
@@ -94,6 +97,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       status: "running"
     };
     await this.ctx.storage.put(CURRENT, record);
+    await this.ctx.storage.put(HARD_WALL, args.hardWallMs);
     await this.ctx.storage.put(rowKey(record), record);
 
     try {
@@ -143,10 +147,13 @@ export class WakeContainer extends DurableObject<WakeEnv> {
 
   override async alarm(): Promise<void> {
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
+    const hardWallMs =
+      (await this.ctx.storage.get<number>(HARD_WALL)) ?? DEFAULT_HARD_WALL_MS;
     const action = decideAlarmAction(
       current,
       this.ctx.container?.running ?? false,
-      Date.now()
+      Date.now(),
+      hardWallMs
     );
     switch (action.kind) {
       case "idle":
@@ -161,7 +168,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         } catch {
           // Destroy failing must not stop the bookkeeping below.
         }
-        const detail = `hard_timeout: wake exceeded ${HARD_WALL_MS / 60000} minutes and was stopped`;
+        const detail = `hard_timeout: wake exceeded ${Math.round(hardWallMs / 60000)} minutes and was stopped`;
         await this.finish(record, "failed", detail);
         await this.notify(`[${record.agentId}] wake ${record.wakeId} ${detail}`);
         return;
@@ -220,17 +227,23 @@ export class WakeContainer extends DurableObject<WakeEnv> {
   ): Promise<void> {
     if (this.finishedWakeIds.has(record.wakeId)) return;
     this.finishedWakeIds.add(record.wakeId);
-    const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
-    if (!current || current.wakeId !== record.wakeId) return;
     const finished: WakeRecord & { reason?: string } = {
       ...record,
       status,
       endedAt: new Date().toISOString(),
       ...(reason ? { reason } : {})
     };
-    await this.ctx.storage.put(rowKey(record), finished);
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.delete(CURRENT);
+    // The ownership check and the cleanup are one transaction: a stale
+    // finisher that lost the lock to a newer launch can neither write its
+    // row nor delete the new wake's lock or heartbeat, atomically and
+    // regardless of how coroutines or events interleave.
+    await this.ctx.storage.transaction(async txn => {
+      const current = await txn.get<WakeRecord>(CURRENT);
+      if (!current || current.wakeId !== record.wakeId) return;
+      await txn.put(rowKey(record), finished);
+      await txn.deleteAlarm();
+      await txn.delete(CURRENT);
+    });
   }
 
   /** Best-effort operator alert through the telegram Gatekeeper; never throws. */

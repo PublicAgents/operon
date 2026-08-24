@@ -19,7 +19,8 @@ export const ENV = {
   notifyUrl: "OPERON_NOTIFY_URL",
   notifyToken: "OPERON_NOTIFY_TOKEN",
   secretDenylist: "OPERON_SECRET_DENYLIST",
-  harnessExtraArgs: "OPERON_HARNESS_EXTRA_ARGS"
+  harnessExtraArgs: "OPERON_HARNESS_EXTRA_ARGS",
+  maxWakeMinutes: "OPERON_MAX_WAKE_MINUTES"
 } as const;
 
 export interface WakeConfig {
@@ -37,6 +38,8 @@ export interface WakeConfig {
   secretDenylist: string[];
   /** Extra CLI arguments for the harness session, deployment policy (see wake contract). */
   harnessExtraArgs: string[];
+  /** The wake's hard wall in minutes; the session gets this minus a margin. */
+  maxWakeMinutes: number;
 }
 
 export class ConfigError extends Error {
@@ -87,6 +90,20 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
       .split(",")
       .map(entry => entry.trim())
       .filter(entry => entry.length > 0),
-    harnessExtraArgs: parseExtraArgs(env[ENV.harnessExtraArgs])
+    harnessExtraArgs: parseExtraArgs(env[ENV.harnessExtraArgs]),
+    maxWakeMinutes: parseMaxWakeMinutes(env[ENV.maxWakeMinutes])
   };
+}
+
+const DEFAULT_MAX_WAKE_MINUTES = 120;
+
+function parseMaxWakeMinutes(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_MAX_WAKE_MINUTES;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ConfigError(
+      `invalid_env: ${ENV.maxWakeMinutes} must be a positive integer (minutes)`
+    );
+  }
+  return value;
 }

@@ -1,4 +1,4 @@
-import type { WakeRecord } from "@operon/core";
+import { DEFAULT_MAX_WAKE_MINUTES, type WakeRecord } from "@operon/core";
 
 /**
  * Pure decision logic for the WakeContainer's alarm heartbeat, extracted so
@@ -16,12 +16,13 @@ import type { WakeRecord } from "@operon/core";
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 
 /**
- * A wake older than this is forcibly stopped. Matches the stale threshold:
- * with the heartbeat keeping healthy wakes alive, only a hung session ever
- * gets here, and stopping it (with the operator notified) beats holding the
- * agent's wake lock forever.
+ * Default hard wall: a wake older than this is forcibly stopped, losing any
+ * unpushed work, so the default is generous. This is a hung-session
+ * backstop, not a productivity budget; the stale threshold (45 min, in the
+ * scheduler) reports a long-running wake to the operator far earlier
+ * without touching it. Per-agent override: roster maxWakeMinutes.
  */
-export const HARD_WALL_MS = 45 * 60 * 1000;
+export const DEFAULT_HARD_WALL_MS = DEFAULT_MAX_WAKE_MINUTES * 60 * 1000;
 
 export type AlarmAction =
   /** No wake in progress: let the alarm chain end. */
@@ -41,7 +42,7 @@ export function decideAlarmAction(
   current: WakeRecord | undefined,
   containerRunning: boolean,
   nowMs: number,
-  hardWallMs = HARD_WALL_MS
+  hardWallMs = DEFAULT_HARD_WALL_MS
 ): AlarmAction {
   if (!current) return { kind: "idle" };
   if (!containerRunning) return { kind: "reconcile" };
