@@ -15,6 +15,8 @@ interface Env {
   OPERATOR_API_TOKEN?: string;
   OPERATOR_CHAT_ID?: string;
   ROSTER?: string;
+  EMAIL_URL?: string;
+  EMAIL_SERVICE_TOKEN?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -46,22 +48,82 @@ const OPERATOR_HELP =
   "Commands:\n" +
   "/wake <agent-id> — wake an agent now\n" +
   "/tell <agent-id> <message> — message one agent (delivered on its next wake)\n" +
+  "/approve <agent-id> <held-id> — release a held first-contact email (buttons on the hold message do this too)\n" +
+  "/reject <agent-id> <held-id> — discard a held email\n" +
   "/disable <agent-id> — KILL SWITCH: refuse all wakes (cron and manual) and kill a wake in flight\n" +
   "/enable <agent-id> — lift the kill switch\n" +
   "/help — this text\n" +
   "A plain message goes to ALL agents on their next wakes.";
 
-async function sendToOperator(env: Env, text: string): Promise<boolean> {
+interface NotifyAction {
+  label: string;
+  kind: string;
+  agentId: string;
+  id: string;
+}
+
+/** Callback data is capped at 64 bytes by Telegram; keep the encoding tight. */
+function callbackData(action: NotifyAction): string | null {
+  const prefix = action.kind === "email_approve" ? "ea" : action.kind === "email_reject" ? "er" : null;
+  if (!prefix) return null;
+  const data = `${prefix}:${action.agentId}:${action.id}`;
+  return data.length <= 64 ? data : null;
+}
+
+async function sendToOperator(env: Env, text: string, actions?: NotifyAction[]): Promise<boolean> {
   if (!env.TELEGRAM_BOT_TOKEN || !env.OPERATOR_CHAT_ID) return false;
+  const buttons = (actions ?? [])
+    .map(action => {
+      const data = callbackData(action);
+      return data ? { text: action.label, callback_data: data } : null;
+    })
+    .filter((b): b is { text: string; callback_data: string } => b !== null);
   const response = await fetch(
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: env.OPERATOR_CHAT_ID, text })
+      body: JSON.stringify({
+        chat_id: env.OPERATOR_CHAT_ID,
+        text,
+        ...(buttons.length > 0 ? { reply_markup: { inline_keyboard: [buttons] } } : {})
+      })
     }
   );
   return response.ok;
+}
+
+async function answerCallback(env: Env, callbackId: string, text: string): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN) return;
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackId, text })
+  }).catch(() => undefined);
+}
+
+/** Execute an approve/reject against the email Gatekeeper. */
+async function emailDecision(
+  env: Env,
+  approve: boolean,
+  agentId: string,
+  heldId: string
+): Promise<{ ok: boolean; detail: string }> {
+  if (!env.EMAIL_URL || !env.EMAIL_SERVICE_TOKEN) {
+    return { ok: false, detail: "email gatekeeper not wired" };
+  }
+  const verb = approve ? "approve" : "reject";
+  const response = await fetch(`${env.EMAIL_URL}/gatekeeper/email/${verb}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${env.EMAIL_SERVICE_TOKEN}`
+    },
+    body: JSON.stringify({ agentId, heldId })
+  });
+  const detail = (await response.text()).slice(0, 200);
+  await ledger(env).append("email_decision", { verb, agentId, heldId, status: response.status });
+  return { ok: response.ok, detail };
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -176,6 +238,37 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       }
       return json({ ok: true });
     }
+    case "approve": {
+      const result = await emailDecision(env, action.approve, action.agentId, action.heldId);
+      await sendToOperator(
+        env,
+        result.ok
+          ? `${action.approve ? "approved and sent" : "rejected"}: ${action.agentId} held ${action.heldId.slice(0, 8)}`
+          : `${action.approve ? "approve" : "reject"} failed: ${result.detail}`
+      );
+      return json({ ok: true });
+    }
+    case "callback": {
+      const match = /^(ea|er):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
+      if (!match) {
+        await answerCallback(env, action.callbackId, "unknown action");
+        return json({ ok: true });
+      }
+      const approve = match[1] === "ea";
+      const result = await emailDecision(env, approve, match[2], match[3]);
+      await answerCallback(
+        env,
+        action.callbackId,
+        result.ok ? (approve ? "Approved, sending" : "Rejected") : `Failed: ${result.detail.slice(0, 100)}`
+      );
+      await sendToOperator(
+        env,
+        result.ok
+          ? `${approve ? "approved and sent" : "rejected"}: ${match[2]} held ${match[3].slice(0, 8)}`
+          : `${approve ? "approve" : "reject"} failed: ${result.detail}`
+      );
+      return json({ ok: true });
+    }
     case "help":
       await sendToOperator(env, OPERATOR_HELP);
       return json({ ok: true });
@@ -192,7 +285,7 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("notify_denied", { status: denied.status });
     return denied;
   }
-  const body = await readJson<{ text?: string; agentId?: string }>(request);
+  const body = await readJson<{ text?: string; agentId?: string; actions?: NotifyAction[] }>(request);
   if (!body.ok) {
     await ledger(env).append("notify_failed", { reason: "malformed_json" });
     return errorResponse(400, "malformed_json");
@@ -202,7 +295,7 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("notify_failed", { reason: "empty_text" });
     return errorResponse(400, "empty_text");
   }
-  const delivered = await sendToOperator(env, text.slice(0, 4000));
+  const delivered = await sendToOperator(env, text.slice(0, 4000), body.value.actions);
   await ledger(env).append("notify", { delivered, length: text.length });
   // Attributed notifies join the conversation log, so when the operator
   // answers later, the agent's next wake sees what it had said. Recorded
