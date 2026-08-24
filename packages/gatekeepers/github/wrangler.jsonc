@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-github",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LEDGER",
+        "class_name": "Ledger"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Ledger"]
+    }
+  ],
+  "vars": {
+    // Deployments override with their real roster JSON (same value the
+    // scheduler gets); the token route refuses agents it does not know.
+    "ROSTER": "{\"zone\":\"example-colony.com\",\"agents\":[]}"
+  }
+  // Secrets, set per deployment (wrangler secret put):
+  //   GITHUB_APP_ID             the GitHub App's numeric id
+  //   GITHUB_APP_PRIVATE_KEY    the App's private key, PKCS8 PEM
+  //   GITHUB_INSTALLATION_ID    the installation on the org holding state repos
+  //   TOKEN_SERVICE_TOKEN       bearer accepted on POST /token (unused by
+  //                             service-binding callers, required for any
+  //                             direct HTTP exposure; keep it set regardless)
+}

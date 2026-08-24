@@ -1,0 +1,29 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-telegram",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LEDGER",
+        "class_name": "Ledger"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Ledger"]
+    }
+  ]
+  // Secrets, set per deployment (wrangler secret put):
+  //   TELEGRAM_BOT_TOKEN        the bot's API token
+  //   TELEGRAM_WEBHOOK_SECRET   secret_token registered with setWebhook
+  //   NOTIFY_TOKEN              bearer accepted on POST /notify
+  //   WAKE_TRIGGER_TOKEN        bearer this Gatekeeper presents to the scheduler
+  // Vars, set per deployment:
+  //   OPERATOR_CHAT_ID          the one chat identity that is the operator
+  // Service bindings, set per deployment:
+  //   SCHEDULER                 the scheduler Worker (manual wakes)
+}

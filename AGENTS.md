@@ -17,14 +17,18 @@ implementation needs to deviate, update the spec in the same change.
 ```
 specs/          Numbered design specs. Spec-first: behavior changes start here.
 packages/
-  scheduler/    Worker: cron wake dispatch + per-agent Durable Object lock
-  container/    Wake container image + entrypoint + presleep verifier
-  gatekeepers/  One small Worker per capability (telegram, deploy, github, spend)
-  console/      Access-gated operator page
+  core/         Platform-neutral logic: roster, cadence, the wake env contract
+  worker-kit/   Shared Worker pieces: Ledger DO, bearer auth, JSON responses
+  scheduler/    Worker: cron wake dispatch + the per-agent WakeContainer DO
+                (wake lock, wake ledger, and container supervisor in one)
+  container/    Wake container image + entrypoint + harness adapters +
+                presleep verifier (self-contained: no cross-package runtime
+                imports; config.spec.ts pins its env names to core's)
+  gatekeepers/  One small Worker per capability (telegram and github today;
+                deploy, spend, post-office per the spec)
 charters/       Charter template only. Per-tenant charters, rosters, and
                 tenant specs live in each colony's own deployment repo,
                 never here: this repo stays generic and clonable.
-docs/           Operator documentation
 ```
 
 ## Hard rules
@@ -58,9 +62,11 @@ Never weaken them to make a task easier; if one blocks you, stop and say so.
 
 ## Conventions
 
-- Node 24, npm workspaces, TypeScript strict. Workers use `wrangler` with
-  `wrangler.jsonc` per package; test with `vitest` (and
-  `@cloudflare/vitest-pool-workers` for Worker code).
+- Node 24, npm workspaces, nx (`npx nx run-many -t lint build test typecheck`
+  must pass; run `npx nx sync` when project references drift), TypeScript
+  strict with `nodenext` modules. Workers use `wrangler` with
+  `wrangler.jsonc` per package; test with `vitest`, node environment, pure
+  functions factored out of handlers rather than runtime harnesses.
 - Bias to zero dependencies. Every package added to a Worker or the container
   is attack surface on a system that runs unattended; justify additions in
   the PR description.

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Same pinned version and checksum as the wake container image, so
+      # the gitleaks integration tests run here instead of skipping.
+      - name: Install gitleaks
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Lint, build, test, typecheck
+        run: npx nx run-many -t lint build test typecheck
+
+  bundle:
+    # Proves the Workers bundle and the wake container image builds; the
+    # scheduler dry-run performs the Docker build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Cross-package imports resolve through each package's dist, so the
+      # bundle is meaningless without a build first (same reason the colony
+      # deploy script requires build:chassis).
+      - name: Build packages
+        run: npx nx run-many -t build
+
+      - name: Wrangler dry-run (scheduler + container image)
+        working-directory: packages/scheduler
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-scheduler
+
+      - name: Wrangler dry-run (telegram Gatekeeper)
+        working-directory: packages/gatekeepers/telegram
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-telegram
+
+      - name: Wrangler dry-run (github Gatekeeper)
+        working-directory: packages/gatekeepers/github
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-github
