@@ -164,3 +164,20 @@ export function verifyPresleep(
   );
   return { ok: failures.length === 0, failures, blockPush };
 }
+
+/**
+ * The submitted content reduced to lines that do NOT already exist in the
+ * upstream version of the same file. Used to scope the outbound sweep of
+ * an EXISTING upstream file to what the agent actually introduced: a line
+ * already published in the target repo cannot be new exfiltration, and
+ * large community files routinely contain other people's scanner-tripping
+ * text (operon#11). Exact line match, order-insensitive: any line the
+ * agent wrote or modified is included; only verbatim upstream lines drop.
+ */
+export function linesNotIn(content: string, upstream: string): string {
+  const upstreamLines = new Set(upstream.split("\n"));
+  return content
+    .split("\n")
+    .filter(line => !upstreamLines.has(line))
+    .join("\n");
+}

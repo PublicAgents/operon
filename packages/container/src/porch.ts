@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { mkdir as mkdirFs, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname } from "node:path";
 import { join, relative } from "node:path";
 import { runGitleaks } from "./gitleaks.js";
-import { scanForSecrets, type ChangedFile } from "./presleep.js";
+import { linesNotIn, scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
 
 /**
@@ -180,10 +182,20 @@ export class Porch {
     return ok();
   }
 
-  /** Read a state-repo subdirectory into a swept, size-checked file set. */
+  /**
+   * Read a state-repo subdirectory into a swept, size-checked file set.
+   * reduceForGitleaks, when given, maps each file to the content GITLEAKS
+   * examines (e.g. only the lines added relative to the upstream version,
+   * operon#11): its generic patterns are what false-positive on other
+   * people's upstream text. The DENYLIST scan always runs on the FULL
+   * submitted content: it detects split-secret assembly, so dropping
+   * unchanged lines would let an added fragment complete a secret whose
+   * other half already sits upstream, and the full file is what ships.
+   */
   private async collectSwept(
     dirInput: unknown,
-    defaultDir: string
+    defaultDir: string,
+    reduceForGitleaks?: (path: string, text: string) => Promise<string>
   ): Promise<{ files: CollectedFile[]; error?: JsonResult }> {
     const dir = typeof dirInput === "string" && dirInput.length > 0 ? dirInput : defaultDir;
     if (dir.includes("..") || dir.startsWith("/")) {
@@ -204,18 +216,31 @@ export class Porch {
     const oversize = files.find(file => file.bytes.byteLength > MAX_FILE_BYTES);
     if (oversize) return { files: [], error: fail(413, "file_too_large", oversize.path) };
 
-    // Sweep before anything leaves the container: same rules as the
-    // presleep gate, plus gitleaks over the directory.
-    const scanInput: ChangedFile[] = files.map(file => ({
+    // Sweep before anything leaves the container. The denylist scan runs
+    // over the FULL contents (split-secret assembly must see everything the
+    // payload ships); gitleaks runs over the reduced contents when a
+    // reducer is given.
+    const fullInput: ChangedFile[] = files.map(file => ({
       path: file.path,
       content: file.bytes.toString("utf8")
     }));
-    const secretFailures = scanForSecrets(scanInput, this.context.denylist);
+    const secretFailures = scanForSecrets(fullInput, this.context.denylist);
     if (secretFailures.length > 0) {
       return { files: [], error: fail(422, "blocked_by_sweep", secretFailures.map(f => f.detail).join("; ")) };
     }
+    let gitleaksRoot = root;
+    let sweepDir: string | undefined;
     try {
-      const findings = await runGitleaks(root, { configPath: this.context.gitleaksConfig });
+      if (reduceForGitleaks) {
+        sweepDir = await mkdtemp(join(tmpdir(), "operon-sweep-"));
+        for (const entry of fullInput) {
+          const target = join(sweepDir, entry.path);
+          await mkdirFs(dirname(target), { recursive: true });
+          await writeFile(target, await reduceForGitleaks(entry.path, entry.content ?? ""));
+        }
+        gitleaksRoot = sweepDir;
+      }
+      const findings = await runGitleaks(gitleaksRoot, { configPath: this.context.gitleaksConfig });
       if (findings.length > 0) {
         return {
           files: [],
@@ -228,8 +253,35 @@ export class Porch {
       }
     } catch (error) {
       return { files: [], error: fail(503, "sweep_unavailable", String(error).slice(0, 200)) };
+    } finally {
+      if (sweepDir) await rm(sweepDir, { recursive: true, force: true }).catch(() => undefined);
     }
     return { files };
+  }
+
+  /**
+   * The upstream version of a file in an allowlisted repo, via the github
+   * Gatekeeper (which holds the credential). null = unavailable, and the
+   * caller must fail CLOSED to a full-file sweep.
+   */
+  private async upstreamFile(repo: string, path: string): Promise<{ exists: boolean; text?: string } | null> {
+    const { config } = this.context;
+    if (!config.prUrl || !config.prToken) return null;
+    try {
+      const base = config.prUrl.replace(/\/gatekeeper\/pr$/, "");
+      const response = await fetch(`${base}/gatekeeper/upstream-file`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
+        body: JSON.stringify({ agentId: config.agentId, repo, path })
+      });
+      if (!response.ok) return null;
+      const result = (await response.json()) as { exists?: boolean; contentBase64?: string };
+      if (!result.exists) return { exists: false };
+      if (typeof result.contentBase64 !== "string") return null;
+      return { exists: true, text: Buffer.from(result.contentBase64, "base64").toString("utf8") };
+    } catch {
+      return null;
+    }
   }
 
   private async publish(body: Record<string, unknown>): Promise<JsonResult> {
@@ -278,7 +330,16 @@ export class Porch {
     const blocked = this.sweepFields({ title, body: prBody });
     if (blocked) return blocked;
 
-    const { files, error } = await this.collectSwept(body.dir, "pr");
+    // For files that already exist upstream, GITLEAKS examines only the
+    // agent's ADDED lines: its generic patterns are what false-positive on
+    // other people's upstream text (operon#11). The denylist scan still
+    // sees the full file. New files, and any file whose upstream copy
+    // cannot be fetched, are examined in full (fail closed).
+    const { files, error } = await this.collectSwept(body.dir, "pr", async (path, text) => {
+      const upstream = await this.upstreamFile(repo, path);
+      if (upstream?.exists && upstream.text !== undefined) return linesNotIn(text, upstream.text);
+      return text;
+    });
     if (error) return error;
 
     log(`submitting PR to ${repo}: ${files.length} file(s)`);

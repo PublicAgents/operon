@@ -9,6 +9,7 @@ import {
 import {
   authenticatedLogin,
   getIssueRef,
+  getUpstreamFile,
   getThread,
   listActivity,
   openIssue,
@@ -372,6 +373,33 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
   }
 }
 
+async function handleUpstreamFile(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; repo?: string; path?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, path } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
+    return errorResponse(403, "repo_not_allowlisted", `allowed: ${allowlist(env).join(", ")}`);
+  }
+  if (
+    typeof path !== "string" ||
+    !SAFE_PATH.test(path) ||
+    path.includes("..") ||
+    path.startsWith("/")
+  ) {
+    return errorResponse(400, "invalid_path");
+  }
+  const pat = patForAgent(env, agentId as string);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  try {
+    const file = await getUpstreamFile({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, path);
+    return json({ ok: true, ...file });
+  } catch (error) {
+    return errorResponse(502, "upstream_file_failed", String(error).slice(0, 300));
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -383,6 +411,9 @@ export default {
     }
     if (url.pathname === "/gatekeeper/status" && request.method === "POST") {
       return handleStatus(request, env);
+    }
+    if (url.pathname === "/gatekeeper/upstream-file" && request.method === "POST") {
+      return handleUpstreamFile(request, env);
     }
     if (url.pathname === "/gatekeeper/thread" && request.method === "POST") {
       return handleThread(request, env);
