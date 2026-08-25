@@ -1,0 +1,33 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-till",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The till fronts the agent hosts (the deployment moves the host routes
+  // here from the deploy Gatekeeper); unpriced paths pass through to the
+  // deploy Worker over the DEPLOY service binding untouched.
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "CATALOG", "class_name": "TillCatalog" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TillCatalog", "Ledger"] }],
+  "services": [{ "binding": "DEPLOY", "service": "operon-gatekeeper-deploy" }],
+  "vars": {
+    // ROSTER injected at deploy. Ceilings are colony config the agent
+    // cannot write (spec 0002): the agent prices, the operator bounds.
+    "TILL_MAX_PRICE": "1.00",
+    "TILL_MAX_OFFERS": "20",
+    "TILL_TESTNET": "true",
+    "TILL_CURRENCIES": ""
+  }
+  // Secrets (wrangler secret put <NAME> -c ...):
+  //   MPP_SECRET_KEY        the MPP signing key; exists ONLY here
+  //   TILL_RECIPIENT        operator-controlled revenue recipient
+  //   TILL_TOKEN_<AGENTID>  one per agent: the money doors derive identity
+  //                         from WHICH bearer matched (per-agent bearers)
+  //   OPERATOR_API_TOKEN    ledger tailing for the operator UI
+}

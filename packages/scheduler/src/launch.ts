@@ -17,6 +17,11 @@ export function mindCredentialVar(harness: string): string {
   return `MIND_CREDENTIAL_${harness.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/** "promoter" -> "TILL_TOKEN_PROMOTER" (money bearers are per-agent). */
+export function tillTokenVar(agentId: string): string {
+  return `TILL_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
 export class LaunchPreconditionError extends Error {
   override name = "LaunchPreconditionError";
   constructor(
@@ -59,10 +64,18 @@ export async function prepareLaunch(
 
   const githubToken = await context.getGithubToken(agent);
   const secrets: WakeSecrets = { githubToken, mindCredential };
+  // Money bearers are per-agent (spec 0002 §3): each wake receives only
+  // its OWN till token, so a compromised wake sells only as itself. An
+  // agent with no token configured simply has the door closed.
+  const tillToken = context.getSecret(tillTokenVar(agent.id));
   return {
     wakeId,
     agentId: agent.id,
     trigger,
-    env: wakeEnv({ wakeId, trigger, agent }, secrets, context.options)
+    env: wakeEnv(
+      { wakeId, trigger, agent },
+      secrets,
+      tillToken ? { ...context.options, tillToken } : context.options
+    )
   };
 }

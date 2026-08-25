@@ -20,6 +20,17 @@ const HELP = `operon: the doors out of this wake
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
 
+Till doors (sell your work; spec: your prices, the operator's ceilings;
+custody and recipients are the operator's alone):
+
+  operon till offer <host> <path> --price <p> --currency <c> --description <d>
+                                         put a price on a path of one of YOUR
+                                         hosts; visitors and agents then pay by
+                                         MPP before it serves. Update by
+                                         re-offering the same host+path.
+  operon till retire <host> <path>       make a path free again
+  operon till sales                      your offers and ledgered receipts
+
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
 allowlisted repos = you may read and comment on anything in them.
@@ -117,8 +128,39 @@ export function parseArgs(argv: string[]): CliCall | "help" {
     }
     case "github":
       return parseGithub(rest);
+    case "till":
+      return parseTill(rest);
     default:
       throw new CliUsageError(`unknown command "${command}"; run operon --help`);
+  }
+}
+
+function parseTill(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  switch (sub) {
+    case "offer": {
+      const [host, path] = positionals(rest);
+      const price = flagValue(rest, "--price");
+      const currency = flagValue(rest, "--currency");
+      const description = flagValue(rest, "--description");
+      if (!host || !path || !path.startsWith("/") || !price || !currency || !description) {
+        throw new CliUsageError(
+          "usage: operon till offer <host> <path> --price <p> --currency <c> --description <d>"
+        );
+      }
+      return { path: "/till/offer", payload: { host, path, price, currency, description } };
+    }
+    case "retire": {
+      const [host, path] = positionals(rest);
+      if (!host || !path || !path.startsWith("/")) {
+        throw new CliUsageError("usage: operon till retire <host> <path>");
+      }
+      return { path: "/till/retire", payload: { host, path } };
+    }
+    case "sales":
+      return { path: "/till/sales", payload: {} };
+    default:
+      throw new CliUsageError("unknown till subcommand; expected one of: offer, retire, sales");
   }
 }
 

@@ -85,6 +85,33 @@ describe("operon CLI parsing", () => {
     });
   });
 
+  it("parses the till doors", () => {
+    expect(
+      parseArgs([
+        "till", "offer", "prior.livevariant.ai", "/reports/weekly.html",
+        "--price", "0.05", "--currency", "0xtoken", "--description", "Weekly report"
+      ])
+    ).toEqual({
+      path: "/till/offer",
+      payload: {
+        host: "prior.livevariant.ai",
+        path: "/reports/weekly.html",
+        price: "0.05",
+        currency: "0xtoken",
+        description: "Weekly report"
+      }
+    });
+    expect(parseArgs(["till", "retire", "prior.livevariant.ai", "/reports/weekly.html"])).toEqual({
+      path: "/till/retire",
+      payload: { host: "prior.livevariant.ai", path: "/reports/weekly.html" }
+    });
+    expect(parseArgs(["till", "sales"])).toEqual({ path: "/till/sales", payload: {} });
+    expect(() => parseArgs(["till", "offer", "h", "nopath", "--price", "1"])).toThrowError(
+      CliUsageError
+    );
+    expect(() => parseArgs(["till", "dance"])).toThrowError(/till subcommand/);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);
