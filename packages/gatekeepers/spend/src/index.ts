@@ -1,6 +1,8 @@
 import { Challenge } from "mppx";
 import { Mppx, tempo } from "mppx/client";
+import { createClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { tempo as tempoMainnetChain, tempoModerato } from "viem/tempo/chains";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import { SpendLedger } from "./spend-do.js";
@@ -34,6 +36,12 @@ interface Env {
   SPEND_CURRENCIES?: string;
   /** Optional dedicated RPC for push-mode payments (public RPC rate-limits Workers). */
   SPEND_RPC_URL?: string;
+  /**
+   * Tempo API key: chain reads go through the authenticated gateway
+   * (api.tempo.xyz/rpc/{chain}) instead of the public RPC, whose per-IP
+   * limits reject Workers egress. Takes precedence over SPEND_RPC_URL.
+   */
+  TEMPO_API_KEY?: string;
   /** REQUIRED when SPEND_TESTNET is not "true": the mainnet chain id. */
   SPEND_CHAIN_ID?: string;
   NOTIFY_URL?: string;
@@ -238,14 +246,37 @@ async function executePayment(
       await spendLedger(env).settle(reservation.outboxId, "released", "chain_id_unconfigured");
       return errorResponse(503, "chain_id_unconfigured");
     }
+    // Chain reads (fees, block state) must not hit the public RPC: its
+    // per-IP limits reject shared Workers egress. Preference order: the
+    // authenticated Tempo API gateway (Bearer key via a custom viem
+    // client, mirroring the SDK's own default construction), then a
+    // dedicated SPEND_RPC_URL, then the public RPC as last resort.
+    const knownChains: Record<number, Parameters<typeof createClient>[0]["chain"]> = {
+      [tempoModerato.id]: tempoModerato,
+      [tempoMainnetChain.id]: tempoMainnetChain
+    };
+    const apiKey = typeof env.TEMPO_API_KEY === "string" && env.TEMPO_API_KEY.length > 0 ? env.TEMPO_API_KEY : null;
+    const transportFor = apiKey
+      ? ({ chainId }: { chainId?: number }) => {
+          const id = chainId ?? expectedChainId;
+          return createClient({
+            chain: knownChains[id] ?? { ...tempoModerato, id },
+            transport: http(`https://api.tempo.xyz/rpc/${id}`, {
+              fetchOptions: { headers: { authorization: `Bearer ${apiKey}` } }
+            })
+          });
+        }
+      : null;
     const payments = Mppx.create({
       methods: [
         tempo.charge({
           account,
           expectedChainId,
-          ...(typeof env.SPEND_RPC_URL === "string" && env.SPEND_RPC_URL.length > 0
-            ? { rpcUrl: { [expectedChainId]: env.SPEND_RPC_URL } }
-            : {})
+          ...(transportFor
+            ? { getClient: transportFor }
+            : typeof env.SPEND_RPC_URL === "string" && env.SPEND_RPC_URL.length > 0
+              ? { rpcUrl: { [expectedChainId]: env.SPEND_RPC_URL } }
+              : {})
         })
       ],
       polyfill: false,
