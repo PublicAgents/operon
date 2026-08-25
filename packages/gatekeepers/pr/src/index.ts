@@ -108,6 +108,18 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "no_files", repo });
     return errorResponse(400, "no_files");
   }
+  // One tree entry per path: a path claimed as both a file and a submodule
+  // (or twice as either) would produce a conflicting Git tree.
+  {
+    const seen = new Set<string>();
+    for (const path of [...files.map(file => file?.path), ...links.map(link => link.path)]) {
+      if (typeof path === "string" && seen.has(path)) {
+        await ledger(env).append("pr_failed", { reason: "duplicate_path", repo, path });
+        return errorResponse(400, "duplicate_path", path);
+      }
+      if (typeof path === "string") seen.add(path);
+    }
+  }
   for (const file of files) {
     if (
       typeof file?.path !== "string" ||
