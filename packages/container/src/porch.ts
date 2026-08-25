@@ -330,19 +330,43 @@ export class Porch {
     const blocked = this.sweepFields({ title, body: prBody });
     if (blocked) return blocked;
 
+    // Submodule bumps: gitlink pointers, validated here and re-validated
+    // by the Gatekeeper. A sha carries nothing sweepable.
+    const submodules: Array<{ path: string; sha: string }> = [];
+    if (body.submodules !== undefined) {
+      if (!Array.isArray(body.submodules)) return fail(400, "invalid_submodules");
+      for (const link of body.submodules as Array<{ path?: unknown; sha?: unknown }>) {
+        if (
+          typeof link?.path !== "string" ||
+          link.path.includes("..") ||
+          link.path.startsWith("/") ||
+          typeof link?.sha !== "string" ||
+          !/^[0-9a-f]{40}$/.test(link.sha)
+        ) {
+          return fail(400, "invalid_submodule");
+        }
+        submodules.push({ path: link.path, sha: link.sha });
+      }
+    }
+
     // For files that already exist upstream, GITLEAKS examines only the
     // agent's ADDED lines: its generic patterns are what false-positive on
     // other people's upstream text (operon#11). The denylist scan still
     // sees the full file. New files, and any file whose upstream copy
     // cannot be fetched, are examined in full (fail closed).
-    const { files, error } = await this.collectSwept(body.dir, "pr", async (path, text) => {
-      const upstream = await this.upstreamFile(repo, path);
-      if (upstream?.exists && upstream.text !== undefined) return linesNotIn(text, upstream.text);
-      return text;
-    });
-    if (error) return error;
+    // A bump-only PR (submodules, no dir given) skips file collection.
+    let files: CollectedFile[] = [];
+    if (submodules.length === 0 || body.dir !== undefined) {
+      const collected = await this.collectSwept(body.dir, "pr", async (path, text) => {
+        const upstream = await this.upstreamFile(repo, path);
+        if (upstream?.exists && upstream.text !== undefined) return linesNotIn(text, upstream.text);
+        return text;
+      });
+      if (collected.error) return collected.error;
+      files = collected.files;
+    }
 
-    log(`submitting PR to ${repo}: ${files.length} file(s)`);
+    log(`submitting PR to ${repo}: ${files.length} file(s), ${submodules.length} submodule bump(s)`);
     const response = await fetch(config.prUrl, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
@@ -351,7 +375,8 @@ export class Porch {
         repo,
         title,
         body: prBody,
-        files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
+        files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") })),
+        ...(submodules.length > 0 ? { submodules } : {})
       })
     });
     const resultText = (await response.text()).slice(0, 800);

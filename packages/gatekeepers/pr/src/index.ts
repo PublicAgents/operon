@@ -78,7 +78,7 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "malformed_json" });
     return errorResponse(400, "malformed_json");
   }
-  const { repo, title, body: prBody, files, agentId } = body.value;
+  const { repo, title, body: prBody, files, submodules, agentId } = body.value;
 
   if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
     await ledger(env).append("pr_failed", { reason: "repo_not_allowlisted", repo });
@@ -88,7 +88,23 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "missing_title_or_body", repo });
     return errorResponse(400, "missing_title_or_body");
   }
-  if (!Array.isArray(files) || files.length === 0) {
+  const links = submodules ?? [];
+  if (!Array.isArray(links)) return errorResponse(400, "invalid_submodules");
+  for (const link of links) {
+    if (
+      typeof link?.path !== "string" ||
+      !SAFE_PATH.test(link.path) ||
+      link.path.includes("..") ||
+      link.path.startsWith("/") ||
+      typeof link?.sha !== "string" ||
+      !/^[0-9a-f]{40}$/.test(link.sha)
+    ) {
+      await ledger(env).append("pr_failed", { reason: "invalid_submodule", repo, path: link?.path });
+      return errorResponse(400, "invalid_submodule", String(link?.path));
+    }
+  }
+  // A pure submodule-bump PR carries no files; something must change.
+  if (!Array.isArray(files) || (files.length === 0 && links.length === 0)) {
     await ledger(env).append("pr_failed", { reason: "no_files", repo });
     return errorResponse(400, "no_files");
   }
@@ -113,7 +129,7 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
   try {
     const result = await openPullRequest(
       { token: pat, userAgent: "operon-gatekeeper-pr" },
-      { repo, title, body: prBody, files },
+      { repo, title, body: prBody, files, submodules: links },
       crypto.randomUUID()
     );
     await ledger(env).append("pr_opened", {
@@ -121,7 +137,8 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
       repo,
       url: result.url,
       branch: result.branch,
-      files: files.length
+      files: files.length,
+      submodules: links.length
     });
     return json({ ok: true, ...result });
   } catch (error) {

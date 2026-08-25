@@ -3,6 +3,7 @@ import {
   commitToBranch,
   githubApi,
   type GitFile,
+  type GitLink,
   type GithubApi
 } from "@operon/worker-kit/git-data";
 
@@ -19,6 +20,8 @@ export interface PrRequest {
   title: string;
   body: string;
   files: GitFile[];
+  /** Submodule bumps: gitlink entries advancing path to a commit sha. */
+  submodules?: GitLink[];
 }
 
 export interface PrResult {
@@ -64,7 +67,14 @@ export async function openPullRequest(
   }
   if (!forkReady) throw new Error(`fork_unavailable: ${user}/${name} did not appear`);
 
-  const treeSha = await buildTree(client, `${user}/${name}`, baseCommit.tree.sha, request.files);
+  const treeSha = await buildTree(
+    client,
+    `${user}/${name}`,
+    baseCommit.tree.sha,
+    request.files,
+    [],
+    request.submodules ?? []
+  );
   const commit = (await githubApi(client, "POST", `/repos/${user}/${name}/git/commits`, {
     message: `${request.title}\n\nOpened by the Operon PR Gatekeeper on behalf of an autonomous agent.`,
     tree: treeSha,

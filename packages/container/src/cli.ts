@@ -36,13 +36,16 @@ allowlisted repos = you may read and comment on anything in them.
                                          comment on a PR/issue (yours anywhere, or
                                          any in an allowlisted repo); --reply-to
                                          answers inside an inline review thread
-  operon github pr <owner/repo> [dir] --title <t> --body <b>
+  operon github pr <owner/repo> [dir] --title <t> --body <b> [--submodule <path>=<sha>]
                                          propose a change to an allowlisted repo: the
                                          files in dir (default "pr") are added/updated
                                          on a branch and a pull request is opened.
                                          For an EXISTING file, put the full new content
                                          at the same path; fetch its current form off
                                          the public repo yourself first.
+                                         --submodule advances a submodule pointer to a
+                                         full 40-hex commit sha (e.g. operon=<sha>); a
+                                         bump-only PR needs no dir.
   operon github push <owner/repo> <n> [dir] --message <m>
                                          push follow-up files to YOUR OWN open PR's
                                          branch (answer review feedback with commits);
@@ -163,10 +166,31 @@ function parseGithub(args: string[]): CliCall {
       const [repo, dir] = positionals(rest);
       const title = flagValue(rest, "--title");
       const body = flagValue(rest, "--body");
+      const submoduleFlag = flagValue(rest, "--submodule");
       if (!repo || !repo.includes("/") || !title || !body) {
-        throw new CliUsageError("usage: operon github pr <owner/repo> [dir] --title <t> --body <b>");
+        throw new CliUsageError(
+          "usage: operon github pr <owner/repo> [dir] --title <t> --body <b> [--submodule <path>=<sha>]"
+        );
       }
-      return { path: "/github/pr", payload: { repo, dir: dir ?? "pr", title, body } };
+      let submodules: Array<{ path: string; sha: string }> | undefined;
+      if (submoduleFlag !== undefined) {
+        const match = /^([^=]+)=([0-9a-f]{40})$/.exec(submoduleFlag);
+        if (!match) {
+          throw new CliUsageError("--submodule expects <path>=<40-hex commit sha>");
+        }
+        submodules = [{ path: match[1], sha: match[2] }];
+      }
+      return {
+        path: "/github/pr",
+        payload: {
+          repo,
+          // A bump-only PR carries no dir; the porch skips file collection.
+          ...(dir !== undefined || !submodules ? { dir: dir ?? "pr" } : {}),
+          title,
+          body,
+          ...(submodules ? { submodules } : {})
+        }
+      };
     }
     case "push": {
       const [repo, num, dir] = positionals(rest);
