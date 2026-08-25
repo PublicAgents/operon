@@ -71,14 +71,25 @@ Policy mirrors the email Gatekeeper's shape, because the shape has been
 adversarially reviewed into robustness:
 
 - **Per-transaction cap and daily cap** per agent, colony config.
-- **Merchant memory**: a first payment to a NEW origin is HELD for the
-  operator, approved or rejected with the same Telegram buttons as held
-  email; approved origins become payable within caps. The allowlist
-  grows only through operator approvals, never through charter text or
-  agent writes.
-- **Atomic reservation**: the daily counter reserves before paying and
-  releases on failure, in one Durable Object turn (the email
-  Gatekeeper's reserve/release pattern, verbatim).
+- **Merchant memory binds the recipient, not just the origin**: a first
+  payment to a NEW origin is HELD for the operator, approved or rejected
+  with the same Telegram buttons as held email, and the approval records
+  the tuple (origin, payment method, recipient) exactly as presented in
+  the held challenge. A later challenge from the same origin naming a
+  DIFFERENT recipient or method is a new hold, not a payable request: a
+  compromised merchant redirecting funds looks exactly like a new
+  merchant. The allowlist grows only through operator approvals, never
+  through charter text or agent writes.
+- **Atomic reservation, with an UNKNOWN state**: the daily counter
+  reserves before paying in one Durable Object turn. Release happens
+  only on outcomes the rail proves negative (a definite refusal before
+  payment). An AMBIGUOUS outcome, timeout, lost response, or any error
+  after the credential left, keeps the reservation, marks the outbox row
+  `outcome_unknown`, and notifies the operator: funds may have moved, so
+  the cap must assume they did until reconciliation (a receipt query or
+  an operator ruling) settles the row. This is the wake lock's
+  outcome_unknown doctrine applied to money, where optimistic release is
+  a double-spend of the cap.
 - **Everything ledgered before and after**: a durable outbox row for the
   attempt in the same DO turn as the reservation, a receipt row on
   success. A payment can never occur without an operator-visible record.
@@ -86,6 +97,16 @@ adversarially reviewed into robustness:
   reason}` (or an MCP tool descriptor), pays the challenge if it is
   within every bound, and returns the resource and receipt to the wake.
   The mind never sees a key, a challenge signature, or a wallet.
+- **The pay fetch is not a proxy**: an agent-supplied URL makes a
+  privileged Worker issue a request, which is an SSRF surface. Bounds:
+  https only; hostname must resolve publicly (no IP literals, no
+  internal or chassis-owned hosts, the Gatekeeper and colony domains
+  are denied by name); no caller-controlled headers; no credentials
+  attached to the probe; response size and redirect caps, with
+  redirects re-validated against the same rules. The full paid fetch
+  additionally requires the origin to be operator-approved; an
+  unapproved origin gets at most the single bounded probe that captures
+  its challenge for the hold.
 
 ### 2.3 What stays forbidden
 
@@ -112,7 +133,14 @@ named-error conventions as every door:
 
 Wake contract additions: `OPERON_TILL_URL/TOKEN`, `OPERON_SPEND_URL/TOKEN`,
 mirrored in core `WAKE_ENV`, container `ENV`, scheduler passthrough, and
-`capabilities()`, the established pattern.
+`capabilities()`, the established pattern, with one deliberate upgrade:
+**money bearers are per-agent**. Elsewhere the chassis uses one shared
+internal bearer and a self-declared `agentId`, trusting the container
+boundary; for the money doors the bearer itself names the agent (colony
+holds one secret per agent per money Gatekeeper, the scheduler passes
+each wake only its own), so a compromised wake can spend and sell only
+as itself. The Gatekeepers derive the agent FROM the bearer and ignore
+any agentId claim in the payload.
 
 ## 4. Security invariants (additions to 0001 §7)
 
@@ -121,15 +149,19 @@ mirrored in core `WAKE_ENV`, container `ENV`, scheduler passthrough, and
    policy failing open still cannot exceed the platform bound.
 7. Revenue recipients are colony secrets. No agent-reachable surface can
    read or write them.
-8. A first payment to any new origin requires an explicit operator
-   approval, delivered and answered over the authenticated operator
-   channel.
+8. A first payment to any new (origin, method, recipient) tuple requires
+   an explicit operator approval, delivered and answered over the
+   authenticated operator channel; a changed recipient re-triggers it.
 9. Every offer change, challenge served, receipt, hold, approval,
    rejection, and payment is a ledger row; the operator UI tails money
    exactly as it tails everything else.
 10. Price ceilings, spend caps, and the approval threshold are colony
     configuration. Charters may counsel; only the operator's config
     binds.
+11. Money-door bearers are per-agent; the Gatekeepers derive identity
+    from the bearer, never from the payload. Ambiguous payment outcomes
+    hold their reservation until reconciled; the cap never assumes an
+    unproven failure.
 
 ## 5. Rollout
 
