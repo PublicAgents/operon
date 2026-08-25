@@ -21,7 +21,10 @@
     // these as the second bound (spec 0002 §2.2).
     "SPEND_MAX_TX": "0.10",
     "SPEND_DAILY_CAP": "1.00",
-    "SPEND_TESTNET": "true"
+    "SPEND_TESTNET": "true",
+    // Known assets (the wire challenge carries no decimals; unknown
+    // tokens are unpayable): pathUSD at its canonical address, 6 decimals.
+    "SPEND_CURRENCIES": "0x20c0000000000000000000000000000000000000=6"
   }
   // Secrets:
   //   MPP_PRIVATE_KEY        the payment key; exists ONLY here; scoped

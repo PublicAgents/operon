@@ -5,6 +5,7 @@ import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
 import { SpendLedger } from "./spend-do.js";
 import {
+  parseCurrencyMap,
   spendTokenVar,
   summarizeChallenge,
   toBaseUnits,
@@ -29,6 +30,8 @@ interface Env {
   SPEND_MAX_TX?: string;
   SPEND_DAILY_CAP?: string;
   SPEND_TESTNET?: string;
+  /** Known assets as "0xaddr=decimals,...": the spend-side currency map. */
+  SPEND_CURRENCIES?: string;
   /** REQUIRED when SPEND_TESTNET is not "true": the mainnet chain id. */
   SPEND_CHAIN_ID?: string;
   NOTIFY_URL?: string;
@@ -242,7 +245,7 @@ async function executePayment(
         // Pay exactly the summarized challenge shape and nothing else: a
         // merchant swapping recipient/amount between probe and payment is
         // refused before a credential exists.
-        const again = summarizeChallenge(context.url, challenge);
+        const again = summarizeChallenge(context.url, challenge, parseCurrencyMap(env.SPEND_CURRENCIES));
         // The FULL approved shape binds: origin, method, recipient, ASSET,
         // and decimals. Same integer amount of a different token, or shifted
         // decimals, is a different payment and is refused pre-credential.
@@ -355,7 +358,9 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     });
   }
   const challenge = challengeFrom(probe);
-  const summary = challenge ? summarizeChallenge(url, challenge) : null;
+  const summary = challenge
+    ? summarizeChallenge(url, challenge, parseCurrencyMap(env.SPEND_CURRENCIES))
+    : null;
   if (!summary) return errorResponse(422, "unreadable_challenge");
 
   const approved = await spendLedger(env).isApproved(summary);
