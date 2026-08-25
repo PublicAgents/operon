@@ -114,9 +114,10 @@ describe("summarizeChallenge", () => {
   });
 
   it("parseCurrencyMap lowercases and validates decimals", () => {
-    const map = parseCurrencyMap("0xAbC=6, 0xdef=18, bad, 0xz=99");
+    const map = parseCurrencyMap("0xAbC=6, 0xdef=18, bad, 0xz=99, 0xempty=, 0xneg=-1");
     expect(map.get("0xabc")).toBe(6);
     expect(map.get("0xdef")).toBe(18);
+    // Empty, out-of-range, and non-digit decimals are all dropped.
     expect(map.size).toBe(2);
   });
 });

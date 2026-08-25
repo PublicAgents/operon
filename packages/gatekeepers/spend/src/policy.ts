@@ -116,10 +116,11 @@ export function parseCurrencyMap(raw: string | undefined): Map<string, number> {
   const map = new Map<string, number>();
   for (const entry of (raw ?? "").split(",")) {
     const [address, decimals] = entry.split("=").map(part => part.trim());
+    // Explicit digits required: Number("") is 0, which would silently give
+    // a malformed entry zero decimals and wrong cap arithmetic.
+    if (!address || !decimals || !/^\d{1,2}$/.test(decimals)) continue;
     const parsed = Number(decimals);
-    if (address && Number.isInteger(parsed) && parsed >= 0 && parsed <= 36) {
-      map.set(address.toLowerCase(), parsed);
-    }
+    if (parsed <= 36) map.set(address.toLowerCase(), parsed);
   }
   return map;
 }
