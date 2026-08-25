@@ -32,7 +32,9 @@ export const ENV = {
   emailUrl: "OPERON_EMAIL_URL",
   emailToken: "OPERON_EMAIL_TOKEN",
   tillUrl: "OPERON_TILL_URL",
-  tillToken: "OPERON_TILL_TOKEN"
+  tillToken: "OPERON_TILL_TOKEN",
+  spendUrl: "OPERON_SPEND_URL",
+  spendToken: "OPERON_SPEND_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -72,6 +74,9 @@ export interface WakeConfig {
   /** till Gatekeeper endpoint + this agent's own money bearer. */
   tillUrl?: string;
   tillToken?: string;
+  /** spend Gatekeeper endpoint + this agent's own money bearer. */
+  spendUrl?: string;
+  spendToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -141,7 +146,9 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     emailUrl: env[ENV.emailUrl],
     emailToken: env[ENV.emailToken],
     tillUrl: env[ENV.tillUrl],
-    tillToken: env[ENV.tillToken]
+    tillToken: env[ENV.tillToken],
+    spendUrl: env[ENV.spendUrl],
+    spendToken: env[ENV.spendToken]
   };
 }
 

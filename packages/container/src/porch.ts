@@ -88,6 +88,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
     email: Boolean(config.emailUrl && config.emailToken),
     till: Boolean(config.tillUrl && config.tillToken),
+    pay: Boolean(config.spendUrl && config.spendToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -157,6 +158,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/till/offer") return await this.tillOffer(body);
       if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
       if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
+      if (request.method === "POST" && url.pathname === "/pay") return await this.pay(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -595,6 +597,28 @@ export class Porch {
 
   private async tillSales(): Promise<JsonResult> {
     return this.tillCall("sales", {});
+  }
+
+  private async pay(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config, log } = this.context;
+    if (!config.spendUrl || !config.spendToken) return fail(503, "pay_not_wired");
+    const { url, maxAmount, reason } = body;
+    if (typeof url !== "string" || !url.startsWith("https://")) return fail(400, "invalid_url");
+    if (typeof maxAmount !== "string" || !/^\d+(\.\d+)?$/.test(maxAmount)) {
+      return fail(400, "invalid_max_amount");
+    }
+    if (typeof reason !== "string" || reason.length === 0) return fail(400, "missing_reason");
+    const blocked = this.sweepFields({ reason });
+    if (blocked) return blocked;
+    log(`pay: ${url} up to ${maxAmount}`);
+    const response = await fetch(`${config.spendUrl}/gatekeeper/spend/pay`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.spendToken}` },
+      body: JSON.stringify({ url, maxAmount, reason })
+    });
+    const resultText = (await response.text()).slice(0, 8 * 1024 * 1024);
+    if (!response.ok) return fail(502, "pay_rejected", `${response.status}: ${resultText.slice(0, 400)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
   private async email(body: Record<string, unknown>): Promise<JsonResult> {

@@ -17,6 +17,7 @@ interface Env {
   ROSTER?: string;
   EMAIL_URL?: string;
   EMAIL_SERVICE_TOKEN?: string;
+  SPEND_URL?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -63,8 +64,15 @@ interface NotifyAction {
 }
 
 /** Callback data is capped at 64 bytes by Telegram; keep the encoding tight. */
+const ACTION_PREFIXES: Record<string, string> = {
+  email_approve: "ea",
+  email_reject: "er",
+  spend_approve: "sa",
+  spend_reject: "sr"
+};
+
 function callbackData(action: NotifyAction): string | null {
-  const prefix = action.kind === "email_approve" ? "ea" : action.kind === "email_reject" ? "er" : null;
+  const prefix = ACTION_PREFIXES[action.kind];
   if (!prefix) return null;
   const data = `${prefix}:${action.agentId}:${action.id}`;
   return data.length <= 64 ? data : null;
@@ -102,27 +110,32 @@ async function answerCallback(env: Env, callbackId: string, text: string): Promi
   }).catch(() => undefined);
 }
 
-/** Execute an approve/reject against the email Gatekeeper. */
-async function emailDecision(
+/** Execute an approve/reject against the email or spend Gatekeeper. */
+async function heldDecision(
   env: Env,
+  gate: "email" | "spend",
   approve: boolean,
   agentId: string,
   heldId: string
 ): Promise<{ ok: boolean; detail: string }> {
-  if (!env.EMAIL_URL || !env.EMAIL_SERVICE_TOKEN) {
-    return { ok: false, detail: "email gatekeeper not wired" };
-  }
   const verb = approve ? "approve" : "reject";
-  const response = await fetch(`${env.EMAIL_URL}/gatekeeper/email/${verb}`, {
+  let url: string | undefined;
+  let bearer: string | undefined;
+  if (gate === "email") {
+    url = env.EMAIL_URL ? `${env.EMAIL_URL}/gatekeeper/email/${verb}` : undefined;
+    bearer = env.EMAIL_SERVICE_TOKEN;
+  } else {
+    url = env.SPEND_URL ? `${env.SPEND_URL}/gatekeeper/spend/${verb}` : undefined;
+    bearer = env.OPERATOR_API_TOKEN;
+  }
+  if (!url || !bearer) return { ok: false, detail: `${gate} gatekeeper not wired` };
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${env.EMAIL_SERVICE_TOKEN}`
-    },
+    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify({ agentId, heldId })
   });
   const detail = (await response.text()).slice(0, 200);
-  await ledger(env).append("email_decision", { verb, agentId, heldId, status: response.status });
+  await ledger(env).append(`${gate}_decision`, { verb, agentId, heldId, status: response.status });
   return { ok: response.ok, detail };
 }
 
@@ -239,7 +252,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "approve": {
-      const result = await emailDecision(env, action.approve, action.agentId, action.heldId);
+      const result = await heldDecision(env, "email", action.approve, action.agentId, action.heldId);
       await sendToOperator(
         env,
         result.ok
@@ -249,13 +262,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "callback": {
-      const match = /^(ea|er):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
+      const match = /^(ea|er|sa|sr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
       if (!match) {
         await answerCallback(env, action.callbackId, "unknown action");
         return json({ ok: true });
       }
-      const approve = match[1] === "ea";
-      const result = await emailDecision(env, approve, match[2], match[3]);
+      const approve = match[1] === "ea" || match[1] === "sa";
+      const gate = match[1].startsWith("e") ? ("email" as const) : ("spend" as const);
+      const result = await heldDecision(env, gate, approve, match[2], match[3]);
       await answerCallback(
         env,
         action.callbackId,

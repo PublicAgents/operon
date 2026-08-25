@@ -52,6 +52,9 @@ export interface WakeOptions {
   /** till Gatekeeper endpoint + this agent's OWN money bearer (per-agent). */
   tillUrl?: string;
   tillToken?: string;
+  /** spend Gatekeeper endpoint + this agent's OWN money bearer (per-agent). */
+  spendUrl?: string;
+  spendToken?: string;
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -88,7 +91,9 @@ export const WAKE_ENV = {
   emailUrl: "OPERON_EMAIL_URL",
   emailToken: "OPERON_EMAIL_TOKEN",
   tillUrl: "OPERON_TILL_URL",
-  tillToken: "OPERON_TILL_TOKEN"
+  tillToken: "OPERON_TILL_TOKEN",
+  spendUrl: "OPERON_SPEND_URL",
+  spendToken: "OPERON_SPEND_TOKEN"
 } as const;
 
 export function wakeEnv(
@@ -124,6 +129,8 @@ export function wakeEnv(
   if (options.emailToken) env[WAKE_ENV.emailToken] = options.emailToken;
   if (options.tillUrl) env[WAKE_ENV.tillUrl] = options.tillUrl;
   if (options.tillToken) env[WAKE_ENV.tillToken] = options.tillToken;
+  if (options.spendUrl) env[WAKE_ENV.spendUrl] = options.spendUrl;
+  if (options.spendToken) env[WAKE_ENV.spendToken] = options.spendToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   return env;

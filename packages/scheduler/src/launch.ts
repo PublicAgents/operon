@@ -22,6 +22,11 @@ export function tillTokenVar(agentId: string): string {
   return `TILL_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/** "promoter" -> "SPEND_TOKEN_PROMOTER" (money bearers are per-agent). */
+export function spendTokenVar(agentId: string): string {
+  return `SPEND_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
 export class LaunchPreconditionError extends Error {
   override name = "LaunchPreconditionError";
   constructor(
@@ -68,6 +73,7 @@ export async function prepareLaunch(
   // its OWN till token, so a compromised wake sells only as itself. An
   // agent with no token configured simply has the door closed.
   const tillToken = context.getSecret(tillTokenVar(agent.id));
+  const spendToken = context.getSecret(spendTokenVar(agent.id));
   return {
     wakeId,
     agentId: agent.id,
@@ -75,7 +81,11 @@ export async function prepareLaunch(
     env: wakeEnv(
       { wakeId, trigger, agent },
       secrets,
-      tillToken ? { ...context.options, tillToken } : context.options
+      {
+        ...context.options,
+        ...(tillToken ? { tillToken } : {}),
+        ...(spendToken ? { spendToken } : {})
+      }
     )
   };
 }

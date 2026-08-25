@@ -34,6 +34,7 @@ interface Env {
   EMAIL_URL?: string;
   EMAIL_TOKEN?: string;
   TILL_URL?: string;
+  SPEND_URL?: string;
   // Per-agent money bearers arrive as TILL_TOKEN_<AGENTID> secrets via the
   // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
@@ -96,6 +97,7 @@ function launchContext(env: Env): LaunchContext {
       emailUrl: env.EMAIL_URL,
       emailToken: env.EMAIL_TOKEN,
       tillUrl: env.TILL_URL,
+      spendUrl: env.SPEND_URL,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }
