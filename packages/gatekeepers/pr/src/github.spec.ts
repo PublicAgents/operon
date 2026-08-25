@@ -206,3 +206,44 @@ describe("getUpstreamFile", () => {
     expect(missing).toEqual({ exists: false });
   });
 });
+
+describe("openPullRequest with submodules", () => {
+  it("emits a gitlink (mode 160000, type commit) tree entry", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const trees: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const path = url.replace("https://api.github.com", "");
+      const respond = (d: unknown) => new Response(JSON.stringify(d), { status: 200 });
+      if (path === "/user") return respond({ login: "bot" });
+      if (path === "/repos/org/colony") return respond({ default_branch: "main" });
+      if (path === "/repos/org/colony/git/ref/heads/main")
+        return respond({ object: { sha: "base0000" } });
+      if (path === "/repos/org/colony/git/commits/base0000")
+        return respond({ tree: { sha: "tree0000" } });
+      if (path === "/repos/org/colony/forks") return respond({});
+      if (path === "/repos/bot/colony") return respond({});
+      if (path === "/repos/bot/colony/git/trees") {
+        trees.push(JSON.parse(String(init?.body)));
+        return respond({ sha: "newtree" });
+      }
+      if (path === "/repos/bot/colony/git/commits") return respond({ sha: "newcommit" });
+      if (path === "/repos/bot/colony/git/refs") return respond({});
+      if (path === "/repos/org/colony/pulls")
+        return respond({ html_url: "https://github.com/org/colony/pull/9" });
+      return new Response("unexpected: " + path, { status: 500 });
+    }) as typeof fetch;
+
+    const { openPullRequest } = await import("./github.js");
+    const result = await openPullRequest(
+      { token: "pat", userAgent: "t", fetch: fetchImpl },
+      { repo: "org/colony", title: "bump", body: "b", files: [], submodules: [{ path: "operon", sha }] },
+      "suffix"
+    );
+    expect(result.url).toContain("/pull/9");
+    expect(trees).toHaveLength(1);
+    expect((trees[0] as { tree: unknown[] }).tree).toEqual([
+      { path: "operon", mode: "160000", type: "commit", sha }
+    ]);
+  });
+});

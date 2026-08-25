@@ -38,6 +38,25 @@ describe("operon CLI parsing", () => {
     });
   });
 
+  it("parses submodule bumps, with and without files", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(
+      parseArgs(["github", "pr", "org/colony", "--title", "t", "--body", "b", "--submodule", `operon=${sha}`])
+    ).toEqual({
+      path: "/github/pr",
+      payload: { repo: "org/colony", title: "t", body: "b", submodules: [{ path: "operon", sha }] }
+    });
+    expect(
+      parseArgs(["github", "pr", "org/colony", "docs", "--title", "t", "--body", "b", "--submodule", `operon=${sha}`])
+    ).toEqual({
+      path: "/github/pr",
+      payload: { repo: "org/colony", dir: "docs", title: "t", body: "b", submodules: [{ path: "operon", sha }] }
+    });
+    expect(() =>
+      parseArgs(["github", "pr", "org/colony", "--title", "t", "--body", "b", "--submodule", "operon=short"])
+    ).toThrowError(/40-hex/);
+  });
+
   it("parses the github conversation subcommands", () => {
     expect(parseArgs(["github", "status"])).toEqual({ path: "/github/status", payload: {} });
     expect(parseArgs(["github", "thread", "org/repo", "59"])).toEqual({

@@ -78,7 +78,7 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "malformed_json" });
     return errorResponse(400, "malformed_json");
   }
-  const { repo, title, body: prBody, files, agentId } = body.value;
+  const { repo, title, body: prBody, files, submodules, agentId } = body.value;
 
   if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
     await ledger(env).append("pr_failed", { reason: "repo_not_allowlisted", repo });
@@ -88,9 +88,53 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "missing_title_or_body", repo });
     return errorResponse(400, "missing_title_or_body");
   }
-  if (!Array.isArray(files) || files.length === 0) {
+  const links = submodules ?? [];
+  if (!Array.isArray(links)) return errorResponse(400, "invalid_submodules");
+  for (const link of links) {
+    if (
+      typeof link?.path !== "string" ||
+      !SAFE_PATH.test(link.path) ||
+      link.path.includes("..") ||
+      link.path.startsWith("/") ||
+      typeof link?.sha !== "string" ||
+      !/^[0-9a-f]{40}$/.test(link.sha)
+    ) {
+      await ledger(env).append("pr_failed", { reason: "invalid_submodule", repo, path: link?.path });
+      return errorResponse(400, "invalid_submodule", String(link?.path));
+    }
+  }
+  // A pure submodule-bump PR carries no files; something must change.
+  if (!Array.isArray(files) || (files.length === 0 && links.length === 0)) {
     await ledger(env).append("pr_failed", { reason: "no_files", repo });
     return errorResponse(400, "no_files");
+  }
+  // One tree entry per path, and no nesting across kinds: a path claimed
+  // twice, an entry under a submodule path (nothing lives inside a
+  // gitlink), or a submodule under a file path would all produce a Git
+  // tree GitHub rejects.
+  {
+    const filePaths = files.map(file => file?.path).filter((p): p is string => typeof p === "string");
+    const allPaths = [...filePaths, ...links.map(link => link.path)];
+    const seen = new Set<string>();
+    for (const path of allPaths) {
+      if (seen.has(path)) {
+        await ledger(env).append("pr_failed", { reason: "duplicate_path", repo, path });
+        return errorResponse(400, "duplicate_path", path);
+      }
+      seen.add(path);
+    }
+    for (const link of links) {
+      const under = allPaths.find(path => path !== link.path && path.startsWith(`${link.path}/`));
+      if (under) {
+        await ledger(env).append("pr_failed", { reason: "path_under_submodule", repo, path: under });
+        return errorResponse(400, "path_under_submodule", `${under} is inside submodule ${link.path}`);
+      }
+      const over = filePaths.find(path => link.path.startsWith(`${path}/`));
+      if (over) {
+        await ledger(env).append("pr_failed", { reason: "submodule_under_file", repo, path: link.path });
+        return errorResponse(400, "submodule_under_file", `${link.path} is under file ${over}`);
+      }
+    }
   }
   for (const file of files) {
     if (
@@ -113,7 +157,7 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
   try {
     const result = await openPullRequest(
       { token: pat, userAgent: "operon-gatekeeper-pr" },
-      { repo, title, body: prBody, files },
+      { repo, title, body: prBody, files, submodules: links },
       crypto.randomUUID()
     );
     await ledger(env).append("pr_opened", {
@@ -121,7 +165,8 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
       repo,
       url: result.url,
       branch: result.branch,
-      files: files.length
+      files: files.length,
+      submodules: links.length
     });
     return json({ ok: true, ...result });
   } catch (error) {

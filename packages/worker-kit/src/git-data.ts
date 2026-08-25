@@ -59,12 +59,19 @@ export function decodeUtf8(base64: string): string {
 }
 
 /** Create blobs for each file and a tree overlaying them on a base tree. */
+/** A submodule pointer: a gitlink tree entry advancing path to sha. */
+export interface GitLink {
+  path: string;
+  sha: string;
+}
+
 export async function buildTree(
   api: GithubApi,
   ownerRepo: string,
   baseTreeSha: string,
   files: GitFile[],
-  deletions: string[] = []
+  deletions: string[] = [],
+  gitlinks: GitLink[] = []
 ): Promise<string> {
   const tree: Array<Record<string, unknown>> = [];
   for (const file of files) {
@@ -73,6 +80,11 @@ export async function buildTree(
       encoding: "utf-8"
     })) as { sha: string };
     tree.push({ path: file.path, mode: "100644", type: "blob", sha: blob.sha });
+  }
+  // A submodule bump is a commit-typed entry (gitlink): no blob exists;
+  // the sha references a commit in the submodule's own repository.
+  for (const link of gitlinks) {
+    tree.push({ path: link.path, mode: "160000", type: "commit", sha: link.sha });
   }
   // A tree entry with sha:null deletes that path relative to base_tree.
   for (const path of deletions) {
