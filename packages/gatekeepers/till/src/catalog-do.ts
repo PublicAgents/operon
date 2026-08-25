@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Offer } from "./gates.js";
+import { withinOfferCap, type Offer } from "./gates.js";
 
 /**
  * One TillCatalog Durable Object per colony: the offer catalog, keyed by
@@ -11,8 +11,15 @@ export class TillCatalog extends DurableObject {
     return `offer:${host}:${path}`;
   }
 
-  async put(offer: Offer): Promise<void> {
+  /**
+   * Count-and-put in one serialized DO turn, so overlapping offer requests
+   * cannot both pass the cap (the read-then-write version raced).
+   */
+  async putCapped(offer: Offer, maxOffers: number): Promise<{ ok: boolean }> {
+    const all = [...(await this.ctx.storage.list<Offer>({ prefix: "offer:" })).values()];
+    if (!withinOfferCap(all, offer, maxOffers)) return { ok: false };
     await this.ctx.storage.put(this.key(offer.host, offer.path), offer);
+    return { ok: true };
   }
 
   async get(host: string, path: string): Promise<Offer | undefined> {

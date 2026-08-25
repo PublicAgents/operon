@@ -103,21 +103,23 @@ app.post("/gatekeeper/till/offer", async c => {
     return errorResponse(400, "invalid_request");
   }
   const roster = parseRoster(env.ROSTER);
-  const existing = await catalog(env).listForAgent(agent.id);
-  const others = existing.filter(offer => !(offer.host === host && offer.path === path));
   const problem = validateOffer(
     { host, path, price, currency, description },
     agent,
     roster,
-    limits(env),
-    others.length
+    limits(env)
   );
   if (problem) {
     await ledger(env).append("offer_rejected", { agentId: agent.id, host, path, problem });
     return errorResponse(422, problem);
   }
   const offer: Offer = { agentId: agent.id, host, path, price, currency, description };
-  await catalog(env).put(offer);
+  // The cap is enforced inside the DO's serialized turn (atomic).
+  const capped = await catalog(env).putCapped(offer, limits(env).maxOffers);
+  if (!capped.ok) {
+    await ledger(env).append("offer_rejected", { agentId: agent.id, host, path, problem: "too_many_offers" });
+    return errorResponse(422, "too_many_offers");
+  }
   await ledger(env).append("offer_set", { agentId: agent.id, host, path, price, currency });
   return json({ ok: true, offer });
 });
@@ -185,13 +187,13 @@ app.all("*", async c => {
     recipient: env.TILL_RECIPIENT
   });
 
-  let response: Response | undefined;
+  // The middleware decorates c.res with the Payment-Receipt header after
+  // the handler runs; c.res (or a directly returned Response) is the
+  // authoritative final response, never the raw deploy fetch.
   const result = await middleware(c, async () => {
-    const content = await env.DEPLOY.fetch(c.req.raw);
-    response = content;
-    c.res = content;
+    c.res = await env.DEPLOY.fetch(c.req.raw);
   });
-  const out = (result instanceof Response ? result : undefined) ?? response ?? c.res;
+  const out = result instanceof Response ? result : c.res;
   if (out.status !== 402) {
     await ledger(env).append("receipt", {
       agentId: offer.agentId,

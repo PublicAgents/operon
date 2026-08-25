@@ -45,15 +45,16 @@ export type OfferProblem =
   | "too_many_offers";
 
 /**
- * Validate one offer. existingCount counts the agent's OTHER offers (an
- * update to the same path is not a new slot).
+ * Validate one offer's shape and ceilings. The OFFER-COUNT cap is not
+ * checked here: it must be enforced inside the catalog DO's single
+ * serialized turn (withinOfferCap), or two overlapping requests both pass
+ * a read-then-write check.
  */
 export function validateOffer(
   offer: Omit<Offer, "agentId">,
   agent: RosterAgent,
   roster: Roster,
-  limits: OfferLimits,
-  existingCount: number
+  limits: OfferLimits
 ): OfferProblem | null {
   if (!PATH_RE.test(offer.path) || offer.path.includes("..") || offer.path.includes("//")) {
     return "invalid_path";
@@ -69,8 +70,20 @@ export function validateOffer(
   if (comparePrices(offer.price, limits.maxPrice) > 0) return "price_above_ceiling";
   if (!limits.currencies.includes(offer.currency)) return "currency_not_allowed";
   if (!offer.description || offer.description.length > 200) return "missing_description";
-  if (existingCount >= limits.maxOffers) return "too_many_offers";
   return null;
+}
+
+/**
+ * The cap decision the catalog DO makes atomically: an update to the same
+ * host+path is not a new slot; only OTHER offers count.
+ */
+export function withinOfferCap(existing: Offer[], candidate: Offer, maxOffers: number): boolean {
+  const others = existing.filter(
+    offer =>
+      offer.agentId === candidate.agentId &&
+      !(offer.host === candidate.host && offer.path === candidate.path)
+  );
+  return others.length < maxOffers;
 }
 
 /** Compare two decimal price strings without floating point. */
