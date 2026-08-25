@@ -190,7 +190,9 @@ app.all("*", async c => {
   // Verification transport, in order of preference: Tempo's MPP relay
   // (api key), a dedicated RPC URL, then the public RPC (which
   // rate-limits shared Workers egress IPs and WILL fail under load).
-  const chainId = Number(env.TILL_RPC_CHAIN_ID ?? "42431");
+  // A malformed chain id must fall back, not become NaN/0 as an rpcUrl key.
+  const parsedChainId = Number(env.TILL_RPC_CHAIN_ID);
+  const chainId = Number.isInteger(parsedChainId) && parsedChainId > 0 ? parsedChainId : 42431;
   const mppx = Mppx.create({
     methods: [
       tempo.charge({
