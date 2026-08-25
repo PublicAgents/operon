@@ -184,15 +184,18 @@ export class Porch {
 
   /**
    * Read a state-repo subdirectory into a swept, size-checked file set.
-   * reduceForSweep, when given, maps each file to the content the sweep
-   * should examine (e.g. only the lines added relative to the upstream
-   * version, operon#11); the SUBMITTED content is always the full file.
-   * With a reducer, gitleaks runs over the reduced contents in a temp dir.
+   * reduceForGitleaks, when given, maps each file to the content GITLEAKS
+   * examines (e.g. only the lines added relative to the upstream version,
+   * operon#11): its generic patterns are what false-positive on other
+   * people's upstream text. The DENYLIST scan always runs on the FULL
+   * submitted content: it detects split-secret assembly, so dropping
+   * unchanged lines would let an added fragment complete a secret whose
+   * other half already sits upstream, and the full file is what ships.
    */
   private async collectSwept(
     dirInput: unknown,
     defaultDir: string,
-    reduceForSweep?: (path: string, text: string) => Promise<string>
+    reduceForGitleaks?: (path: string, text: string) => Promise<string>
   ): Promise<{ files: CollectedFile[]; error?: JsonResult }> {
     const dir = typeof dirInput === "string" && dirInput.length > 0 ? dirInput : defaultDir;
     if (dir.includes("..") || dir.startsWith("/")) {
@@ -213,29 +216,27 @@ export class Porch {
     const oversize = files.find(file => file.bytes.byteLength > MAX_FILE_BYTES);
     if (oversize) return { files: [], error: fail(413, "file_too_large", oversize.path) };
 
-    // Sweep before anything leaves the container: same rules as the
-    // presleep gate, plus gitleaks over the (possibly reduced) contents.
-    const scanInput: ChangedFile[] = [];
-    for (const file of files) {
-      const text = file.bytes.toString("utf8");
-      scanInput.push({
-        path: file.path,
-        content: reduceForSweep ? await reduceForSweep(file.path, text) : text
-      });
-    }
-    const secretFailures = scanForSecrets(scanInput, this.context.denylist);
+    // Sweep before anything leaves the container. The denylist scan runs
+    // over the FULL contents (split-secret assembly must see everything the
+    // payload ships); gitleaks runs over the reduced contents when a
+    // reducer is given.
+    const fullInput: ChangedFile[] = files.map(file => ({
+      path: file.path,
+      content: file.bytes.toString("utf8")
+    }));
+    const secretFailures = scanForSecrets(fullInput, this.context.denylist);
     if (secretFailures.length > 0) {
       return { files: [], error: fail(422, "blocked_by_sweep", secretFailures.map(f => f.detail).join("; ")) };
     }
     let gitleaksRoot = root;
     let sweepDir: string | undefined;
     try {
-      if (reduceForSweep) {
+      if (reduceForGitleaks) {
         sweepDir = await mkdtemp(join(tmpdir(), "operon-sweep-"));
-        for (const entry of scanInput) {
+        for (const entry of fullInput) {
           const target = join(sweepDir, entry.path);
           await mkdirFs(dirname(target), { recursive: true });
-          await writeFile(target, entry.content ?? "");
+          await writeFile(target, await reduceForGitleaks(entry.path, entry.content ?? ""));
         }
         gitleaksRoot = sweepDir;
       }
@@ -329,11 +330,11 @@ export class Porch {
     const blocked = this.sweepFields({ title, body: prBody });
     if (blocked) return blocked;
 
-    // For files that already exist upstream, sweep only the agent's ADDED
-    // lines: pre-existing upstream content cannot be new exfiltration, and
-    // community files routinely contain other people's scanner-tripping
-    // text (operon#11). New files, and any file whose upstream copy cannot
-    // be fetched, sweep in full (fail closed).
+    // For files that already exist upstream, GITLEAKS examines only the
+    // agent's ADDED lines: its generic patterns are what false-positive on
+    // other people's upstream text (operon#11). The denylist scan still
+    // sees the full file. New files, and any file whose upstream copy
+    // cannot be fetched, are examined in full (fail closed).
     const { files, error } = await this.collectSwept(body.dir, "pr", async (path, text) => {
       const upstream = await this.upstreamFile(repo, path);
       if (upstream?.exists && upstream.text !== undefined) return linesNotIn(text, upstream.text);

@@ -125,14 +125,15 @@ describe("porch doors", () => {
   });
 
   it.skipIf(!hasGitleaks)(
-    "sweeps only the added lines of an existing upstream file",
+    "gitleaks examines only added lines of an existing upstream file; the denylist sees everything",
     async () => {
-      // The stub answers upstream-file requests with an upstream README that
-      // contains a denylisted literal on someone else's line, and accepts
-      // the PR submission itself. Dispatch is on the request body shape.
+      // Upstream contains someone else's entry that trips a generic
+      // gitleaks pattern (a token-shaped string), the operon#11 case. The
+      // stub answers upstream-file lookups; PR submissions get an ok.
+      const foreign = 'other entry token ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 text';
       const stub = await startStub(body => {
         if (body.includes('"path"')) {
-          const upstream = "# list\nother entry with super-secret-token inside\nend";
+          const upstream = `# list\n${foreign}\nend`;
           return {
             status: 200,
             body: JSON.stringify({
@@ -149,12 +150,12 @@ describe("porch doors", () => {
         ["super-secret-token"]
       );
       await mkdir(join(stateDir, "pr"));
-      // Full new content: upstream (including the foreign secret-looking
-      // line) plus one clean added line. Only the added line is swept, so
-      // this passes; the same file swept in full would be blocked.
+
+      // A clean one-line addition beside the foreign token-shaped entry
+      // passes: gitleaks only examines the added line.
       await writeFile(
         join(stateDir, "pr", "README.md"),
-        "# list\nother entry with super-secret-token inside\n- clean new entry\nend"
+        `# list\n${foreign}\n- clean new entry\nend`
       );
       const ok = await fetch(`${url}/github/pr`, {
         method: "POST",
@@ -162,17 +163,31 @@ describe("porch doors", () => {
       });
       expect(ok.status).toBe(200);
 
-      // An added line carrying the secret is still blocked.
+      // An added line that itself trips gitleaks is still blocked.
       await writeFile(
         join(stateDir, "pr", "README.md"),
-        "# list\nother entry with super-secret-token inside\n- new line leaking super-secret-token\nend"
+        `# list\n${foreign}\n- new token ghp_Zz9dEfGhIjKlMnOpQrStUvWxYz9876543210 x\nend`
       );
-      const blocked = await fetch(`${url}/github/pr`, {
+      const leaked = await fetch(`${url}/github/pr`, {
         method: "POST",
         body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
       });
-      expect(blocked.status).toBe(422);
-      expect(((await blocked.json()) as { error: string }).error).toBe("blocked_by_sweep");
+      expect(leaked.status).toBe(422);
+      expect(((await leaked.json()) as { error: string }).error).toBe("blocked_by_gitleaks");
+
+      // The denylist scan still sees the FULL file: a denylisted secret
+      // split between an unchanged upstream line and an added completion
+      // is caught even though neither reduced line alone contains it.
+      await writeFile(
+        join(stateDir, "pr", "README.md"),
+        `# list\n${foreign}\n- entry super-secr\net-token completes\nend`
+      );
+      const split = await fetch(`${url}/github/pr`, {
+        method: "POST",
+        body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
+      });
+      expect(split.status).toBe(422);
+      expect(((await split.json()) as { error: string }).error).toBe("blocked_by_sweep");
     }
   );
 
