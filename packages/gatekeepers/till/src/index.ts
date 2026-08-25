@@ -1,0 +1,210 @@
+import { Hono } from "hono";
+import { Mppx, tempo } from "mppx/hono";
+import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
+import { errorResponse, json, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
+import { TillCatalog } from "./catalog-do.js";
+import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
+
+export { Ledger, TillCatalog };
+export * from "./gates.js";
+
+/**
+ * The till Gatekeeper (spec 0002 §2.1): fronts the agent hosts, turning
+ * catalog paths into MPP-paid resources and passing every other request
+ * untouched to the deploy Gatekeeper over a service binding. It is the
+ * only holder of the MPP signing key; revenue recipients are colony
+ * secrets; every offer change and every receipt is a ledger row.
+ *
+ * Money bearers are per-agent: the doors derive the agent from WHICH
+ * TILL_TOKEN_<AGENTID> secret matched, never from a payload claim.
+ */
+
+interface Env {
+  ROSTER: string;
+  /** Colony ceilings (vars): the agent prices; the operator bounds. */
+  TILL_MAX_PRICE?: string;
+  TILL_MAX_OFFERS?: string;
+  /** Comma-separated allowed currency identifiers (token addresses). */
+  TILL_CURRENCIES?: string;
+  /** "true" while M4a runs on testnet methods. */
+  TILL_TESTNET?: string;
+  /** Secrets. */
+  MPP_SECRET_KEY?: string;
+  TILL_RECIPIENT?: string;
+  OPERATOR_API_TOKEN?: string;
+  /** Per-agent bearers as TILL_TOKEN_<AGENTID>. */
+  [name: string]: unknown;
+  DEPLOY: Fetcher;
+  CATALOG: DurableObjectNamespace<TillCatalog>;
+  LEDGER: DurableObjectNamespace<Ledger>;
+}
+
+function ledger(env: Env) {
+  return env.LEDGER.get(env.LEDGER.idFromName("till"));
+}
+
+function catalog(env: Env) {
+  return env.CATALOG.get(env.CATALOG.idFromName("catalog"));
+}
+
+function limits(env: Env): OfferLimits {
+  return {
+    maxPrice: env.TILL_MAX_PRICE ?? "1.00",
+    maxOffers: Number(env.TILL_MAX_OFFERS ?? "20"),
+    currencies: (env.TILL_CURRENCIES ?? "")
+      .split(",")
+      .map(currency => currency.trim())
+      .filter(currency => currency.length > 0)
+  };
+}
+
+/**
+ * Resolve the calling agent from which per-agent bearer matched. Returns
+ * null when no configured bearer matches; a roster agent with no token
+ * configured simply cannot use the money doors.
+ */
+function agentFromBearer(request: Request, env: Env): RosterAgent | null {
+  const roster = parseRoster(env.ROSTER);
+  for (const agent of roster.agents) {
+    const expected = env[tokenEnvName(agent.id)];
+    if (typeof expected === "string" && expected.length > 0) {
+      if (requireBearer(request, expected) === null) return findAgent(roster, agent.id) ?? null;
+    }
+  }
+  return null;
+}
+
+type Vars = { env: Env };
+
+const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+// ---- doors -----------------------------------------------------------
+
+app.post("/gatekeeper/till/offer", async c => {
+  const env = c.env;
+  const agent = agentFromBearer(c.req.raw, env);
+  if (!agent) return errorResponse(401, "invalid_token");
+  const body = (await c.req.json().catch(() => null)) as {
+    host?: string;
+    path?: string;
+    price?: string;
+    currency?: string;
+    description?: string;
+  } | null;
+  if (!body) return errorResponse(400, "malformed_json");
+  const { host, path, price, currency, description } = body;
+  if (
+    typeof host !== "string" ||
+    typeof path !== "string" ||
+    typeof price !== "string" ||
+    typeof currency !== "string" ||
+    typeof description !== "string"
+  ) {
+    return errorResponse(400, "invalid_request");
+  }
+  const roster = parseRoster(env.ROSTER);
+  const existing = await catalog(env).listForAgent(agent.id);
+  const others = existing.filter(offer => !(offer.host === host && offer.path === path));
+  const problem = validateOffer(
+    { host, path, price, currency, description },
+    agent,
+    roster,
+    limits(env),
+    others.length
+  );
+  if (problem) {
+    await ledger(env).append("offer_rejected", { agentId: agent.id, host, path, problem });
+    return errorResponse(422, problem);
+  }
+  const offer: Offer = { agentId: agent.id, host, path, price, currency, description };
+  await catalog(env).put(offer);
+  await ledger(env).append("offer_set", { agentId: agent.id, host, path, price, currency });
+  return json({ ok: true, offer });
+});
+
+app.post("/gatekeeper/till/retire", async c => {
+  const env = c.env;
+  const agent = agentFromBearer(c.req.raw, env);
+  if (!agent) return errorResponse(401, "invalid_token");
+  const body = (await c.req.json().catch(() => null)) as { host?: string; path?: string } | null;
+  if (!body || typeof body.host !== "string" || typeof body.path !== "string") {
+    return errorResponse(400, "invalid_request");
+  }
+  const existing = await catalog(env).get(body.host, body.path);
+  if (!existing || existing.agentId !== agent.id) return errorResponse(404, "offer_not_found");
+  await catalog(env).retire(body.host, body.path);
+  await ledger(env).append("offer_retired", { agentId: agent.id, host: body.host, path: body.path });
+  return json({ ok: true });
+});
+
+app.post("/gatekeeper/till/sales", async c => {
+  const env = c.env;
+  const agent = agentFromBearer(c.req.raw, env);
+  if (!agent) return errorResponse(401, "invalid_token");
+  const rows = (await ledger(env).recent()) as Array<{ kind: string; detail?: { agentId?: string } }>;
+  const sales = rows.filter(row => row.kind === "receipt" && row.detail?.agentId === agent.id);
+  const offers = await catalog(env).listForAgent(agent.id);
+  return json({ ok: true, offers, sales });
+});
+
+app.get("/gatekeeper/till/ledger", async c => {
+  const env = c.env;
+  const denied = requireAnyBearer(c.req.raw, [env.OPERATOR_API_TOKEN as string | undefined]);
+  if (denied) return denied;
+  return json(await ledger(env).recent());
+});
+
+// ---- serving overlay -------------------------------------------------
+
+app.all("*", async c => {
+  const env = c.env;
+  const url = new URL(c.req.url);
+  const offer = await catalog(env).get(url.hostname, url.pathname);
+  if (!offer) {
+    // Not for sale: the till is a pure overlay; the deploy Gatekeeper
+    // serves exactly as it did when it held the routes itself.
+    return env.DEPLOY.fetch(c.req.raw);
+  }
+  if (!env.MPP_SECRET_KEY || !env.TILL_RECIPIENT) {
+    // A priced path with no payment configuration serves nothing rather
+    // than serving free: failing open would be a silent giveaway.
+    await ledger(env).append("serve_unconfigured", { host: offer.host, path: offer.path });
+    return errorResponse(503, "till_unconfigured");
+  }
+
+  const mppx = Mppx.create({
+    methods: [tempo.charge({ testnet: env.TILL_TESTNET === "true" })],
+    secretKey: env.MPP_SECRET_KEY
+  });
+  const middleware = mppx.charge({
+    amount: offer.price,
+    currency: offer.currency,
+    description: offer.description,
+    // Custody is operator-only: the recipient comes from colony secrets,
+    // never from the offer.
+    recipient: env.TILL_RECIPIENT
+  });
+
+  let response: Response | undefined;
+  const result = await middleware(c, async () => {
+    const content = await env.DEPLOY.fetch(c.req.raw);
+    response = content;
+    c.res = content;
+  });
+  const out = (result instanceof Response ? result : undefined) ?? response ?? c.res;
+  if (out.status !== 402) {
+    await ledger(env).append("receipt", {
+      agentId: offer.agentId,
+      host: offer.host,
+      path: offer.path,
+      price: offer.price,
+      currency: offer.currency,
+      status: out.status
+    });
+  }
+  return out;
+});
+
+export default {
+  fetch: app.fetch
+} satisfies ExportedHandler<Env>;

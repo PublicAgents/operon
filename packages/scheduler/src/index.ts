@@ -33,6 +33,9 @@ interface Env {
   PR_REPOS?: string;
   EMAIL_URL?: string;
   EMAIL_TOKEN?: string;
+  TILL_URL?: string;
+  // Per-agent money bearers arrive as TILL_TOKEN_<AGENTID> secrets via the
+  // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
@@ -92,6 +95,7 @@ function launchContext(env: Env): LaunchContext {
       prRepos: env.PR_REPOS,
       emailUrl: env.EMAIL_URL,
       emailToken: env.EMAIL_TOKEN,
+      tillUrl: env.TILL_URL,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }

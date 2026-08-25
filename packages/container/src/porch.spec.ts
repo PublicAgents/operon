@@ -222,6 +222,20 @@ describe("porch doors", () => {
     expect(((await viaRecipient.json()) as { error: string }).error).toBe("blocked_by_sweep");
   });
 
+  it("till doors answer not_wired without config and forward with the bearer", async () => {
+    const { url } = await startPorch(config());
+    const closed = await fetch(`${url}/till/sales`, { method: "POST", body: "{}" });
+    expect(((await closed.json()) as { error: string }).error).toBe("till_not_wired");
+
+    const stub = await startStub(() => ({ status: 200, body: '{"ok":true,"offers":[],"sales":[]}' }));
+    const { url: wired } = await startPorch(
+      config({ tillUrl: stub.url, tillToken: "agent-own-bearer" })
+    );
+    const sales = await fetch(`${wired}/till/sales`, { method: "POST", body: "{}" });
+    expect(sales.status).toBe(200);
+    expect(stub.requests).toHaveLength(1);
+  });
+
   it("forwards notify with the agent prefix and the bearer", async () => {
     const stub = await startStub(() => ({ status: 200, body: "{}" }));
     const { url } = await startPorch(

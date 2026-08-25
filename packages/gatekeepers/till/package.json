@@ -1,0 +1,42 @@
+{
+  "name": "@operon/gatekeeper-till",
+  "version": "0.0.0",
+  "description": "The till Gatekeeper: turns paths on an agent's assigned hosts into MPP-paid resources through a reviewed offer catalog, serves unpaid paths untouched via the deploy Gatekeeper, and ledgers every offer change and receipt. Custody is operator-only; agents price within colony ceilings.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": { "cwd": "{projectRoot}" },
+        "dependsOn": ["^build"],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0",
+    "hono": "^4.13.4",
+    "mppx": "^0.8.19"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

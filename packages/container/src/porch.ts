@@ -87,6 +87,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     github: Boolean(config.prUrl && config.prToken),
     pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
     email: Boolean(config.emailUrl && config.emailToken),
+    till: Boolean(config.tillUrl && config.tillToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -153,6 +154,9 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/github/update") return await this.update(body);
       if (request.method === "POST" && url.pathname === "/github/push") return await this.push(body);
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
+      if (request.method === "POST" && url.pathname === "/till/offer") return await this.tillOffer(body);
+      if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
+      if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -550,6 +554,47 @@ export class Porch {
       message,
       files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
     });
+  }
+
+  /** POST a payload to the till Gatekeeper with this agent's OWN bearer. */
+  private async tillCall(door: string, payload: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.tillUrl || !config.tillToken) return fail(503, "till_not_wired");
+    const response = await fetch(`${config.tillUrl}/gatekeeper/till/${door}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.tillToken}` },
+      body: JSON.stringify(payload)
+    });
+    const resultText = (await response.text()).slice(0, 5000);
+    if (!response.ok) return fail(502, `till_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  private async tillOffer(body: Record<string, unknown>): Promise<JsonResult> {
+    const { host, path, price, currency, description } = body;
+    if (
+      typeof host !== "string" ||
+      typeof path !== "string" ||
+      typeof price !== "string" ||
+      typeof currency !== "string" ||
+      typeof description !== "string"
+    ) {
+      return fail(400, "invalid_request");
+    }
+    const blocked = this.sweepFields({ description });
+    if (blocked) return blocked;
+    this.context.log(`till: offering ${host}${path} at ${price}`);
+    return this.tillCall("offer", { host, path, price, currency, description });
+  }
+
+  private async tillRetire(body: Record<string, unknown>): Promise<JsonResult> {
+    const { host, path } = body;
+    if (typeof host !== "string" || typeof path !== "string") return fail(400, "invalid_request");
+    return this.tillCall("retire", { host, path });
+  }
+
+  private async tillSales(): Promise<JsonResult> {
+    return this.tillCall("sales", {});
   }
 
   private async email(body: Record<string, unknown>): Promise<JsonResult> {

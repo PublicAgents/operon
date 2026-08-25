@@ -30,7 +30,9 @@ export const ENV = {
   prToken: "OPERON_PR_TOKEN",
   prRepos: "OPERON_PR_REPOS",
   emailUrl: "OPERON_EMAIL_URL",
-  emailToken: "OPERON_EMAIL_TOKEN"
+  emailToken: "OPERON_EMAIL_TOKEN",
+  tillUrl: "OPERON_TILL_URL",
+  tillToken: "OPERON_TILL_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -67,6 +69,9 @@ export interface WakeConfig {
   /** Email Gatekeeper endpoint + bearer; absent means the email doors are closed. */
   emailUrl?: string;
   emailToken?: string;
+  /** till Gatekeeper endpoint + this agent's own money bearer. */
+  tillUrl?: string;
+  tillToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -134,7 +139,9 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
       .map(repo => repo.trim())
       .filter(repo => repo.length > 0),
     emailUrl: env[ENV.emailUrl],
-    emailToken: env[ENV.emailToken]
+    emailToken: env[ENV.emailToken],
+    tillUrl: env[ENV.tillUrl],
+    tillToken: env[ENV.tillToken]
   };
 }
 
