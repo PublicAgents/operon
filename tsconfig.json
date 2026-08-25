@@ -32,6 +32,9 @@
     },
     {
       "path": "./packages/gatekeepers/till"
+    },
+    {
+      "path": "./packages/gatekeepers/spend"
     }
   ]
 }

@@ -30,6 +30,14 @@ custody and recipients are the operator's alone):
                                          re-offering the same host+path.
   operon till retire <host> <path>       make a path free again
   operon till sales                      your offers and ledgered receipts
+  operon pay <url> --max <amount> --reason <r>
+                                         fetch a paid resource: free content comes
+                                         straight back; a payable challenge within
+                                         your --max and the colony caps is PAID by
+                                         the spend Gatekeeper (you never hold a
+                                         key); a FIRST payment to a new merchant is
+                                         held for the operator. Ambiguous outcomes
+                                         freeze and are never retried by you.
 
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
@@ -130,6 +138,15 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseGithub(rest);
     case "till":
       return parseTill(rest);
+    case "pay": {
+      const [url] = positionals(rest);
+      const max = flagValue(rest, "--max");
+      const reason = flagValue(rest, "--reason");
+      if (!url || !url.startsWith("https://") || !max || !reason) {
+        throw new CliUsageError("usage: operon pay <https-url> --max <amount> --reason <r>");
+      }
+      return { path: "/pay", payload: { url, maxAmount: max, reason } };
+    }
     default:
       throw new CliUsageError(`unknown command "${command}"; run operon --help`);
   }
