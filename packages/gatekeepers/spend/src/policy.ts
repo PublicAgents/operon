@@ -106,9 +106,29 @@ export interface ChallengeSummary {
 }
 
 /**
+ * Parse "0xaddr=6,0xother=18" into a lowercased currency-to-decimals map:
+ * the colony's spend-side allowlist of KNOWN assets. The wire challenge
+ * does not carry decimals, so an asset outside this map has unknowable
+ * base units and is therefore unpayable, which is also the right
+ * security posture: the colony only ever pays in tokens it recognizes.
+ */
+export function parseCurrencyMap(raw: string | undefined): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const entry of (raw ?? "").split(",")) {
+    const [address, decimals] = entry.split("=").map(part => part.trim());
+    // Explicit digits required: Number("") is 0, which would silently give
+    // a malformed entry zero decimals and wrong cap arithmetic.
+    if (!address || !decimals || !/^\d{1,2}$/.test(decimals)) continue;
+    const parsed = Number(decimals);
+    if (parsed <= 36) map.set(address.toLowerCase(), parsed);
+  }
+  return map;
+}
+
+/**
  * Extract the policy-relevant facts from a parsed MPP challenge. Returns
- * null when a required fact is missing: an unreadable challenge is never
- * payable.
+ * null when a required fact is missing OR the asset is not in the known
+ * currency map: an unreadable challenge is never payable.
  */
 export function summarizeChallenge(
   url: string,
@@ -116,17 +136,19 @@ export function summarizeChallenge(
     method?: string;
     description?: string;
     request?: Record<string, unknown>;
-  }
+  },
+  currencies: Map<string, number>
 ): ChallengeSummary | null {
   const request = challenge.request ?? {};
   const amount = typeof request.amount === "string" ? request.amount : null;
   const recipient = typeof request.recipient === "string" ? request.recipient : null;
-  const decimals = typeof request.decimals === "number" ? request.decimals : null;
   const currency = typeof request.currency === "string" ? request.currency : null;
   const method = typeof challenge.method === "string" ? challenge.method : null;
-  if (!amount || !recipient || decimals === null || !currency || !method || !/^\d+$/.test(amount)) {
+  if (!amount || !recipient || !currency || !method || !/^\d+$/.test(amount)) {
     return null;
   }
+  const decimals = currencies.get(currency.toLowerCase());
+  if (decimals === undefined) return null;
   let origin: string;
   try {
     origin = new URL(url).origin;

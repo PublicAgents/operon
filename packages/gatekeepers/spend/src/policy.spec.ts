@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkCaps,
+  parseCurrencyMap,
   spendTokenVar,
   summarizeChallenge,
   toBaseUnits,
@@ -74,12 +75,15 @@ describe("checkCaps", () => {
 });
 
 describe("summarizeChallenge", () => {
-  it("extracts the merchant tuple and display amount", () => {
+  const CURRENCIES = parseCurrencyMap("0xToken=6");
+
+  it("extracts the merchant tuple and display amount from the wire shape", () => {
+    // The wire challenge carries NO decimals; they come from the map.
     const summary = summarizeChallenge("https://api.example.com/x", {
       method: "tempo",
       description: "Report",
-      request: { amount: "10000", currency: "0xtoken", recipient: "0xABC", decimals: 6 }
-    });
+      request: { amount: "10000", currency: "0xtoken", recipient: "0xABC" }
+    }, CURRENCIES);
     expect(summary).toMatchObject({
       origin: "https://api.example.com",
       method: "tempo",
@@ -90,21 +94,31 @@ describe("summarizeChallenge", () => {
     });
   });
 
-  it("returns null when any required fact is missing (unreadable = unpayable)", () => {
-    expect(summarizeChallenge("https://a.com/x", { method: "tempo", request: { amount: "1" } })).toBeNull();
-    // A challenge without an asset is unreadable, therefore unpayable.
+  it("returns null for missing facts or unknown assets (unreadable = unpayable)", () => {
+    expect(
+      summarizeChallenge("https://a.com/x", { method: "tempo", request: { amount: "1" } }, CURRENCIES)
+    ).toBeNull();
+    // An asset outside the known-currency map is unpayable.
     expect(
       summarizeChallenge("https://a.com/x", {
         method: "tempo",
-        request: { amount: "1", recipient: "0xA", decimals: 6 }
-      })
+        request: { amount: "1", recipient: "0xA", currency: "0xunknown" }
+      }, CURRENCIES)
     ).toBeNull();
     expect(
       summarizeChallenge("https://a.com/x", {
         method: "tempo",
-        request: { amount: "1.5", recipient: "0xA", decimals: 6 }
-      })
+        request: { amount: "1.5", recipient: "0xA", currency: "0xtoken" }
+      }, CURRENCIES)
     ).toBeNull();
+  });
+
+  it("parseCurrencyMap lowercases and validates decimals", () => {
+    const map = parseCurrencyMap("0xAbC=6, 0xdef=18, bad, 0xz=99, 0xempty=, 0xneg=-1");
+    expect(map.get("0xabc")).toBe(6);
+    expect(map.get("0xdef")).toBe(18);
+    // Empty, out-of-range, and non-digit decimals are all dropped.
+    expect(map.size).toBe(2);
   });
 });
 
