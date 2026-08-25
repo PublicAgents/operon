@@ -108,16 +108,32 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("pr_failed", { reason: "no_files", repo });
     return errorResponse(400, "no_files");
   }
-  // One tree entry per path: a path claimed as both a file and a submodule
-  // (or twice as either) would produce a conflicting Git tree.
+  // One tree entry per path, and no nesting across kinds: a path claimed
+  // twice, an entry under a submodule path (nothing lives inside a
+  // gitlink), or a submodule under a file path would all produce a Git
+  // tree GitHub rejects.
   {
+    const filePaths = files.map(file => file?.path).filter((p): p is string => typeof p === "string");
+    const allPaths = [...filePaths, ...links.map(link => link.path)];
     const seen = new Set<string>();
-    for (const path of [...files.map(file => file?.path), ...links.map(link => link.path)]) {
-      if (typeof path === "string" && seen.has(path)) {
+    for (const path of allPaths) {
+      if (seen.has(path)) {
         await ledger(env).append("pr_failed", { reason: "duplicate_path", repo, path });
         return errorResponse(400, "duplicate_path", path);
       }
-      if (typeof path === "string") seen.add(path);
+      seen.add(path);
+    }
+    for (const link of links) {
+      const under = allPaths.find(path => path !== link.path && path.startsWith(`${link.path}/`));
+      if (under) {
+        await ledger(env).append("pr_failed", { reason: "path_under_submodule", repo, path: under });
+        return errorResponse(400, "path_under_submodule", `${under} is inside submodule ${link.path}`);
+      }
+      const over = filePaths.find(path => link.path.startsWith(`${path}/`));
+      if (over) {
+        await ledger(env).append("pr_failed", { reason: "submodule_under_file", repo, path: link.path });
+        return errorResponse(400, "submodule_under_file", `${link.path} is under file ${over}`);
+      }
     }
   }
   for (const file of files) {
