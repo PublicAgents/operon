@@ -29,7 +29,7 @@ interface Env {
   EMAIL: {
     send(message: {
       to: string;
-      from: string;
+      from: { email: string; name?: string };
       subject: string;
       text: string;
       html?: string;
@@ -135,7 +135,9 @@ async function deliver(
   now: string,
   count: number
 ): Promise<Response> {
-  const from = `${fromName(identity.name)} <${identity.address}>`;
+  // The structured send() takes from as an object; the RFC "Name <addr>"
+  // string form is SMTP-only and rejected as an invalid address.
+  const from = { email: identity.address, name: fromName(identity.name) };
   const footer = disclosureFooter(identity.name, identity.address, identity.siteUrl);
 
   let result: { messageId?: string };
