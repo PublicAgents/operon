@@ -28,9 +28,22 @@ interface Env {
   TILL_CURRENCIES?: string;
   /** "true" while M4a runs on testnet methods. */
   TILL_TESTNET?: string;
+  /**
+   * Tempo chain id and dedicated RPC URL, for verification through a
+   * provider instead of the public RPC (which rate-limits by IP, and
+   * Workers egress IPs are shared: "too many connections from this IP").
+   */
+  TILL_RPC_CHAIN_ID?: string;
   /** Secrets. */
   MPP_SECRET_KEY?: string;
   TILL_RECIPIENT?: string;
+  /**
+   * Tempo API key (scope mpp:write): validation and broadcast go through
+   * Tempo's MPP relay instead of raw RPC. The production-grade path; when
+   * set it takes precedence over TILL_RPC_URL.
+   */
+  TEMPO_API_KEY?: string;
+  TILL_RPC_URL?: string;
   OPERATOR_API_TOKEN?: string;
   /** Per-agent bearers as TILL_TOKEN_<AGENTID>. */
   [name: string]: unknown;
@@ -174,8 +187,21 @@ app.all("*", async c => {
     return errorResponse(503, "till_unconfigured");
   }
 
+  // Verification transport, in order of preference: Tempo's MPP relay
+  // (api key), a dedicated RPC URL, then the public RPC (which
+  // rate-limits shared Workers egress IPs and WILL fail under load).
+  const chainId = Number(env.TILL_RPC_CHAIN_ID ?? "42431");
   const mppx = Mppx.create({
-    methods: [tempo.charge({ testnet: env.TILL_TESTNET === "true" })],
+    methods: [
+      tempo.charge({
+        testnet: env.TILL_TESTNET === "true",
+        ...(typeof env.TEMPO_API_KEY === "string" && env.TEMPO_API_KEY.length > 0
+          ? { relay: { apiKey: env.TEMPO_API_KEY } }
+          : typeof env.TILL_RPC_URL === "string" && env.TILL_RPC_URL.length > 0
+            ? { rpcUrl: { [chainId]: env.TILL_RPC_URL } }
+            : {})
+      })
+    ],
     secretKey: env.MPP_SECRET_KEY
   });
   const middleware = mppx.charge({
