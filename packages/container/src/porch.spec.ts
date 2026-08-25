@@ -124,6 +124,58 @@ describe("porch doors", () => {
     expect(((await thread.json()) as { error: string }).error).toBe("thread_not_wired");
   });
 
+  it.skipIf(!hasGitleaks)(
+    "sweeps only the added lines of an existing upstream file",
+    async () => {
+      // The stub answers upstream-file requests with an upstream README that
+      // contains a denylisted literal on someone else's line, and accepts
+      // the PR submission itself. Dispatch is on the request body shape.
+      const stub = await startStub(body => {
+        if (body.includes('"path"')) {
+          const upstream = "# list\nother entry with super-secret-token inside\nend";
+          return {
+            status: 200,
+            body: JSON.stringify({
+              ok: true,
+              exists: true,
+              contentBase64: Buffer.from(upstream, "utf8").toString("base64")
+            })
+          };
+        }
+        return { status: 200, body: '{"ok":true,"url":"https://github.com/x/pull/1"}' };
+      });
+      const { url, stateDir } = await startPorch(
+        config({ prUrl: `${stub.url}/gatekeeper/pr`, prToken: "t", prRepos: ["a/b"] }),
+        ["super-secret-token"]
+      );
+      await mkdir(join(stateDir, "pr"));
+      // Full new content: upstream (including the foreign secret-looking
+      // line) plus one clean added line. Only the added line is swept, so
+      // this passes; the same file swept in full would be blocked.
+      await writeFile(
+        join(stateDir, "pr", "README.md"),
+        "# list\nother entry with super-secret-token inside\n- clean new entry\nend"
+      );
+      const ok = await fetch(`${url}/github/pr`, {
+        method: "POST",
+        body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
+      });
+      expect(ok.status).toBe(200);
+
+      // An added line carrying the secret is still blocked.
+      await writeFile(
+        join(stateDir, "pr", "README.md"),
+        "# list\nother entry with super-secret-token inside\n- new line leaking super-secret-token\nend"
+      );
+      const blocked = await fetch(`${url}/github/pr`, {
+        method: "POST",
+        body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
+      });
+      expect(blocked.status).toBe(422);
+      expect(((await blocked.json()) as { error: string }).error).toBe("blocked_by_sweep");
+    }
+  );
+
   it("sweeps short outbound text fields, not only bodies and files", async () => {
     const { url } = await startPorch(
       config({ prUrl: "http://never-reached", prToken: "t", prRepos: ["a/b"] }),
@@ -242,7 +294,9 @@ describe("porch doors", () => {
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
       expect(blocked.status).toBe(422);
-      expect(stub.requests).toHaveLength(0);
+      // The door may look up upstream file versions (repo+path only) to
+      // scope the sweep, but no PR payload may have left the container.
+      expect(stub.requests.filter(request => request.includes('"files"'))).toHaveLength(0);
 
       await writeFile(join(stateDir, "pr", "server.json"), '{"name":"clean"}');
       const good = await fetch(`${url}/github/pr`, {
@@ -250,11 +304,13 @@ describe("porch doors", () => {
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
       expect(good.status).toBe(200);
-      expect(stub.requests).toHaveLength(1);
-      expect(stub.requests[0]).toContain('"repo":"org/allowed"');
-      expect(stub.requests[0]).toContain('"path":"server.json"');
-      // The container never sends a github credential; only the data.
-      expect(stub.requests[0]).not.toContain("super-secret-token");
+      // Among the requests (upstream lookups + submission), exactly one is
+      // the PR payload, carrying data and never a github credential.
+      const submissions = stub.requests.filter(request => request.includes('"files"'));
+      expect(submissions).toHaveLength(1);
+      expect(submissions[0]).toContain('"repo":"org/allowed"');
+      expect(submissions[0]).toContain('"path":"server.json"');
+      expect(submissions[0]).not.toContain("super-secret-token");
     }
   );
 });

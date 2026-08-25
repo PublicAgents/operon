@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskSecret, verifyPresleep } from "./presleep.js";
+import { linesNotIn, maskSecret, verifyPresleep } from "./presleep.js";
 
 describe("verifyPresleep", () => {
   it("passes a wake that journaled and leaked nothing", () => {
@@ -126,5 +126,21 @@ describe("maskSecret", () => {
   it("masks short and long literals", () => {
     expect(maskSecret("abc")).toBe("****");
     expect(maskSecret("super-secret-token")).toBe("sup…(18 chars)");
+  });
+});
+
+describe("linesNotIn", () => {
+  it("keeps only lines absent from upstream, dropping unchanged content", () => {
+    const upstream = "alpha\nbeta with tokens. 9 tools: price/funding/OI\ngamma";
+    const submitted = "alpha\nbeta with tokens. 9 tools: price/funding/OI\n- [New Entry](x)\ngamma";
+    expect(linesNotIn(submitted, upstream)).toBe("- [New Entry](x)");
+  });
+
+  it("treats a modified line as added", () => {
+    expect(linesNotIn("a\nb-changed", "a\nb")).toBe("b-changed");
+  });
+
+  it("returns everything for a new file against empty upstream content", () => {
+    expect(linesNotIn("x\ny", "")).toBe("x\ny");
   });
 });

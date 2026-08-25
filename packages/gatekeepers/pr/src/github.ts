@@ -464,3 +464,36 @@ export async function openIssue(
   )) as { html_url: string };
   return { url: issue.html_url };
 }
+
+/**
+ * Fetch a file's current content from a repo, raw (works past the contents
+ * API's 1MB JSON limit). exists:false on 404. Used by the porch to scope
+ * the outbound sweep of an existing file to the agent's added lines.
+ */
+export async function getUpstreamFile(
+  api: GithubApi,
+  repo: string,
+  path: string
+): Promise<{ exists: boolean; contentBase64?: string }> {
+  const doFetch = api.fetch ?? fetch;
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const response = await doFetch(`https://api.github.com/repos/${repo}/contents/${encodedPath}`, {
+    headers: {
+      authorization: `Bearer ${api.token}`,
+      accept: "application/vnd.github.raw+json",
+      "user-agent": UA,
+      "x-github-api-version": "2022-11-28"
+    }
+  });
+  if (response.status === 404) return { exists: false };
+  if (!response.ok) {
+    throw new Error(`upstream_file_failed: ${response.status} for ${repo}/${path}`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return { exists: true, contentBase64: btoa(binary) };
+}

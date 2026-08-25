@@ -187,3 +187,22 @@ describe("getIssueRef", () => {
     });
   });
 });
+
+describe("getUpstreamFile", () => {
+  it("returns raw content base64 and maps 404 to exists:false", async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "https://api.github.com/repos/org/repo/contents/docs%2FREADME.md".replace("%2F", "/"))
+        return new Response("hello upstream", { status: 200 });
+      if (url.endsWith("/contents/missing.md")) return new Response("", { status: 404 });
+      return new Response("unexpected: " + url, { status: 500 });
+    }) as typeof fetch;
+
+    const { getUpstreamFile } = await import("./github.js");
+    const found = await getUpstreamFile({ token: "pat", userAgent: "t", fetch: fetchImpl }, "org/repo", "docs/README.md");
+    expect(found.exists).toBe(true);
+    expect(Buffer.from(found.contentBase64 ?? "", "base64").toString("utf8")).toBe("hello upstream");
+    const missing = await getUpstreamFile({ token: "pat", userAgent: "t", fetch: fetchImpl }, "org/repo", "missing.md");
+    expect(missing).toEqual({ exists: false });
+  });
+});
