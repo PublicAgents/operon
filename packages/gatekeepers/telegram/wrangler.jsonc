@@ -30,6 +30,8 @@
   //   TELEGRAM_WEBHOOK_SECRET   secret_token registered with setWebhook
   //   NOTIFY_TOKEN              bearer accepted on POST /notify
   //   WAKE_TRIGGER_TOKEN        bearer this Gatekeeper presents to the scheduler
+  //   EMAIL_SERVICE_TOKEN       bearer for the email Gatekeeper (approve/reject
+  //                             held sends from the inline buttons)
   //   OPERATOR_API_TOKEN        bearer for an operator UI: channel send and
   //                             transcript, ledger tailing. Telegram is one
   //                             transport over the same channel; a UI is another.

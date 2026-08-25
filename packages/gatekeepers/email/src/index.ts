@@ -54,13 +54,22 @@ function operatorCopy(env: Env, localPart: string, zone: string): string {
     : `${localPart}@${zone}`;
 }
 
-async function notifyOperator(env: Env, text: string): Promise<void> {
+/**
+ * Notify the operator; optional actions render as inline buttons in
+ * Telegram (approve/reject a held send) and execute back against this
+ * Gatekeeper when pressed.
+ */
+async function notifyOperator(
+  env: Env,
+  text: string,
+  actions?: Array<{ label: string; kind: string; agentId: string; id: string }>
+): Promise<void> {
   if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
   try {
     await fetch(env.NOTIFY_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, ...(actions ? { actions } : {}) })
     });
   } catch (error) {
     console.error("email gatekeeper notify failed", error);
@@ -98,7 +107,11 @@ async function handleSend(request: Request, env: Env): Promise<Response> {
     const held = await box.hold({ to: recipient, subject, text }, now);
     await notifyOperator(
       env,
-      `[${agent.id}] first-contact email HELD to ${recipient}: "${subject}". Approve id ${held.id} or it will not send.`
+      `[${agent.id}] first-contact email HELD to ${recipient}: "${subject}"\n\n${text.slice(0, 1000)}`,
+      [
+        { label: "Approve", kind: "email_approve", agentId: agent.id, id: held.id },
+        { label: "Reject", kind: "email_reject", agentId: agent.id, id: held.id }
+      ]
     );
     return json({ ok: true, status: "held_for_approval", heldId: held.id });
   }
@@ -213,6 +226,24 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
   return response;
 }
 
+async function handleReject(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; heldId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, heldId } = body.value;
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
+  if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
+  await mailbox(env, agent.id).deleteHeld(heldId);
+  try {
+    await ledger(env).append("held_rejected", { agentId: agent.id, heldId });
+  } catch (error) {
+    console.error("ledger append failed", error);
+  }
+  return json({ ok: true, status: "rejected" });
+}
+
 async function handlePull(request: Request, env: Env): Promise<Response> {
   const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
   if (denied) return denied;
@@ -283,6 +314,7 @@ export default {
       if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
       if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
       if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
+      if (url.pathname === "/gatekeeper/email/reject") return handleReject(request, env);
     }
     if (url.pathname === "/gatekeeper/email/ledger" && request.method === "GET") {
       const denied = requireAnyBearer(request, [env.EMAIL_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);

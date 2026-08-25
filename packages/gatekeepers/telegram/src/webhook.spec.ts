@@ -61,6 +61,64 @@ describe("triageUpdate", () => {
     ).toBe("unknown_command");
   });
 
+  it("parses the kill switch and help", () => {
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/disable promoter" } }, OPERATOR)).toEqual({
+      kind: "toggle",
+      agentId: "promoter",
+      disabled: true
+    });
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/enable promoter" } }, OPERATOR)).toEqual({
+      kind: "toggle",
+      agentId: "promoter",
+      disabled: false
+    });
+    expect(triageUpdate({ message: { chat: { id: 12345 }, text: "/help" } }, OPERATOR)).toEqual({
+      kind: "help"
+    });
+    // Malformed targets are typos, not broadcasts and not toggles.
+    expect(
+      triageUpdate({ message: { chat: { id: 12345 }, text: "/disable ../etc" } }, OPERATOR).kind
+    ).toBe("unknown_command");
+  });
+
+  it("parses /approve and /reject with held ids", () => {
+    expect(
+      triageUpdate(
+        { message: { chat: { id: 12345 }, text: "/approve promoter 76149d94-83a3-45d3-8262-be32c168c5aa" } },
+        OPERATOR
+      )
+    ).toEqual({
+      kind: "approve",
+      agentId: "promoter",
+      heldId: "76149d94-83a3-45d3-8262-be32c168c5aa",
+      approve: true
+    });
+    expect(
+      triageUpdate({ message: { chat: { id: 12345 }, text: "/reject promoter deadbeef" } }, OPERATOR)
+    ).toMatchObject({ kind: "approve", approve: false });
+  });
+
+  it("routes operator button presses and ignores foreign ones", () => {
+    expect(
+      triageUpdate(
+        {
+          callback_query: {
+            id: "cb1",
+            data: "ea:promoter:76149d94",
+            message: { chat: { id: 12345 }, message_id: 7 }
+          }
+        },
+        OPERATOR
+      )
+    ).toEqual({ kind: "callback", callbackId: "cb1", data: "ea:promoter:76149d94", messageId: 7 });
+    expect(
+      triageUpdate(
+        { callback_query: { id: "cb2", data: "ea:promoter:x", message: { chat: { id: 666 } } } },
+        OPERATOR
+      ).kind
+    ).toBe("ignored");
+  });
+
   it("noops on whitespace-only operator text", () => {
     expect(
       triageUpdate({ message: { chat: { id: 12345 }, text: "   " } }, OPERATOR).kind

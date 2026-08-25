@@ -121,6 +121,15 @@ async function wake(
       await notify(env, `[${agent.id}] wake skipped: ${detail}`);
       return { status: "locked", wakeId: result.wakeId, detail };
     }
+    if (result.status === "disabled") {
+      // Deliberate operator state, notified only for manual wakes: a cron
+      // firing against a disabled agent is the kill switch doing its job,
+      // and alerting on every cron tick would be noise.
+      if (trigger === "manual") {
+        await notify(env, `[${agent.id}] wake refused: disabled by operator (/enable ${agent.id} to lift)`);
+      }
+      return { status: "disabled", detail: "disabled by operator" };
+    }
     if (result.status === "error") {
       await notify(env, `[${agent.id}] wake ${wakeId} failed to start: ${result.error}`);
       return { status: "error", wakeId, detail: result.error };
@@ -178,6 +187,19 @@ export default {
       if (!agent) return errorResponse(404, "unknown_agent", wakeMatch[1]);
       if (!agent.enabled) return errorResponse(409, "agent_disabled", agent.id);
       return json(await wake(env, agent, "manual"));
+    }
+
+    const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);
+    if (toggleMatch && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const roster = parseRoster(env.ROSTER);
+      const agent = findAgent(roster, toggleMatch[2]);
+      if (!agent) return errorResponse(404, "unknown_agent", toggleMatch[2]);
+      const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
+      const result = await stub.setDisabled(toggleMatch[1] === "disable");
+      console.log(`operator ${toggleMatch[1]}: ${agent.id}`, JSON.stringify(result));
+      return json({ agentId: agent.id, ...result });
     }
 
     const wakesMatch = /^\/wakes\/([a-z0-9-]+)$/.exec(url.pathname);
