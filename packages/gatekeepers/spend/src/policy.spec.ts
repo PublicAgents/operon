@@ -84,6 +84,7 @@ describe("summarizeChallenge", () => {
       origin: "https://api.example.com",
       method: "tempo",
       recipient: "0xABC",
+      currency: "0xtoken",
       amount: "10000",
       display: "0.01"
     });
@@ -91,6 +92,13 @@ describe("summarizeChallenge", () => {
 
   it("returns null when any required fact is missing (unreadable = unpayable)", () => {
     expect(summarizeChallenge("https://a.com/x", { method: "tempo", request: { amount: "1" } })).toBeNull();
+    // A challenge without an asset is unreadable, therefore unpayable.
+    expect(
+      summarizeChallenge("https://a.com/x", {
+        method: "tempo",
+        request: { amount: "1", recipient: "0xA", decimals: 6 }
+      })
+    ).toBeNull();
     expect(
       summarizeChallenge("https://a.com/x", {
         method: "tempo",

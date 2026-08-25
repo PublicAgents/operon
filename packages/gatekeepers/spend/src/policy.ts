@@ -95,6 +95,8 @@ export interface ChallengeSummary {
   origin: string;
   method: string;
   recipient: string;
+  /** The asset being charged (token address / method currency id). */
+  currency: string;
   /** Base units, as a decimal string of the integer. */
   amount: string;
   decimals: number;
@@ -120,8 +122,11 @@ export function summarizeChallenge(
   const amount = typeof request.amount === "string" ? request.amount : null;
   const recipient = typeof request.recipient === "string" ? request.recipient : null;
   const decimals = typeof request.decimals === "number" ? request.decimals : null;
+  const currency = typeof request.currency === "string" ? request.currency : null;
   const method = typeof challenge.method === "string" ? challenge.method : null;
-  if (!amount || !recipient || decimals === null || !method || !/^\d+$/.test(amount)) return null;
+  if (!amount || !recipient || decimals === null || !currency || !method || !/^\d+$/.test(amount)) {
+    return null;
+  }
   let origin: string;
   try {
     origin = new URL(url).origin;
@@ -136,6 +141,7 @@ export function summarizeChallenge(
     origin,
     method,
     recipient,
+    currency,
     amount,
     decimals,
     display: frac ? `${whole}.${frac}` : whole.toString(),

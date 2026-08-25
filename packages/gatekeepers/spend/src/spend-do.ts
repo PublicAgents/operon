@@ -16,6 +16,7 @@ export interface OutboxRow {
   origin: string;
   method: string;
   recipient: string;
+  currency: string;
   /** Base units as integer string. */
   amount: string;
   reason: string;
@@ -32,6 +33,7 @@ export interface HeldPayment {
   origin: string;
   method: string;
   recipient: string;
+  currency: string;
   amount: string;
   decimals: number;
   display: string;

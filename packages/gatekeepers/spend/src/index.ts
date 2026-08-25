@@ -106,6 +106,8 @@ function guardedFetch(zone: string): typeof fetch {
         url = new URL(location, url).toString();
         continue;
       }
+      // Content-Length is attacker-controlled and only a fast-fail; the
+      // REAL limit is enforced when the body is read (readBoundedBody).
       const length = Number(response.headers.get("content-length") ?? "0");
       if (length > MAX_RESPONSE_BYTES) throw new Error("blocked_url:too_large");
       return response;
@@ -122,6 +124,44 @@ function challengeFrom(response: Response): Challenge.Challenge | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read a response body through a hard byte limit: the stream aborts the
+ * moment it exceeds the cap, regardless of what Content-Length claimed.
+ */
+async function readBoundedBody(response: Response): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error("blocked_url:too_large");
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+/** Chunked base64: String.fromCharCode over megabytes blows the stack. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 interface PayContext {
@@ -158,6 +198,7 @@ async function executePayment(
       origin: summary.origin,
       method: summary.method,
       recipient: summary.recipient,
+      currency: summary.currency,
       amount: summary.amount,
       reason: context.reason,
       at
@@ -202,11 +243,16 @@ async function executePayment(
         // merchant swapping recipient/amount between probe and payment is
         // refused before a credential exists.
         const again = summarizeChallenge(context.url, challenge);
+        // The FULL approved shape binds: origin, method, recipient, ASSET,
+        // and decimals. Same integer amount of a different token, or shifted
+        // decimals, is a different payment and is refused pre-credential.
         if (
           !again ||
           again.origin !== summary.origin ||
           again.method !== summary.method ||
           again.recipient !== summary.recipient ||
+          again.currency !== summary.currency ||
+          again.decimals !== summary.decimals ||
           BigInt(again.amount) > BigInt(summary.amount)
         ) {
           return undefined;
@@ -229,7 +275,7 @@ async function executePayment(
         env,
         `[${context.agent.id}] paid ${summary.display} to ${summary.origin} (${context.reason})`
       );
-      const body = await response.arrayBuffer();
+      const body = await readBoundedBody(response);
       return new Response(
         JSON.stringify({
           ok: true,
@@ -237,7 +283,7 @@ async function executePayment(
           amount: summary.display,
           receipt,
           contentType: response.headers.get("content-type"),
-          contentBase64: btoa(String.fromCharCode(...new Uint8Array(body.slice(0, MAX_RESPONSE_BYTES))))
+          contentBase64: toBase64(body)
         }),
         { headers: { "content-type": "application/json" } }
       );
@@ -294,13 +340,18 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
   }
   if (probe.status !== 402) {
     // Free content needs no payment; return it through the same bounded pipe.
-    const bodyBuf = await probe.arrayBuffer();
+    let bodyBytes: Uint8Array;
+    try {
+      bodyBytes = await readBoundedBody(probe);
+    } catch (error) {
+      return errorResponse(502, "probe_failed", String(error).slice(0, 200));
+    }
     return json({
       ok: true,
       status: "free",
       httpStatus: probe.status,
       contentType: probe.headers.get("content-type"),
-      contentBase64: btoa(String.fromCharCode(...new Uint8Array(bodyBuf.slice(0, MAX_RESPONSE_BYTES))))
+      contentBase64: toBase64(bodyBytes)
     });
   }
   const challenge = challengeFrom(probe);
@@ -318,6 +369,7 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
         origin: summary.origin,
         method: summary.method,
         recipient: summary.recipient,
+        currency: summary.currency,
         amount: summary.amount,
         decimals: summary.decimals,
         display: summary.display,
@@ -367,6 +419,7 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     origin: held.origin,
     method: held.method,
     recipient: held.recipient,
+    currency: held.currency,
     amount: held.amount,
     decimals: held.decimals,
     display: held.display
