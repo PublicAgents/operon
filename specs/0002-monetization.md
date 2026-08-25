@@ -89,7 +89,13 @@ adversarially reviewed into robustness:
   the cap must assume they did until reconciliation (a receipt query or
   an operator ruling) settles the row. This is the wake lock's
   outcome_unknown doctrine applied to money, where optimistic release is
-  a double-spend of the cap.
+  a double-spend of the cap. An unknown attempt is also NEVER retried
+  automatically: a retry is a distinct, operator-authorized action that
+  carries the original outbox row id as the payment's idempotency key
+  where the method supports one, and where it does not, the operator
+  confirms no charge landed before the retry is permitted. One logical
+  purchase maps to one outbox row for its whole life, however many
+  network exchanges it takes.
 - **Everything ledgered before and after**: a durable outbox row for the
   attempt in the same DO turn as the reservation, a receipt row on
   success. A payment can never occur without an operator-visible record.
@@ -106,7 +112,15 @@ adversarially reviewed into robustness:
   redirects re-validated against the same rules. The full paid fetch
   additionally requires the origin to be operator-approved; an
   unapproved origin gets at most the single bounded probe that captures
-  its challenge for the hold.
+  its challenge for the hold. Name-based checks are validation-time and
+  a rebinding hostname can dodge them, so they are the outer fence, not
+  the wall: the wall is that Workers egress holds no privileged network
+  position (v1 uses no private networking) and NO chassis surface trusts
+  network position, every Gatekeeper authenticates by bearer regardless
+  of where a request comes from. Structurally: the spend Gatekeeper must
+  never be attached to a VPC or any private-network binding, so there is
+  no internal address for a rebind to reach that a stranger's browser
+  could not.
 
 ### 2.3 What stays forbidden
 
@@ -160,8 +174,13 @@ any agentId claim in the payload.
     binds.
 11. Money-door bearers are per-agent; the Gatekeepers derive identity
     from the bearer, never from the payload. Ambiguous payment outcomes
-    hold their reservation until reconciled; the cap never assumes an
-    unproven failure.
+    hold their reservation until reconciled and are never retried
+    automatically; a retry is operator-authorized and idempotency-keyed
+    to the original attempt. The cap never assumes an unproven failure.
+12. The spend Gatekeeper joins no private network, ever: rebinding a
+    hostname buys an attacker nothing a public request could not already
+    reach, and chassis surfaces authenticate by bearer, never by network
+    position.
 
 ## 5. Rollout
 
