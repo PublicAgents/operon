@@ -32,6 +32,8 @@ interface Env {
   SPEND_TESTNET?: string;
   /** Known assets as "0xaddr=decimals,...": the spend-side currency map. */
   SPEND_CURRENCIES?: string;
+  /** Optional dedicated RPC for push-mode payments (public RPC rate-limits Workers). */
+  SPEND_RPC_URL?: string;
   /** REQUIRED when SPEND_TESTNET is not "true": the mainnet chain id. */
   SPEND_CHAIN_ID?: string;
   NOTIFY_URL?: string;
@@ -237,7 +239,15 @@ async function executePayment(
       return errorResponse(503, "chain_id_unconfigured");
     }
     const payments = Mppx.create({
-      methods: [tempo.charge({ account, expectedChainId })],
+      methods: [
+        tempo.charge({
+          account,
+          expectedChainId,
+          ...(typeof env.SPEND_RPC_URL === "string" && env.SPEND_RPC_URL.length > 0
+            ? { rpcUrl: { [expectedChainId]: env.SPEND_RPC_URL } }
+            : {})
+        })
+      ],
       polyfill: false,
       fetch: guardedFetch(zone),
       maxPaymentRetries: 1,
@@ -260,8 +270,16 @@ async function executePayment(
         ) {
           return undefined;
         }
+        // PULL mode: the credential is an offline-signed authorization the
+        // MERCHANT broadcasts, so credential creation needs no chain reads.
+        // (Push mode builds a full transaction and needs RPC, which the
+        // public endpoints rate-limit for Workers; SPEND_RPC_URL exists
+        // for that path.) The flag flips only once a credential actually
+        // exists: a failure during creation is pre-credential and safe to
+        // release.
+        const credential = await helpers.createCredential({ mode: "pull" });
         credentialCreated = true;
-        return helpers.createCredential();
+        return credential;
       }
     });
     const response = await payments.fetch(context.url);
