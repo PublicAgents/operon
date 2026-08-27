@@ -186,7 +186,9 @@ never carry an approve button.
 
 ## 10. Open decisions
 
-1. Access identity provider (one-time dashboard choice; any works).
+1. Access identity provider — SETTLED 2026-08-27: One-time PIN (the
+   built-in method; the operator's email is the policy). The verifier is
+   IdP-agnostic, so adding GitHub SSO later is a dashboard-only change.
 2. Whether /wake and /disable require a second factor beyond Access
    (e.g. confirm via Telegram) or Access device posture suffices.
 3. Ops-gateway rate limits (Access already throttles, but the money
