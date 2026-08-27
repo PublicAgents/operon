@@ -65,7 +65,8 @@ describe("redactLines and linesWithDenylisted", () => {
   });
 });
 
-describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)", () => {
+// Each sanitize round is a real gitleaks run; CI runners need headroom.
+describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)", { timeout: 60_000 }, () => {
   const gitleaks = { configPath: CONFIG };
 
   it("delivers clean mail untouched", async () => {
@@ -122,7 +123,7 @@ describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)"
   });
 });
 
-describe.skipIf(!hasGitleaks)("sanitizeTranscript (integration, local gitleaks)", () => {
+describe.skipIf(!hasGitleaks)("sanitizeTranscript (integration, local gitleaks)", { timeout: 60_000 }, () => {
   const gitleaks = { configPath: CONFIG };
 
   it("passes a clean transcript through byte-identical", async () => {
