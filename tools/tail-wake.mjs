@@ -1,0 +1,158 @@
+#!/usr/bin/env node
+/**
+ * Tail a wake's transcript from the chronicle, live or historical:
+ *
+ *   npm run tail-wake                 # follow the newest wake (from the colony root)
+ *   npm run tail-wake -- <wakeId>     # a specific wake (also historical)
+ *   npm run tail-wake -- --raw        # unrendered transcript (raw JSONL)
+ *
+ * Auth: the operator bearer at ~/.operon-operator-api-token. While a
+ * wake runs this reads the live WakeLog DO; afterwards the same URL
+ * serves the durable D1 copy, so the command works identically on any
+ * wake the chronicle remembers. Sessions stream JSONL events
+ * (HARNESS_EXTRA_ARGS sets --output-format stream-json); this renders
+ * them readably and passes chassis [operon] lines through untouched.
+ */
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// Chassis tooling, colony data: the chronicle's URL comes from the
+// colony checkout this runs in (the worker's own route), or the
+// OPERON_CHRONICLE_URL override.
+function chronicleUrl() {
+  if (process.env.OPERON_CHRONICLE_URL) return process.env.OPERON_CHRONICLE_URL;
+  const configPath = join(process.cwd(), "workers", "gatekeeper-chronicle", "wrangler.jsonc");
+  if (existsSync(configPath)) {
+    const raw = readFileSync(configPath, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const pattern = JSON.parse(raw).routes?.[0]?.pattern;
+    if (pattern) return `https://${pattern}`;
+  }
+  console.error("no chronicle URL: run from a colony root or set OPERON_CHRONICLE_URL");
+  process.exit(2);
+}
+
+const GK = chronicleUrl();
+const args = process.argv.slice(2);
+const raw = args.includes("--raw");
+const wakeArg = args.find(arg => !arg.startsWith("--"));
+
+let token;
+try {
+  token = readFileSync(join(homedir(), ".operon-operator-api-token"), "utf8").trim();
+} catch {
+  console.error("no operator token at ~/.operon-operator-api-token");
+  process.exit(2);
+}
+
+async function api(path) {
+  const response = await fetch(`${GK}${path}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+  return response.json();
+}
+
+const trim = (value, max = 200) => {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+};
+
+/** Render one transcript line: harness JSONL becomes readable, rest passes through. */
+function render(line) {
+  if (raw || !line.startsWith("{")) return line;
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return line;
+  }
+  switch (event.type) {
+    case "rate_limit_event":
+      return null; // harness bookkeeping, not wake activity
+    case "system":
+      return event.subtype === "init" ? `· session ready (model ${event.model ?? "?"})` : null;
+    case "assistant": {
+      const parts = [];
+      for (const block of event.message?.content ?? []) {
+        if (block.type === "text" && block.text.trim()) parts.push(block.text);
+        if (block.type === "tool_use") parts.push(`⏺ ${block.name}(${trim(block.input, 160)})`);
+      }
+      return parts.length ? parts.join("\n") : null;
+    }
+    case "user": {
+      const parts = [];
+      for (const block of event.message?.content ?? []) {
+        if (block.type === "tool_result") {
+          const body = Array.isArray(block.content)
+            ? block.content.map(inner => inner.text ?? "").join(" ")
+            : block.content;
+          parts.push(`  ↳ ${trim(body ?? "", 200)}`);
+        }
+      }
+      return parts.length ? parts.join("\n") : null;
+    }
+    case "result":
+      return `== session result: ${event.subtype ?? "?"}${
+        event.num_turns ? ` (${event.num_turns} turns)` : ""
+      } ==`;
+    default:
+      return trim(line, 300);
+  }
+}
+
+const wakeId =
+  wakeArg ??
+  (await (async () => {
+    const { wakes } = await api("/chronicle/wakes?limit=1");
+    return wakes[0]?.wakeId;
+  })());
+if (!wakeId) {
+  console.log("no wake recorded yet (one appears within ~5s of a wake starting)");
+  process.exit(0);
+}
+
+console.log(`tailing wake ${wakeId} (ctrl-c to stop)\n`);
+let after = -1;
+let carry = "";
+let quietPolls = 0;
+for (;;) {
+  const result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+  const chunks = result.chunks ?? [];
+  if (chunks.length > 0) {
+    after = Math.max(...chunks.map(chunk => chunk.seq));
+    // Chunk boundaries are byte-aligned, not line-aligned: carry the
+    // partial last line so JSONL events split across chunks still parse.
+    const text = carry + chunks.map(chunk => chunk.text).join("");
+    const lines = text.split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      const rendered = render(line);
+      if (rendered !== null && rendered !== "") console.log(rendered);
+    }
+  }
+  const done = result.done === true || chunks.some(chunk => chunk.done === 1 || chunk.done === true);
+  if (done) {
+    if (carry) console.log(render(carry) ?? carry);
+    console.log("\n-- wake complete --");
+    break;
+  }
+  // Historical read (the live DO has expired or never finished): when the
+  // durable copy has nothing more, the transcript simply ends, e.g. a
+  // wake whose container died before the final flush.
+  if (result.source === "chronicle" && chunks.length === 0 && after >= 0) {
+    if (carry) console.log(render(carry) ?? carry);
+    console.log("\n-- transcript ends (wake never marked done) --");
+    break;
+  }
+  // A live session can be quiet for minutes during a long tool run, so
+  // silence never auto-exits; it just gets called out periodically (a
+  // wake killed before its done marker looks exactly like this).
+  quietPolls = chunks.length === 0 ? quietPolls + 1 : 0;
+  if (quietPolls > 0 && quietPolls % 100 === 0) {
+    console.log(`[tail-wake] no output for ${(quietPolls * 3) / 60} min; still connected (ctrl-c to stop)`);
+  }
+  await new Promise(resolve => setTimeout(resolve, 3000));
+}
