@@ -1,0 +1,27 @@
+{
+  "name": "@operon/gatekeeper-ops",
+  "version": "0.0.0",
+  "description": "The ops gateway: the single operator surface, behind Cloudflare Access. Verifies the Access JWT in-Worker and forwards each read/decision to the owning Gatekeeper over a private service binding. The operator holds no chassis token; identity is the SSO session.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "nx": {
+    "includedScripts": [],
+    "targets": { "dev": { "command": "wrangler dev", "options": { "cwd": "{projectRoot}" }, "dependsOn": ["^build"], "continuous": true } }
+  },
+  "dependencies": { "@operon/worker-kit": "0.0.0" },
+  "devDependencies": { "@cloudflare/workers-types": "^5.20260801.1", "wrangler": "^4.118.0" }
+}

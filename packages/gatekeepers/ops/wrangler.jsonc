@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-ops",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "AUDIT", "class_name": "Ledger" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }]
+  // Route ops.<zone> behind a Cloudflare Access application (GitHub IdP).
+  // Vars: ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com), ACCESS_AUD.
+  // Secrets: OPERATOR_API_TOKEN, EMAIL_SERVICE_TOKEN, NOTIFY_TOKEN,
+  //   WAKE_TRIGGER_TOKEN (internal bearers it forwards with; deleted in step 3).
+  // Service bindings (Fetchers): CHRONICLE_GK, EMAIL, SPEND, VAULT, X, TELEGRAM, SCHEDULER.
+  // D1: CHRONICLE (operon-chronicle) so the AUDIT ledger mirrors to the central DB.
+}
