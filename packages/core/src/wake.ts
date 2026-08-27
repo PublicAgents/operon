@@ -8,6 +8,31 @@ import type { RosterAgent } from "./roster.js";
 
 export type WakeTrigger = "cron" | "manual";
 
+/**
+ * Per-harness mind-credential egress injection (spec 0003 phase 2): the
+ * harness talks to its API hosts with a PLACEHOLDER credential, and the
+ * WakeContainer's outbound interception swaps in the real one outside
+ * the container sandbox. The credential then never enters the container.
+ * Adding a harness = one entry here (the codex entry is ready for its
+ * adapter).
+ */
+export interface CredentialInjection {
+  /** API hosts whose outbound HTTPS gets the real credential. */
+  hosts: string[];
+  /** The header carrying it, replaced wholesale. */
+  header: string;
+  /** Header value prefix, e.g. "Bearer ". */
+  scheme: string;
+}
+
+export const HARNESS_CREDENTIAL_INJECTION: Record<string, CredentialInjection> = {
+  "claude-code": { hosts: ["api.anthropic.com"], header: "authorization", scheme: "Bearer " },
+  codex: { hosts: ["api.openai.com"], header: "authorization", scheme: "Bearer " }
+};
+
+/** What the harness sees when injection is on; worthless by design. */
+export const INJECTED_CREDENTIAL_PLACEHOLDER = "operon-credential-injected-at-egress";
+
 /** Default hard wall per wake, minutes; roster maxWakeMinutes overrides. */
 export const DEFAULT_MAX_WAKE_MINUTES = 120;
 

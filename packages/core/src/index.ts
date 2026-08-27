@@ -15,5 +15,8 @@ export {
   type WakeOptions,
   type WakeTrigger,
   type WakeStatus,
-  type WakeRecord
+  type WakeRecord,
+  HARNESS_CREDENTIAL_INJECTION,
+  INJECTED_CREDENTIAL_PLACEHOLDER,
+  type CredentialInjection
 } from "./wake.js";

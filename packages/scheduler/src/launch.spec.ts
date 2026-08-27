@@ -45,10 +45,23 @@ describe("prepareLaunch", () => {
     expect(prepared.env[WAKE_ENV.model]).toBe("claude-sonnet-5");
     expect(prepared.env[WAKE_ENV.fallbackModel]).toBe("claude-haiku-4-5");
     expect(prepared.env[WAKE_ENV.githubToken]).toBe("gh-token");
-    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
+    // claude-code has an egress-injection entry, so the container carries
+    // the PLACEHOLDER, never the real credential (spec 0003 phase 2).
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("operon-credential-injected-at-egress");
+    expect(prepared.credentialInjectionHosts).toEqual(["api.anthropic.com"]);
     expect(prepared.env[WAKE_ENV.notifyUrl]).toBe("https://tg/notify");
     expect(prepared.env[WAKE_ENV.secretDenylist]).toBe("a,b");
     expect(prepared.env[WAKE_ENV.maxWakeMinutes]).toBe("120");
+  });
+
+  it("carries the real credential in-container for a harness with no injection entry", async () => {
+    const legacy: RosterAgent = { ...agent, harness: "legacy-harness" };
+    const ctx = context({
+      getSecret: name => (name === "MIND_CREDENTIAL_LEGACY_HARNESS" ? "mind-token" : undefined)
+    });
+    const prepared = await prepareLaunch(legacy, "cron", "wake-1", ctx);
+    expect(prepared.credentialInjectionHosts).toEqual([]);
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
   });
 
   it("fails closed with a named error when the mind credential is missing", async () => {

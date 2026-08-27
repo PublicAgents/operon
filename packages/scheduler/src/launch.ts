@@ -1,5 +1,7 @@
 import {
   wakeEnv,
+  HARNESS_CREDENTIAL_INJECTION,
+  INJECTED_CREDENTIAL_PLACEHOLDER,
   type RosterAgent,
   type WakeTrigger,
   type WakeSecrets,
@@ -60,6 +62,16 @@ export interface PreparedLaunch {
   agentId: string;
   trigger: WakeTrigger;
   env: Record<string, string>;
+  /**
+   * API hosts whose outbound HTTPS the WakeContainer injects the real
+   * mind credential onto (spec 0003 phase 2). When set, the container's
+   * OPERON_MIND_CREDENTIAL is the worthless placeholder; the real
+   * credential is passed to the injector via the scheduler env, never
+   * into the container. Empty = credential rides in the container env
+   * (pre-injection behavior), still supported for harnesses without an
+   * injection entry.
+   */
+  credentialInjectionHosts: string[];
 }
 
 export async function prepareLaunch(
@@ -78,7 +90,16 @@ export async function prepareLaunch(
   }
 
   const githubToken = await context.getGithubToken(agent);
-  const secrets: WakeSecrets = { githubToken, mindCredential };
+  // Egress injection (spec 0003 phase 2): if this harness has an
+  // injection entry, the container carries only a PLACEHOLDER credential
+  // and the WakeContainer swaps in the real one at egress. The real
+  // credential never enters the container env.
+  const injection = HARNESS_CREDENTIAL_INJECTION[agent.harness];
+  const credentialInjectionHosts = injection ? injection.hosts : [];
+  const secrets: WakeSecrets = {
+    githubToken,
+    mindCredential: injection ? INJECTED_CREDENTIAL_PLACEHOLDER : mindCredential
+  };
   // Money bearers are per-agent (spec 0002 §3): each wake receives only
   // its OWN till token, so a compromised wake sells only as itself. An
   // agent with no token configured simply has the door closed.
@@ -100,6 +121,7 @@ export async function prepareLaunch(
         ...(vaultToken ? { vaultToken } : {}),
         ...(xToken ? { xToken } : {})
       }
-    )
+    ),
+    credentialInjectionHosts
   };
 }

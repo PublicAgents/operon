@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { WakeRecord, WakeTrigger } from "@operon/core";
+import { MindCredentialInjector } from "./injector.js";
 import {
   decideAlarmAction,
   HEARTBEAT_INTERVAL_MS,
@@ -31,6 +32,13 @@ export interface LaunchArgs {
   staleAfterMs: number;
   /** Hard wall for this wake in ms; past it the container is stopped. */
   hardWallMs: number;
+  /**
+   * API hosts whose outbound HTTPS gets the REAL mind credential injected
+   * at egress (spec 0003 phase 2); the container itself only carries the
+   * placeholder. Empty/absent = no interception (credential in env, the
+   * pre-injection behavior).
+   */
+  credentialInjectionHosts?: string[];
 }
 
 export type LaunchResult =
@@ -112,6 +120,24 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     await this.ctx.storage.put(rowKey(record), record);
 
     try {
+      // Egress credential injection (spec 0003 phase 2): the injector runs
+      // in the Workers runtime on this machine, outside the container
+      // sandbox, and swaps the placeholder credential for the real one on
+      // the harness's API hosts only. Armed BEFORE start, and a failure
+      // here fails the launch: proceeding would run the session with a
+      // worthless placeholder and no injection.
+      if (args.credentialInjectionHosts && args.credentialInjectionHosts.length > 0) {
+        const injector = new MindCredentialInjector(
+          this.ctx as unknown as ExecutionContext,
+          this.env as Record<string, unknown>
+        );
+        for (const host of args.credentialInjectionHosts) {
+          // The container runtime consumes the injector by its fetch surface.
+          await (this.ctx.container as unknown as {
+            interceptOutboundHttps(host: string, worker: unknown): Promise<void>;
+          }).interceptOutboundHttps(host, injector);
+        }
+      }
       // Awaited so an asynchronous rejection is caught here: otherwise the
       // already-persisted CURRENT lock would never clear and every later
       // wake for this agent would be blocked or stale indefinitely.
