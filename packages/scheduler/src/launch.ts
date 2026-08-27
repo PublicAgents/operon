@@ -93,11 +93,13 @@ export async function prepareLaunch(
   // github clone token are phase 2, untouched here.
   const umbilicalNonce = crypto.randomUUID();
   const doorOptions = {
-    notifyUrl: "http://" + doorHost("notify"),
+    // These three are called with the URL DIRECTLY (the caller appends no
+    // path), so the route lives in the URL; the others append their own.
+    notifyUrl: "http://" + doorHost("notify") + "/notify",
     notifyToken: umbilicalNonce,
-    publishUrl: "http://" + doorHost("publish"),
+    publishUrl: "http://" + doorHost("publish") + "/gatekeeper/publish",
     publishToken: umbilicalNonce,
-    persistUrl: "http://" + doorHost("persist"),
+    persistUrl: "http://" + doorHost("persist") + "/commit",
     persistToken: umbilicalNonce,
     prUrl: "http://" + doorHost("pr") + "/gatekeeper/pr",
     prToken: umbilicalNonce,
