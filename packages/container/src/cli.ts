@@ -462,9 +462,12 @@ async function main(): Promise<number> {
   const isGet = call.path === "/capabilities";
   const response = await fetch(`${porch}${call.path}`, {
     method: isGet ? "GET" : "POST",
-    ...(isGet
-      ? {}
-      : { headers: { "content-type": "application/json" }, body: JSON.stringify(call.payload) })
+    headers: {
+      // The porch's browser boundary: see porch.ts.
+      "x-operon-porch": "1",
+      ...(isGet ? {} : { "content-type": "application/json" })
+    },
+    ...(isGet ? {} : { body: JSON.stringify(call.payload) })
   });
   const body = (await response.json()) as Record<string, unknown>;
   console.log(JSON.stringify(body, null, 2));

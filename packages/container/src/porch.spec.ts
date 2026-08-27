@@ -101,24 +101,41 @@ describe("capabilities", () => {
   });
 });
 
+describe("the browser boundary", () => {
+  it("refuses requests without the porch header and never approves preflights", async () => {
+    const { url } = await startPorch(config());
+    // What a browser page's cross-origin fetch would actually send first:
+    const preflight = await fetch(`${url}/notify`, { method: "OPTIONS" });
+    expect(preflight.status).toBe(403);
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    // And a simple (headerless) request is refused outright.
+    const bare = await fetch(`${url}/notify`, { method: "POST", body: "{}" });
+    expect(bare.status).toBe(403);
+    expect(((await bare.json()) as { error: string }).error).toBe("porch_header_missing");
+  });
+});
+
 describe("porch doors", () => {
   it("answers *_not_wired for doors without wiring", async () => {
     const { url } = await startPorch(config());
     const notify = await fetch(`${url}/notify`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ text: "hi" })
     });
     expect(notify.status).toBe(503);
     expect(((await notify.json()) as { error: string }).error).toBe("notify_not_wired");
     const publish = await fetch(`${url}/publish`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ host: "@" })
     });
     expect(((await publish.json()) as { error: string }).error).toBe("publish_not_wired");
-    const pr = await fetch(`${url}/github/pr`, { method: "POST", body: "{}" });
+    const pr = await fetch(`${url}/github/pr`, { method: "POST", headers: { "x-operon-porch": "1" }, body: "{}" });
     expect(((await pr.json()) as { error: string }).error).toBe("pr_not_wired");
     const thread = await fetch(`${url}/github/thread`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ repo: "a/b", number: 1 })
     });
     expect(((await thread.json()) as { error: string }).error).toBe("thread_not_wired");
@@ -159,6 +176,7 @@ describe("porch doors", () => {
       );
       const ok = await fetch(`${url}/github/pr`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
       });
       expect(ok.status).toBe(200);
@@ -170,6 +188,7 @@ describe("porch doors", () => {
       );
       const leaked = await fetch(`${url}/github/pr`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
       });
       expect(leaked.status).toBe(422);
@@ -184,6 +203,7 @@ describe("porch doors", () => {
       );
       const split = await fetch(`${url}/github/pr`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ repo: "a/b", title: "add entry", body: "adds one line" })
       });
       expect(split.status).toBe(422);
@@ -198,12 +218,14 @@ describe("porch doors", () => {
     );
     const blocked = await fetch(`${url}/github/update`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ repo: "a/b", number: 1, title: "deploy super-secret-token" })
     });
     expect(blocked.status).toBe(422);
     expect(((await blocked.json()) as { error: string }).error).toBe("blocked_by_sweep");
     const message = await fetch(`${url}/github/push`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ repo: "a/b", number: 1, message: "carry super-secret-token", dir: "pr" })
     });
     expect(((await message.json()) as { error: string }).error).toBe("blocked_by_sweep");
@@ -216,6 +238,7 @@ describe("porch doors", () => {
     );
     const viaRecipient = await fetch(`${url}/email`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ to: "super-secret-token@x.com", subject: "hi", text: "hello" })
     });
     expect(viaRecipient.status).toBe(422);
@@ -224,14 +247,14 @@ describe("porch doors", () => {
 
   it("till doors answer not_wired without config and forward with the bearer", async () => {
     const { url } = await startPorch(config());
-    const closed = await fetch(`${url}/till/sales`, { method: "POST", body: "{}" });
+    const closed = await fetch(`${url}/till/sales`, { method: "POST", headers: { "x-operon-porch": "1" }, body: "{}" });
     expect(((await closed.json()) as { error: string }).error).toBe("till_not_wired");
 
     const stub = await startStub(() => ({ status: 200, body: '{"ok":true,"offers":[],"sales":[]}' }));
     const { url: wired } = await startPorch(
       config({ tillUrl: stub.url, tillToken: "agent-own-bearer" })
     );
-    const sales = await fetch(`${wired}/till/sales`, { method: "POST", body: "{}" });
+    const sales = await fetch(`${wired}/till/sales`, { method: "POST", headers: { "x-operon-porch": "1" }, body: "{}" });
     expect(sales.status).toBe(200);
     expect(stub.requests).toHaveLength(1);
   });
@@ -243,6 +266,7 @@ describe("porch doors", () => {
     );
     const response = await fetch(`${url}/notify`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ text: "hello operator" })
     });
     expect(response.status).toBe(200);
@@ -255,6 +279,7 @@ describe("porch doors", () => {
     );
     const response = await fetch(`${url}/publish`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ host: "other" })
     });
     expect(response.status).toBe(403);
@@ -276,6 +301,7 @@ describe("porch doors", () => {
       );
       const blocked = await fetch(`${url}/publish`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ host: "@" })
       });
       expect(blocked.status).toBe(422);
@@ -284,6 +310,7 @@ describe("porch doors", () => {
       await writeFile(join(stateDir, "site", "index.html"), "<p>autonomous agent page</p>");
       const clean = await fetch(`${url}/publish`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ host: "@" })
       });
       expect(clean.status).toBe(200);
@@ -299,6 +326,7 @@ describe("porch doors", () => {
     );
     const response = await fetch(`${url}/github/pr`, {
       method: "POST",
+      headers: { "x-operon-porch": "1" },
       body: JSON.stringify({ repo: "org/other", title: "t", body: "b" })
     });
     expect(response.status).toBe(403);
@@ -320,6 +348,7 @@ describe("porch doors", () => {
       await writeFile(join(stateDir, "pr", "server.json"), '{"leak":"super-secret-token"}');
       const blocked = await fetch(`${url}/github/pr`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
       expect(blocked.status).toBe(422);
@@ -330,6 +359,7 @@ describe("porch doors", () => {
       await writeFile(join(stateDir, "pr", "server.json"), '{"name":"clean"}');
       const good = await fetch(`${url}/github/pr`, {
         method: "POST",
+        headers: { "x-operon-porch": "1" },
         body: JSON.stringify({ repo: "org/allowed", title: "add", body: "please" })
       });
       expect(good.status).toBe(200);
