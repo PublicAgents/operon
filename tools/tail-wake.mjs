@@ -137,8 +137,29 @@ console.log(`tailing wake ${wakeId} (ctrl-c to stop)\n`);
 let after = -1;
 let carry = "";
 let quietPolls = 0;
+let pollFailures = 0;
 for (;;) {
-  const result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+  // A live tail must survive transient failures (a gateway 5xx, a
+  // momentary Access-verifier outage answering 401, a dropped
+  // connection): the cursor makes every poll idempotent, so failures
+  // just wait for the next poll. Only a long unbroken failure streak
+  // (~2 min) gives up.
+  let result;
+  try {
+    result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+    pollFailures = 0;
+  } catch (error) {
+    pollFailures += 1;
+    if (pollFailures >= 40) {
+      console.error(`[tail-wake] giving up after ${pollFailures} consecutive failed polls: ${error.message}`);
+      process.exit(1);
+    }
+    if (pollFailures % 10 === 1) {
+      console.error(`[tail-wake] poll failed (${error.message}); retrying`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    continue;
+  }
   const chunks = result.chunks ?? [];
   if (chunks.length > 0) {
     after = Math.max(...chunks.map(chunk => chunk.seq));
