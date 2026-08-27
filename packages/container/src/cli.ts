@@ -19,6 +19,13 @@ const HELP = `operon: the doors out of this wake
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
+  operon email original <id>             the stored, UNREDACTED original of an
+                                         inbound message (id = the 8-char prefix
+                                         in the inbox file's name): use it when a
+                                         line was withheld at delivery and you
+                                         need what it carried, e.g. a sign-up or
+                                         verification link. Never save the
+                                         credential parts to your repo.
 
 Till doors (sell your work; spec: your prices, the operator's ceilings;
 custody and recipients are the operator's alone):
@@ -126,6 +133,13 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return { path: "/publish", payload: { dir: positionals(rest)[0] ?? "site", host } };
     }
     case "email": {
+      if (rest[0] === "original") {
+        const id = positionals(rest.slice(1))[0];
+        if (!id || id.length < 8) {
+          throw new CliUsageError("usage: operon email original <message id or its 8-char prefix>");
+        }
+        return { path: "/email/original", payload: { id } };
+      }
       const to = flagValue(rest, "--to");
       const subject = flagValue(rest, "--subject");
       const body = flagValue(rest, "--body");

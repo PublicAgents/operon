@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import {
   bodyStub,
   composeInboxFile,
-  FULL_STUB,
+  fullStub,
   linesWithDenylisted,
+  originalHint,
   redactLines,
   sanitizeInboxFiles,
   type InboundMessage
@@ -47,9 +48,13 @@ describe("composeInboxFile", () => {
 });
 
 describe("redactLines and linesWithDenylisted", () => {
-  it("replaces exactly the flagged lines", () => {
-    const redacted = redactLines("keep\ndrop\nkeep too", new Set([2]));
-    expect(redacted.split("\n")).toEqual(["keep", "[line withheld at delivery: matched the secret scanner]", "keep too"]);
+  it("replaces exactly the flagged lines and points at the original", () => {
+    const redacted = redactLines("keep\ndrop\nkeep too", new Set([2]), originalHint("abcdef1234"));
+    expect(redacted.split("\n")).toEqual([
+      "keep",
+      "[line withheld at delivery: matched the secret scanner; full original via `operon email original abcdef12`]",
+      "keep too"
+    ]);
   });
 
   it("finds the lines carrying a denylisted literal verbatim", () => {
@@ -98,7 +103,7 @@ describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)"
     const encoded = Buffer.from(literal, "utf8").toString("base64");
     const m = message({ text: `nothing to see\n${encoded}\n` });
     const { files } = await sanitizeInboxFiles([m], [literal], gitleaks);
-    expect(files[0].content).toBe(bodyStub(m.from, m.date));
+    expect(files[0].content).toBe(bodyStub(m.from, m.date, originalHint(m.id)));
     expect(files[0].content).not.toContain(encoded);
   });
 
@@ -112,6 +117,6 @@ describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)"
       text: Buffer.from(literal, "utf8").toString("base64")
     });
     const { files } = await sanitizeInboxFiles([m], [literal], gitleaks);
-    expect(files[0].content).toBe(FULL_STUB);
+    expect(files[0].content).toBe(fullStub(originalHint(m.id)));
   });
 });

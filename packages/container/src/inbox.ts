@@ -50,13 +50,17 @@ export function composeInboxFile(m: InboundMessage): InboxFile {
   return { name: `${m.date.slice(0, 19).replace(/[:]/g, "")}-${m.id.slice(0, 8)}.md`, content };
 }
 
-const WITHHELD_LINE = "[line withheld at delivery: matched the secret scanner]";
+/** How the agent reads the full message the redaction came from. */
+export function originalHint(messageId: string): string {
+  return `operon email original ${messageId.slice(0, 8)}`;
+}
 
 /** Replace the given 1-indexed lines; everything else is untouched. */
-export function redactLines(content: string, lines: Set<number>): string {
+export function redactLines(content: string, lines: Set<number>, hint: string): string {
+  const marker = `[line withheld at delivery: matched the secret scanner; full original via \`${hint}\`]`;
   return content
     .split("\n")
-    .map((line, index) => (lines.has(index + 1) ? WITHHELD_LINE : line))
+    .map((line, index) => (lines.has(index + 1) ? marker : line))
     .join("\n");
 }
 
@@ -71,18 +75,22 @@ export function linesWithDenylisted(content: string, denylist: string[]): Set<nu
 }
 
 /** Round 2: the body is withheld, the envelope survives. */
-export function bodyStub(from: string, date: string): string {
+export function bodyStub(from: string, date: string, hint: string): string {
   return (
     `From: ${from}\nDate: ${date}\n\n` +
     `[body withheld at delivery: it matched the secret scanner even after ` +
-    `line-level redaction. The full message is in the operator's mailbox.]\n`
+    `line-level redaction. Read the full original with \`${hint}\`; it is ` +
+    `also in the operator's mailbox.]\n`
   );
 }
 
-/** Round 3: fixed text only; cannot match any scanner. */
-export const FULL_STUB =
-  "[message withheld at delivery: it matched the secret scanner. " +
-  "The full message is in the operator's mailbox.]\n";
+/** Round 3: generated text only; cannot match any scanner. */
+export function fullStub(hint: string): string {
+  return (
+    `[message withheld at delivery: it matched the secret scanner. ` +
+    `Read the full original with \`${hint}\`; it is also in the operator's mailbox.]\n`
+  );
+}
 
 interface BatchFindings {
   /** Per file name: flagged 1-indexed lines, plus whether something was found without line info. */
@@ -173,10 +181,13 @@ export async function sanitizeInboxFiles(
       if (!found && !findings.corpus) return file;
       sanitized.add(file.name);
       const original = byName.get(file.name);
+      const hint = originalHint(original?.id ?? file.name);
       const escalate = findings.corpus || found?.beyondLines || round >= 1;
-      if (!escalate && found) return { ...file, content: redactLines(file.content, found.lines) };
-      if (round >= 2 || !original) return { ...file, content: FULL_STUB };
-      return { ...file, content: bodyStub(original.from, original.date) };
+      if (!escalate && found) {
+        return { ...file, content: redactLines(file.content, found.lines, hint) };
+      }
+      if (round >= 2 || !original) return { ...file, content: fullStub(hint) };
+      return { ...file, content: bodyStub(original.from, original.date, hint) };
     });
   }
 }

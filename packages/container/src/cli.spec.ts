@@ -112,6 +112,15 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["till", "dance"])).toThrowError(/till subcommand/);
   });
 
+  it("parses email original by id prefix", () => {
+    expect(parseArgs(["email", "original", "abcdef12"])).toEqual({
+      path: "/email/original",
+      payload: { id: "abcdef12" }
+    });
+    expect(() => parseArgs(["email", "original"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["email", "original", "short"])).toThrow(CliUsageError);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

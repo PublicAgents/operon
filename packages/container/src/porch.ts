@@ -155,6 +155,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/github/update") return await this.update(body);
       if (request.method === "POST" && url.pathname === "/github/push") return await this.push(body);
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
+      if (request.method === "POST" && url.pathname === "/email/original") return await this.emailOriginal(body);
       if (request.method === "POST" && url.pathname === "/till/offer") return await this.tillOffer(body);
       if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
       if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
@@ -642,6 +643,30 @@ export class Porch {
     });
     const resultText = (await response.text()).slice(0, 500);
     if (!response.ok) return fail(502, "email_rejected", `${response.status}: ${resultText}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /**
+   * The stored, unredacted original of one inbound message: delivery may
+   * have withheld a line (operon#24), but a verification or sign-up link
+   * in it is still the agent's mail to read. Inbound data stays data; and
+   * anything the mind does with the content is swept on the way out like
+   * everything else.
+   */
+  private async emailOriginal(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.emailUrl || !config.emailToken) return fail(503, "email_not_wired");
+    const { id } = body;
+    if (typeof id !== "string" || id.length < 8) return fail(400, "invalid_id");
+    const response = await fetch(`${config.emailUrl}/gatekeeper/email/original`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
+      body: JSON.stringify({ agentId: config.agentId, id })
+    });
+    const resultText = (await response.text()).slice(0, 200000);
+    if (!response.ok) {
+      return fail(502, "email_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    }
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
 }
