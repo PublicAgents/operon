@@ -12,15 +12,22 @@ import { resolveDoor } from "./umbilical-routes.js";
  * forwards over the private binding.
  */
 interface RouterEnv {
-  OPERON_UMBILICAL_NONCE?: string;
-  OPERON_ROUTED_AGENT?: string;
   [name: string]: unknown;
+}
+
+/** Per-wake identity, delivered as ctx.props by the loopback binding the
+ * WakeContainer creates (ctx.exports.UmbilicalRouter({ props })); the
+ * bearers + Gatekeeper bindings come from the worker env as usual. */
+interface RouterProps {
+  nonce?: string;
+  agentId?: string;
 }
 
 export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
   override async fetch(request: Request): Promise<Response> {
-    const nonce = this.env.OPERON_UMBILICAL_NONCE;
-    const agentId = this.env.OPERON_ROUTED_AGENT;
+    const props = (this.ctx.props ?? {}) as RouterProps;
+    const nonce = props.nonce;
+    const agentId = props.agentId;
     if (!nonce || !agentId) return new Response("umbilical_unconfigured", { status: 503 });
     if (request.headers.get("authorization") !== `Bearer ${nonce}`) {
       return new Response("umbilical_denied", { status: 403 });

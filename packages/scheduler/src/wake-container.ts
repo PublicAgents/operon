@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { UmbilicalRouter } from "./umbilical.js";
 import { allDoorHosts } from "./umbilical-routes.js";
 import type { WakeRecord, WakeTrigger } from "@operon/core";
 import {
@@ -134,14 +133,16 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       // supervisor, not a container header, and only the porch can pass
       // the nonce.
       if (args.umbilicalNonce) {
-        const routerEnv = {
-          ...(this.env as Record<string, unknown>),
-          OPERON_UMBILICAL_NONCE: args.umbilicalNonce,
-          OPERON_ROUTED_AGENT: args.agentId
-        };
-        const router = new UmbilicalRouter(this.ctx as unknown as ExecutionContext, routerEnv);
+        // interceptOutboundHttp requires a Fetcher: a loopback service
+        // binding to the worker's own UmbilicalRouter export
+        // (ctx.exports, enable_ctx_exports flag), with the per-wake
+        // identity delivered as ctx.props.
+        const exportsBag = (this.ctx as unknown as { exports: Record<string, (opts: { props: unknown }) => Fetcher> }).exports;
+        const router = exportsBag.UmbilicalRouter({
+          props: { nonce: args.umbilicalNonce, agentId: args.agentId }
+        });
         const intercept = this.ctx.container as unknown as {
-          interceptOutboundHttp(host: string, worker: unknown): Promise<void>;
+          interceptOutboundHttp(host: string, worker: Fetcher): Promise<void>;
         };
         for (const host of allDoorHosts()) {
           await intercept.interceptOutboundHttp(host, router);
