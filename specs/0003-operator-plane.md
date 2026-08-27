@@ -109,10 +109,21 @@ and the next wake starts clean without the poisoned page in its context.
 Sizing rule of thumb: half the daily cap or less per wake, tunable per
 door via env beside the existing caps.
 
+A second, distinct vector is BROWSER-ORIGIN calls: page JS in a browser
+the mind runs can fire cross-origin POSTs at in-container surfaces
+without the mind's cooperation (blind CSRF). Two mechanical boundaries:
+- The porch requires a custom header (x-operon-porch), which forces a
+  CORS preflight the porch never approves; browser-origin calls die in
+  the browser (#32, shipped).
+- Post-umbilical, the virtual-hostname doors additionally require a
+  per-wake nonce minted by the supervisor and held by the ROOT
+  entrypoint only (never the session env): page JS AND raw in-session
+  calls are then both refused, and every door call passes through the
+  porch and its sweeps.
+
 Also restated as doctrine: ambient door access inside the wake is BY
-DESIGN (the porch was always an unauthenticated loopback; the container
-IS the agent), so no future door may assume its caller is "the real
-mind"; every door defends itself.
+DESIGN for the MIND (through the porch), so no door may assume its
+caller is "the real mind"; every door defends itself.
 
 ## 6. Operator tooling auth
 
