@@ -56,12 +56,20 @@ function accessToken() {
   }
 }
 
-const token = accessToken();
+let token = accessToken();
 
 async function api(path) {
-  const response = await fetch(`${GK}${path}`, {
+  let response = await fetch(`${GK}${path}`, {
     headers: { "cf-access-jwt-assertion": token }
   });
+  // A live tail can outlast the short-lived JWT: on an auth failure,
+  // refresh it once (cloudflared refreshes silently) and retry.
+  if (response.status === 401 || response.status === 403) {
+    token = accessToken();
+    response = await fetch(`${GK}${path}`, {
+      headers: { "cf-access-jwt-assertion": token }
+    });
+  }
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
   return response.json();
 }
