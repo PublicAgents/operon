@@ -47,6 +47,9 @@
     },
     {
       "path": "./packages/gatekeepers/x"
+    },
+    {
+      "path": "./packages/gatekeepers/ops"
     }
   ]
 }

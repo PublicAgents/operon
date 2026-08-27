@@ -8,6 +8,14 @@ export {
   type TelegramGatewayBinding
 } from "./notify.js";
 export {
+  verifyAccessJwt,
+  verifyAccessRequest,
+  extractAccessToken,
+  type AccessConfig,
+  type AccessIdentity,
+  type AccessResult
+} from "./access.js";
+export {
   githubApi,
   buildTree,
   commitToBranch,
