@@ -9,6 +9,8 @@ import { WakeContainer } from "./wake-container.js";
 import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };
+// Top-level export required: ctx.exports only sees top-level entrypoints.
+export { UmbilicalRouter } from "./umbilical.js";
 export { mindCredentialVar, prepareLaunch, LaunchPreconditionError } from "./launch.js";
 
 /**
