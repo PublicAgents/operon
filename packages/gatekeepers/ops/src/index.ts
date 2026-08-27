@@ -96,6 +96,27 @@ export default {
     }
 
     const operator = access.identity.email || access.identity.sub;
+    const audit = env.AUDIT.get(env.AUDIT.idFromName("ops"));
+
+    // Operator-attributed audit (spec 0003). For DECISIONS the record
+    // comes FIRST and its failure refuses the action (the chassis's
+    // outbox-before-send doctrine): an unattributed money decision must
+    // be impossible, and a durable intent row exists even if the result
+    // row later fails. Reads audit best-effort after the fact.
+    if (match.route.decision) {
+      try {
+        await audit.append("operator_decision", {
+          operator,
+          method: match.route.method,
+          path: url.pathname,
+          body: (body ?? "").slice(0, 500)
+        });
+      } catch (error) {
+        console.error("ops audit unavailable; refusing decision", error);
+        return errorResponse(503, "audit_unavailable", "decision refused: it could not be attributed");
+      }
+    }
+
     const target = `https://internal${downstreamPath(match)}${match.route.downstreamMethod === "GET" ? url.search : ""}`;
     const response = await binding.fetch(target, {
       method: match.route.downstreamMethod,
@@ -108,24 +129,17 @@ export default {
     });
     const text = await response.text();
 
-    // Operator-attributed audit (spec 0003): every action this gateway
-    // performs is recorded WITH the Access identity, in this gateway's
-    // own ledger (mirrored to the chronicle when the D1 is bound), so a
-    // decision record always says which operator made it.
+    // The outcome row (decisions) / the read row: best-effort, since the
+    // action has already durably recorded its intent (decisions) or is a
+    // read whose loss costs nothing but a log line.
     try {
-      await env.AUDIT.get(env.AUDIT.idFromName("ops")).append(
-        match.route.decision ? "operator_decision" : "operator_read",
-        {
-          operator,
-          method: match.route.method,
-          path: url.pathname,
-          status: response.status,
-          ...(match.route.decision ? { decision: true } : {})
-        }
-      );
+      await audit.append(match.route.decision ? "operator_decision_result" : "operator_read", {
+        operator,
+        method: match.route.method,
+        path: url.pathname,
+        status: response.status
+      });
     } catch (error) {
-      // Audit is oversight, not the action; a ledger hiccup must not fail
-      // a decision the downstream already made. Logged, never thrown.
       console.error("ops audit append failed", error);
     }
 
