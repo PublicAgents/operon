@@ -58,6 +58,9 @@ export interface WakeOptions {
   /** vault Gatekeeper endpoint + this agent's OWN secret-store bearer (per-agent). */
   vaultUrl?: string;
   vaultToken?: string;
+  /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
+  chronicleUrl?: string;
+  chronicleToken?: string;
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -98,7 +101,9 @@ export const WAKE_ENV = {
   spendUrl: "OPERON_SPEND_URL",
   spendToken: "OPERON_SPEND_TOKEN",
   vaultUrl: "OPERON_VAULT_URL",
-  vaultToken: "OPERON_VAULT_TOKEN"
+  vaultToken: "OPERON_VAULT_TOKEN",
+  chronicleUrl: "OPERON_CHRONICLE_URL",
+  chronicleToken: "OPERON_CHRONICLE_TOKEN"
 } as const;
 
 export function wakeEnv(
@@ -138,6 +143,8 @@ export function wakeEnv(
   if (options.spendToken) env[WAKE_ENV.spendToken] = options.spendToken;
   if (options.vaultUrl) env[WAKE_ENV.vaultUrl] = options.vaultUrl;
   if (options.vaultToken) env[WAKE_ENV.vaultToken] = options.vaultToken;
+  if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
+  if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   return env;

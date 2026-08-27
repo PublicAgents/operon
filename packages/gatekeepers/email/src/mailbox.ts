@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { recordMessage } from "@operon/chronicle";
 import { DAILY_SEND_CAP, decideSend, type SendDecision } from "./policy.js";
 
 export type SendReservation =
@@ -61,6 +62,23 @@ export class Mailbox extends DurableObject {
     if (!correspondents.includes(from)) {
       correspondents.push(from);
       await this.ctx.storage.put("correspondents", correspondents);
+    }
+    // Chronicle mirror: this Mailbox is named after its agent, so the DO
+    // knows both halves of the message row. Best-effort, off the hot path.
+    const chronicle = (this.env as { CHRONICLE?: D1Database }).CHRONICLE;
+    if (chronicle) {
+      this.ctx.waitUntil(
+        recordMessage(chronicle, {
+          at: message.date,
+          kind: "email_in",
+          agentId: this.ctx.id.name ?? "unknown",
+          sender: message.from,
+          subject: message.subject,
+          body: message.text,
+          refId: id,
+          meta: message.attachments?.length ? { attachments: message.attachments } : undefined
+        })
+      );
     }
   }
 

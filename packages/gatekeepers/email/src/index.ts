@@ -1,4 +1,5 @@
 import { findAgent, parseRoster } from "@operon/core";
+import { recordMessage } from "@operon/chronicle";
 import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import PostalMime from "postal-mime";
 import { Mailbox, type AttachmentMeta } from "./mailbox.js";
@@ -26,6 +27,8 @@ interface Env {
   OPERATOR_API_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** Central audit mirror; optional (a deployment without D1 still works). */
+  CHRONICLE?: D1Database;
   EMAIL: {
     send(message: {
       to: string;
@@ -160,6 +163,19 @@ async function deliver(
   } catch (error) {
     console.error("email ledger append failed", error);
   }
+  // Chronicle mirror with the full body (the ledger row above carries the
+  // envelope only). Best-effort like every mirror write.
+  await recordMessage(env.CHRONICLE, {
+    at: now,
+    kind: "email_out",
+    agentId,
+    sender: identity.address,
+    recipient: msg.to,
+    subject: msg.subject,
+    body: msg.text,
+    refId: result.messageId,
+    meta: { count }
+  });
 
   const copyTo = operatorCopy(env, identity.localPart, zone);
   let copied = true;

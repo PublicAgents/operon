@@ -7,6 +7,7 @@ import { runGitleaksOnFiles } from "./gitleaks.js";
 import { sanitizeInboxFiles, sanitizeTranscript, type InboundMessage } from "./inbox.js";
 import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect, type StagedChanges } from "./staging.js";
+import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
@@ -69,8 +70,17 @@ function wakePrompt(budgetMinutes: number): string {
   );
 }
 
+/**
+ * Everything the entrypoint says is teed into the wake transcript once a
+ * shipper exists (set in main); the container's own stdout is unchanged.
+ */
+let transcriptTee: ((text: string) => void) | null = null;
+let activeShipper: TranscriptShipper | null = null;
+
 function log(message: string): void {
-  console.log(`[operon] ${new Date().toISOString()} ${message}`);
+  const line = `[operon] ${new Date().toISOString()} ${message}`;
+  console.log(line);
+  transcriptTee?.(`${line}\n`);
 }
 
 // As PID 1, node ignores SIGTERM by kernel default while children in the
@@ -370,7 +380,8 @@ function autoDenylist(config: WakeConfig): string[] {
     ...(config.emailToken ? [config.emailToken] : []),
     ...(config.tillToken ? [config.tillToken] : []),
     ...(config.spendToken ? [config.spendToken] : []),
-    ...(config.vaultToken ? [config.vaultToken] : [])
+    ...(config.vaultToken ? [config.vaultToken] : []),
+    ...(config.chronicleToken ? [config.chronicleToken] : [])
   ];
 }
 
@@ -436,6 +447,7 @@ async function runSession(
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
+    onOutput: text => transcriptTee?.(text),
     ...ids
   });
 }
@@ -518,6 +530,24 @@ async function main(): Promise<number> {
     config.vaultToken = undefined;
   }
   const denylist = [...autoDenylist(config), ...vault.values];
+
+  // The wake transcript: everything said from here on (entrypoint lines
+  // and the session's own output) ships to the chronicle in redacted
+  // chunks, tailable live and mirrored durably. Created only after the
+  // denylist is assembled, because the denylist IS the redaction.
+  if (config.chronicleUrl && config.chronicleToken) {
+    activeShipper = new TranscriptShipper({
+      url: config.chronicleUrl,
+      token: config.chronicleToken,
+      wakeId: config.wakeId,
+      agentId: config.agentId,
+      denylist,
+      log: message => console.log(`[operon] ${message}`)
+    });
+    transcriptTee = text => activeShipper?.write(text);
+    activeShipper.ready();
+    log(`${label}: transcript shipping to the chronicle`);
+  }
 
   const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
   const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
@@ -611,7 +641,10 @@ async function main(): Promise<number> {
 }
 
 main()
-  .then(code => process.exit(code))
+  .then(async code => {
+    await activeShipper?.close();
+    process.exit(code);
+  })
   .catch(async error => {
     const detail = error instanceof CommandError ? error.message : String(error);
     log(`wake failed: ${detail}`);
@@ -622,5 +655,6 @@ main()
     } catch {
       // Config unreadable; the scheduler's monitor() rejection still records the failure.
     }
+    await activeShipper?.close().catch(() => undefined);
     process.exit(1);
   });

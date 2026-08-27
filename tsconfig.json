@@ -38,6 +38,12 @@
     },
     {
       "path": "./packages/gatekeepers/vault"
+    },
+    {
+      "path": "./packages/gatekeepers/chronicle"
+    },
+    {
+      "path": "./packages/chronicle"
     }
   ]
 }

@@ -11,8 +11,15 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../../core/tsconfig.lib.json" },
-    { "path": "../../worker-kit/tsconfig.lib.json" }
+    {
+      "path": "../../chronicle/tsconfig.lib.json"
+    },
+    {
+      "path": "../../worker-kit/tsconfig.lib.json"
+    },
+    {
+      "path": "../../core/tsconfig.lib.json"
+    }
   ],
   "exclude": ["src/**/*.spec.ts"]
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@operon/gatekeeper-telegram",
+  "name": "@operon/gatekeeper-chronicle",
   "version": "0.0.0",
-  "description": "The operator channel Gatekeeper: verifies the operator's exact chat id on the Telegram webhook, relays wake summaries and alerts, triggers manual wakes, and ledgers everything, including the messages it ignores",
+  "description": "The chronicle Gatekeeper: the colony's introspection surface. Receives wake transcript chunks from containers (tailable live from a per-wake Durable Object, mirrored durably to the central D1), and serves the operator's read API over the audit database: events, messages, wakes, transcripts. Operator-authenticated reads; the container's append door is internal-bearer only.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -37,9 +37,8 @@
     }
   },
   "dependencies": {
-    "@operon/worker-kit": "0.0.0",
-    "@operon/core": "0.0.0",
-    "@operon/chronicle": "0.0.0"
+    "@operon/chronicle": "0.0.0",
+    "@operon/worker-kit": "0.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260801.1",

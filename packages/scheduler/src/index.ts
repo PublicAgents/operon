@@ -36,6 +36,8 @@ interface Env {
   TILL_URL?: string;
   SPEND_URL?: string;
   VAULT_URL?: string;
+  CHRONICLE_URL?: string;
+  CHRONICLE_TOKEN?: string;
   // Per-agent money bearers arrive as TILL_TOKEN_<AGENTID> secrets via the
   // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
@@ -100,6 +102,8 @@ function launchContext(env: Env): LaunchContext {
       tillUrl: env.TILL_URL,
       spendUrl: env.SPEND_URL,
       vaultUrl: env.VAULT_URL,
+      chronicleUrl: env.CHRONICLE_URL,
+      chronicleToken: env.CHRONICLE_TOKEN,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }

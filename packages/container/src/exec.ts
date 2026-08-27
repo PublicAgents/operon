@@ -61,21 +61,39 @@ export function runCapture(
   });
 }
 
+export interface StreamOptions extends RunOptions {
+  /** Tee of everything the child writes (both streams), for the transcript. */
+  onOutput?: (chunk: string) => void;
+}
+
 /** Run with output streaming to this process's stdio; resolves with the exit code. */
 export function runStreaming(
   command: string,
   args: string[],
-  options: RunOptions = {}
+  options: StreamOptions = {}
 ): Promise<number> {
   return new Promise((resolve, reject) => {
+    const tee = options.onOutput;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["ignore", "inherit", "inherit"],
+      // With a tee the streams pipe through us, still written verbatim to
+      // this process's stdio, so the container log is unchanged.
+      stdio: ["ignore", tee ? "pipe" : "inherit", tee ? "pipe" : "inherit"],
       timeout: options.timeoutMs,
       uid: options.uid,
       gid: options.gid
     });
+    if (tee) {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        process.stdout.write(chunk);
+        tee(chunk.toString("utf8"));
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        process.stderr.write(chunk);
+        tee(chunk.toString("utf8"));
+      });
+    }
     child.on("error", reject);
     child.on("close", code => resolve(code ?? 1));
   });
