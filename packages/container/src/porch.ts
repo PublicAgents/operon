@@ -169,6 +169,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/vault/delete") return await this.vaultCall("delete", body);
       if (request.method === "POST" && url.pathname === "/x/post") return await this.xPost(body);
       if (request.method === "POST" && url.pathname === "/x/posts") return await this.xCall("posts", {});
+      if (request.method === "POST" && url.pathname === "/x/dm") return await this.xDm(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -672,6 +673,17 @@ export class Porch {
     const resultText = (await response.text()).slice(0, 10000);
     if (!response.ok) return fail(502, `x_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /** DM a correspondent (reply-only, enforced by the Gatekeeper); swept. */
+  private async xDm(body: Record<string, unknown>): Promise<JsonResult> {
+    const { to, text } = body;
+    if (typeof to !== "string" || to.length === 0) return fail(400, "missing_to");
+    if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+    const blocked = this.sweepFields({ to, text });
+    if (blocked) return blocked;
+    this.context.log(`x: DM to ${to} (${text.length} chars)`);
+    return this.xCall("dm", { to, text });
   }
 
   /** Post to the agent's own X account: outbound text, swept like all of it. */

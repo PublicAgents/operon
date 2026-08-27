@@ -88,3 +88,25 @@ export function decidePost(check: PostCheck): PostProblem | null {
   if (check.recentKeys.includes(check.key)) return "duplicate";
   return null;
 }
+
+/** DMs are reply-only (enforced by correspondent memory in the DO) with
+ * their own, laxer volume rule: conversations need back-and-forth, so
+ * there is no spacing requirement, only a daily cap. */
+export const DEFAULT_DM_DAILY_CAP = 20;
+export const HARD_DM_DAILY_CEILING = 50;
+/** X's DM length limit is 10k; bounded a little under it. */
+export const MAX_DM_LENGTH = 9500;
+
+export function effectiveDmDailyCap(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!raw || !Number.isInteger(parsed) || parsed < 1) return DEFAULT_DM_DAILY_CAP;
+  return Math.min(parsed, HARD_DM_DAILY_CEILING);
+}
+
+export type DmContentProblem = "empty" | "too_long";
+
+export function dmContentProblem(text: unknown): DmContentProblem | null {
+  if (typeof text !== "string" || text.trim().length === 0) return "empty";
+  if ([...text].length > MAX_DM_LENGTH) return "too_long";
+  return null;
+}

@@ -187,6 +187,70 @@ async function ackInbox(config: WakeConfig, ids: string[]): Promise<void> {
 }
 
 /**
+ * Pull inbound X DMs into inbox/ beside the mail, same doctrine
+ * throughout: data not instructions, sanitized at delivery, acked only
+ * after the wake's state persists so nothing is lost to a dead wake.
+ * Best-effort: no X doors, or a pull failure, must not fail the wake.
+ */
+async function pullXDms(
+  config: WakeConfig,
+  chassisWritten: Map<string, string>,
+  denylist: string[]
+): Promise<string | null> {
+  if (!config.xUrl || !config.xToken) return null;
+  try {
+    const response = await fetch(`${config.xUrl}/gatekeeper/x/dm/pull`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.xToken}` },
+      body: "{}"
+    });
+    if (!response.ok) {
+      log(`x dm pull failed: ${response.status}`);
+      return null;
+    }
+    const { messages, upTo } = (await response.json()) as {
+      messages: InboundMessage[];
+      upTo: string | null;
+    };
+    if (!messages || messages.length === 0) return null;
+
+    let files: { name: string; content: string }[];
+    try {
+      const result = await sanitizeInboxFiles(messages, denylist);
+      files = result.files;
+      for (const name of result.sanitized) {
+        log(`x dm: sanitized ${name} at delivery (matched the secret scanner)`);
+      }
+    } catch (error) {
+      log(`x dm delivery withheld, scanner unavailable: ${String(error).slice(0, 200)}`);
+      return null;
+    }
+    const dir = join(STATE_DIR, "inbox");
+    await mkdir(dir, { recursive: true });
+    for (const file of files) {
+      await writeFile(join(dir, file.name), file.content);
+      chassisWritten.set(`inbox/${file.name}`, file.content);
+    }
+    await chownToMind(dir);
+    log(`pulled ${messages.length} X DM(s) into inbox/`);
+    return upTo;
+  } catch (error) {
+    log(`x dm pull error: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+/** Advance the DM cursor; only after the wake's state is persisted. */
+async function ackXDms(config: WakeConfig, upTo: string | null): Promise<void> {
+  if (!config.xUrl || !config.xToken || upTo === null) return;
+  await fetch(`${config.xUrl}/gatekeeper/x/dm/ack`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.xToken}` },
+    body: JSON.stringify({ upTo })
+  }).catch(() => undefined);
+}
+
+/**
  * Pull the operator-channel transcript (Telegram /tell, broadcasts, and the
  * agent's own recent notifies) into operator/channel.md. Operator entries
  * are authenticated instructions, unlike inbox/ mail. The cursor advances
@@ -551,6 +615,7 @@ async function main(): Promise<number> {
   }
 
   const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
+  const dmUpTo = await pullXDms(config, chassisWritten, denylist);
   const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
 
   const verified = await verifyModel(adapter, config);
@@ -629,6 +694,7 @@ async function main(): Promise<number> {
   // Inbox and channel are acked only now, after the state is durably
   // persisted: a wake that failed or was blocked re-delivers both.
   await ackInbox(config, pulledInboxIds);
+  await ackXDms(config, dmUpTo);
   await ackChannel(config, channelUpTo);
 
   const failed = sessionExit !== 0 || !verification.ok;

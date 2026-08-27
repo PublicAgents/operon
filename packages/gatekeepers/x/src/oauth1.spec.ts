@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { percentEncode, sign, signatureBaseString } from "./oauth1.js";
-import { contentProblem, decidePost, dupKey, effectiveDailyCap, MIN_SPACING_MS, xTokenVar } from "./policy.js";
+import { contentProblem, decidePost, dmContentProblem, dupKey, effectiveDailyCap, effectiveDmDailyCap, MIN_SPACING_MS, xTokenVar } from "./policy.js";
 
 /**
  * The signing implementation is verified against X's OWN documented
@@ -71,6 +71,14 @@ describe("x policy", () => {
     expect(contentProblem("x".repeat(281))).toBe("too_long");
     expect(contentProblem("@a @b @c @d hi")).toBe("too_many_mentions");
     expect(contentProblem("#a #b #c #d hi")).toBe("too_many_hashtags");
+  });
+
+  it("bounds the DM cap and DM content separately (no spacing for replies)", () => {
+    expect(effectiveDmDailyCap(undefined)).toBe(20);
+    expect(effectiveDmDailyCap("99")).toBe(50);
+    expect(dmContentProblem("thanks! here is the link")).toBeNull();
+    expect(dmContentProblem("")).toBe("empty");
+    expect(dmContentProblem("x".repeat(9501))).toBe("too_long");
   });
 
   it("enforces cap, spacing, and duplicates atomically comparable", () => {

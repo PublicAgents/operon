@@ -22,7 +22,14 @@ export interface EventRecord {
 
 export interface MessageRecord {
   at: string;
-  kind: "email_in" | "email_out" | "channel_operator" | "channel_agent";
+  kind:
+    | "email_in"
+    | "email_out"
+    | "channel_operator"
+    | "channel_agent"
+    | "x_post"
+    | "x_dm_in"
+    | "x_dm_out";
   agentId: string;
   sender?: string;
   recipient?: string;

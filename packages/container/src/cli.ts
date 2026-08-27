@@ -75,6 +75,12 @@ shown to the operator. Low volume, value first):
                                          text on stdin and omit --text); answers
                                          with the live URL
   operon x posts                         your recent posts (cross-wake memory)
+  operon x dm <@handle> --text <t>       DM someone who has DM'd YOU first (or
+                                         pipe the text on stdin). Reply-only by
+                                         construction: a cold DM is not a
+                                         refusal, the recipient simply does not
+                                         resolve. Inbound DMs arrive in inbox/
+                                         each wake, beside your mail.
 
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
@@ -275,8 +281,14 @@ function parseX(args: string[]): CliCall {
     }
     case "posts":
       return { path: "/x/posts", payload: {} };
+    case "dm": {
+      const [to] = positionals(rest);
+      const text = flagValue(rest, "--text");
+      if (!to) throw new CliUsageError("usage: operon x dm <@handle> --text <t> (or pipe the text on stdin)");
+      return { path: "/x/dm", payload: { to, ...(text !== undefined ? { text } : {}) } };
+    }
     default:
-      throw new CliUsageError("unknown x subcommand; expected one of: post, posts");
+      throw new CliUsageError("unknown x subcommand; expected one of: post, posts, dm");
   }
 }
 
@@ -428,7 +440,9 @@ async function main(): Promise<number> {
       ? { name: "value", usage: "vault set: pass --value <v> or pipe the value on stdin", trim: true }
       : call.path === "/x/post" && call.payload.text === undefined
         ? { name: "text", usage: "x post: pass --text <t> or pipe the text on stdin", trim: false }
-        : null;
+        : call.path === "/x/dm" && call.payload.text === undefined
+          ? { name: "text", usage: "x dm: pass --text <t> or pipe the text on stdin", trim: false }
+          : null;
   if (stdinField) {
     if (process.stdin.isTTY) {
       console.error(stdinField.usage);
