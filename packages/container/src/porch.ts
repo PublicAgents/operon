@@ -89,6 +89,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     email: Boolean(config.emailUrl && config.emailToken),
     till: Boolean(config.tillUrl && config.tillToken),
     pay: Boolean(config.spendUrl && config.spendToken),
+    vault: Boolean(config.vaultUrl && config.vaultToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -160,6 +161,10 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
       if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
       if (request.method === "POST" && url.pathname === "/pay") return await this.pay(body);
+      if (request.method === "POST" && url.pathname === "/vault/set") return await this.vaultSet(body);
+      if (request.method === "POST" && url.pathname === "/vault/get") return await this.vaultCall("get", body);
+      if (request.method === "POST" && url.pathname === "/vault/list") return await this.vaultCall("list", {});
+      if (request.method === "POST" && url.pathname === "/vault/delete") return await this.vaultCall("delete", body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -620,6 +625,44 @@ export class Porch {
     const resultText = (await response.text()).slice(0, 8 * 1024 * 1024);
     if (!response.ok) return fail(502, "pay_rejected", `${response.status}: ${resultText.slice(0, 400)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /** POST a payload to the vault Gatekeeper with this agent's OWN bearer. */
+  private async vaultCall(door: string, payload: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.vaultUrl || !config.vaultToken) return fail(503, "vault_not_wired");
+    if ("label" in payload && typeof payload.label !== "string") return fail(400, "invalid_label");
+    const response = await fetch(`${config.vaultUrl}/gatekeeper/vault/${door}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.vaultToken}` },
+      body: JSON.stringify(payload)
+    });
+    const resultText = (await response.text()).slice(0, 20000);
+    if (!response.ok) {
+      return fail(502, `vault_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
+    }
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /**
+   * Store a secret. The moment the vault confirms, the value joins the
+   * wake's shared denylist (pushed into the live array), so from here on
+   * it can neither persist to the state repo nor leave through any door.
+   * The label is outbound text and swept; the value is the SUBJECT of the
+   * door, not an exfiltration path, and is never logged.
+   */
+  private async vaultSet(body: Record<string, unknown>): Promise<JsonResult> {
+    const { label, value } = body;
+    if (typeof label !== "string" || label.length === 0) return fail(400, "invalid_label");
+    if (typeof value !== "string" || value.length === 0) return fail(400, "invalid_value");
+    const blocked = this.sweepFields({ label });
+    if (blocked) return blocked;
+    const result = await this.vaultCall("set", { label, value });
+    if (result.body.ok === true && !this.context.denylist.includes(value)) {
+      this.context.denylist.push(value);
+      this.context.log(`vault: stored "${label}"; its value joined the sweep`);
+    }
+    return result;
   }
 
   private async email(body: Record<string, unknown>): Promise<JsonResult> {

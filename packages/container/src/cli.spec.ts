@@ -121,6 +121,29 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["email", "original", "short"])).toThrow(CliUsageError);
   });
 
+  it("parses the vault doors, with and without an inline value", () => {
+    expect(parseArgs(["vault", "set", "lv-stats", "--value", "s3cr3t-value"])).toEqual({
+      path: "/vault/set",
+      payload: { label: "lv-stats", value: "s3cr3t-value" }
+    });
+    // Without --value the payload omits it; main() reads stdin instead.
+    expect(parseArgs(["vault", "set", "lv-stats"])).toEqual({
+      path: "/vault/set",
+      payload: { label: "lv-stats" }
+    });
+    expect(parseArgs(["vault", "get", "lv-stats"])).toEqual({
+      path: "/vault/get",
+      payload: { label: "lv-stats" }
+    });
+    expect(parseArgs(["vault", "list"])).toEqual({ path: "/vault/list", payload: {} });
+    expect(parseArgs(["vault", "delete", "lv-stats"])).toEqual({
+      path: "/vault/delete",
+      payload: { label: "lv-stats" }
+    });
+    expect(() => parseArgs(["vault", "set"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["vault", "unknown"])).toThrow(CliUsageError);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

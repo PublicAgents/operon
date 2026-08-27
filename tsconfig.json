@@ -35,6 +35,9 @@
     },
     {
       "path": "./packages/gatekeepers/spend"
+    },
+    {
+      "path": "./packages/gatekeepers/vault"
     }
   ]
 }

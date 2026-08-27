@@ -110,7 +110,11 @@ function mindHome(): string {
  * files) is durably persisted. Acking at boot would lose messages if the
  * wake then fails or persistence is blocked.
  */
-async function pullInbox(config: WakeConfig, chassisWritten: Map<string, string>): Promise<string[]> {
+async function pullInbox(
+  config: WakeConfig,
+  chassisWritten: Map<string, string>,
+  denylist: string[]
+): Promise<string[]> {
   if (!config.emailUrl || !config.emailToken) return [];
   try {
     const response = await fetch(`${config.emailUrl}/gatekeeper/email/pull`, {
@@ -132,7 +136,7 @@ async function pullInbox(config: WakeConfig, chassisWritten: Map<string, string>
     // re-delivers next time.
     let files: { name: string; content: string }[];
     try {
-      const result = await sanitizeInboxFiles(messages, autoDenylist(config));
+      const result = await sanitizeInboxFiles(messages, denylist);
       files = result.files;
       for (const name of result.sanitized) {
         log(`inbox: sanitized ${name} at delivery (matched the secret scanner)`);
@@ -357,8 +361,40 @@ function autoDenylist(config: WakeConfig): string[] {
     config.githubToken,
     ...(config.notifyToken ? [config.notifyToken] : []),
     ...(config.publishToken ? [config.publishToken] : []),
-    ...(config.prToken ? [config.prToken] : [])
+    ...(config.persistToken ? [config.persistToken] : []),
+    ...(config.prToken ? [config.prToken] : []),
+    ...(config.emailToken ? [config.emailToken] : []),
+    ...(config.tillToken ? [config.tillToken] : []),
+    ...(config.spendToken ? [config.spendToken] : []),
+    ...(config.vaultToken ? [config.vaultToken] : [])
   ];
+}
+
+/**
+ * Pull every vaulted value for this agent into the wake's denylist: what
+ * makes "a vaulted secret can never land in the repo or leave through a
+ * door" mechanical. Values live only in this process's memory (the mind
+ * retrieves one through the porch when it needs to USE it). If the vault
+ * is wired but unreachable, the caller closes the vault doors for the
+ * wake: values that cannot join the sweep must not be retrievable either.
+ */
+async function pullVaultValues(config: WakeConfig): Promise<{ values: string[]; ok: boolean }> {
+  if (!config.vaultUrl || !config.vaultToken) return { values: [], ok: true };
+  try {
+    const response = await fetch(`${config.vaultUrl}/gatekeeper/vault/all`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.vaultToken}` },
+      body: "{}"
+    });
+    if (!response.ok) throw new Error(`vault answered ${response.status}`);
+    const { secrets } = (await response.json()) as {
+      secrets: Array<{ label: string; value: string }>;
+    };
+    return { values: (secrets ?? []).map(secret => secret.value), ok: true };
+  } catch (error) {
+    log(`vault pull failed: ${String(error).slice(0, 200)}`);
+    return { values: [], ok: false };
+  }
 }
 
 async function runSession(
@@ -466,7 +502,20 @@ async function main(): Promise<number> {
   // mail and transcripts can never cost the agent its persistence. A file
   // the mind MODIFIES stops matching and is judged in full.
   const chassisWritten = new Map<string, string>();
-  const pulledInboxIds = await pullInbox(config, chassisWritten);
+
+  // ONE denylist array for the whole wake, shared by reference: the
+  // delivery scan, the porch's outbound sweeps, and the presleep gate all
+  // see the same list, and a value vaulted DURING the session (the porch
+  // pushes it) is swept from that moment on.
+  const vault = await pullVaultValues(config);
+  if (!vault.ok) {
+    log("vault unreachable: vault doors closed this wake, vaulted values missing from the sweep");
+    config.vaultUrl = undefined;
+    config.vaultToken = undefined;
+  }
+  const denylist = [...autoDenylist(config), ...vault.values];
+
+  const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
   const channelUpTo = await pullOperatorChannel(config, chassisWritten);
 
   const verified = await verifyModel(adapter, config);
@@ -479,7 +528,7 @@ async function main(): Promise<number> {
   const porch = new Porch({
     config,
     stateDir: STATE_DIR,
-    denylist: autoDenylist(config),
+    denylist,
     log
   });
   const porchUrl = await porch.start();
@@ -500,7 +549,7 @@ async function main(): Promise<number> {
     env: { ...sessionBaseEnv(), HOME: mindHome() },
     ...mindSpawnIds()
   });
-  const verification = verifyPresleep(changes.changed, autoDenylist(config));
+  const verification = verifyPresleep(changes.changed, denylist);
 
   // Generic layer: gitleaks catches secrets nobody listed, judged over the
   // AGENT-introduced changes only (chassis-delivered files were scanned at
