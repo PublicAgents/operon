@@ -19,7 +19,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 
@@ -29,12 +29,29 @@ if (!existsSync(join(ROOT, "workers", "gatekeeper-x", "wrangler.jsonc"))) {
   console.error("run this from a colony root (workers/gatekeeper-x/wrangler.jsonc not found)");
   process.exit(2);
 }
+
 const agentId = process.argv[2];
 if (!agentId) {
   console.error("usage: node scripts/x-authorize.mjs <agentId>");
   process.exit(2);
 }
 const SUFFIX = agentId.toUpperCase().replace(/-/g, "_");
+
+// The agent must exist in the roster: a typo would otherwise mint real
+// credentials under secret names nothing reads, leaving the intended
+// agent unconfigured with no error anywhere.
+{
+  const stripJsonc = text =>
+    text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const roster = JSON.parse(stripJsonc(readFileSync(join(ROOT, "roster.jsonc"), "utf8")));
+  if (!roster.agents.some(agent => agent.id === agentId)) {
+    console.error(
+      `unknown agent "${agentId}"; roster has: ${roster.agents.map(agent => agent.id).join(", ")}`
+    );
+    process.exit(2);
+  }
+}
+
 
 function ask(question, { hidden = false } = {}) {
   return new Promise(resolve => {
