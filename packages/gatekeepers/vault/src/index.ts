@@ -1,9 +1,18 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, readJson, requireAnyBearer, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { validLabel, valueProblem, vaultTokenVar } from "./policy.js";
 import { VaultBox } from "./vault-do.js";
 
 export { Ledger, VaultBox };
+
+/** The operator's binding-only view of the vault ledger (spec 0003 step 3). */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/gatekeeper/vault/ledger") return json(await ledger(this.env).recent());
+    return errorResponse(404, "not_found");
+  }
+}
 export * from "./policy.js";
 
 /**
@@ -26,7 +35,6 @@ interface Env {
   NOTIFY_URL?: string;
   /** Secrets. */
   NOTIFY_TOKEN?: string;
-  OPERATOR_API_TOKEN?: string;
   /** Per-agent bearers as VAULT_TOKEN_<AGENTID>. */
   [name: string]: unknown;
   VAULT: DurableObjectNamespace<VaultBox>;
@@ -130,11 +138,6 @@ async function handleAll(env: Env, agent: RosterAgent): Promise<Response> {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/gatekeeper/vault/ledger" && request.method === "GET") {
-      const denied = requireAnyBearer(request, [env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
-    }
     if (request.method !== "POST") return errorResponse(404, "not_found");
     const agent = agentFromBearer(request, env);
     if (!agent) return errorResponse(401, "unauthorized");

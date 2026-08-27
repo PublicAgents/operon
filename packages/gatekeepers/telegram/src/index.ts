@@ -5,8 +5,8 @@ import {
   json,
   readJson,
   requireBearer,
-  requireAnyBearer,
   Ledger,
+  OpsEntrypoint,
   type OperatorAction
 } from "@operon/worker-kit";
 import { triageUpdate, type TelegramUpdate } from "./webhook.js";
@@ -23,12 +23,11 @@ interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
   NOTIFY_TOKEN?: string;
   WAKE_TRIGGER_TOKEN?: string;
-  OPERATOR_API_TOKEN?: string;
   OPERATOR_CHAT_ID?: string;
   ROSTER?: string;
-  EMAIL_URL?: string;
-  EMAIL_SERVICE_TOKEN?: string;
-  SPEND_URL?: string;
+  /** email + spend Gatekeepers over service bindings (their Ops entrypoints). */
+  EMAIL?: Fetcher;
+  SPEND?: Fetcher;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -134,19 +133,14 @@ async function heldDecision(
   heldId: string
 ): Promise<{ ok: boolean; detail: string }> {
   const verb = approve ? "approve" : "reject";
-  let url: string | undefined;
-  let bearer: string | undefined;
-  if (gate === "email") {
-    url = env.EMAIL_URL ? `${env.EMAIL_URL}/gatekeeper/email/${verb}` : undefined;
-    bearer = env.EMAIL_SERVICE_TOKEN;
-  } else {
-    url = env.SPEND_URL ? `${env.SPEND_URL}/gatekeeper/spend/${verb}` : undefined;
-    bearer = env.OPERATOR_API_TOKEN;
-  }
-  if (!url || !bearer) return { ok: false, detail: `${gate} gatekeeper not wired` };
-  const response = await fetch(url, {
+  // The decision goes over a private service binding to the Gatekeeper's
+  // binding-only Ops entrypoint: no bearer on the wire, and only workers
+  // with the binding (this one and the ops gateway) can execute it.
+  const binding = gate === "email" ? env.EMAIL : env.SPEND;
+  if (!binding) return { ok: false, detail: `${gate} gatekeeper not bound` };
+  const response = await binding.fetch(`https://internal/gatekeeper/${gate}/${verb}`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ agentId, heldId })
   });
   const detail = (await response.text()).slice(0, 200);
@@ -432,11 +426,21 @@ export default {
       }
       return json({ ok: true, entry });
     }
+    return errorResponse(404, "not_found");
+  }
+} satisfies ExportedHandler<Env>;
+
+/**
+ * The operator's binding-only channel surface (spec 0003 step 3): send a
+ * message to an agent, read an agent's transcript, tail the ledger. No
+ * bearer, the binding is the auth. (Notify buttons keep their own
+ * TelegramGateway.notify entrypoint above.)
+ */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const env = this.env;
     if (url.pathname === "/channel/send" && request.method === "POST") {
-      // Operator UI surface: same append the Telegram webhook uses, so a
-      // custom UI is just another transport over the one channel.
-      const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-      if (denied) return denied;
       const body = await readJson<{ agentId?: string; text?: string }>(request);
       if (
         !body.ok ||
@@ -460,8 +464,6 @@ export default {
       return json({ ok: true, id: entry.id });
     }
     if (url.pathname === "/channel/transcript" && request.method === "POST") {
-      const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-      if (denied) return denied;
       const body = await readJson<{ agentId?: string }>(request);
       if (!body.ok || typeof body.value.agentId !== "string" || !body.value.agentId) {
         return errorResponse(400, "invalid_request");
@@ -469,11 +471,8 @@ export default {
       return json({ ok: true, ...(await channel(env).pullFor(body.value.agentId)) });
     }
     if (url.pathname === "/ledger" && request.method === "GET") {
-      // Internal services and the operator UI may both tail the ledger.
-      const denied = requireAnyBearer(request, [env.NOTIFY_TOKEN, env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
       return json(await ledger(env).recent());
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+}

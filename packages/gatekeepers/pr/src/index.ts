@@ -2,10 +2,9 @@ import {
   errorResponse,
   json,
   readJson,
-  requireBearer, requireAnyBearer,
+  requireBearer,
   Ledger,
-  GitDataError
-} from "@operon/worker-kit";
+  GitDataError, OpsEntrypoint } from "@operon/worker-kit";
 import {
   authenticatedLogin,
   getIssueRef,
@@ -22,6 +21,14 @@ import {
 } from "./github.js";
 
 export { Ledger };
+
+/** The operator's binding-only view of the pr ledger (spec 0003 step 3). */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/gatekeeper/pr/ledger") return json(await ledger(this.env).recent());
+    return errorResponse(404, "not_found");
+  }
+}
 export * from "./github.js";
 
 /**
@@ -33,7 +40,6 @@ export * from "./github.js";
  */
 
 interface Env {
-  OPERATOR_API_TOKEN?: string;
   MACHINE_PAT?: string;
   PR_SERVICE_TOKEN?: string;
   PR_REPOS?: string;
@@ -471,11 +477,6 @@ export default {
     }
     if (url.pathname === "/gatekeeper/push" && request.method === "POST") {
       return handlePush(request, env);
-    }
-    if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
-      const denied = requireAnyBearer(request, [env.PR_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
     }
     return errorResponse(404, "not_found");
   }

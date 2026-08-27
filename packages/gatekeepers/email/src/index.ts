@@ -1,6 +1,6 @@
 import { findAgent, parseRoster } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger,
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
   type TelegramGatewayBinding
@@ -28,7 +28,6 @@ interface Env {
   EMAIL_DOMAIN: string;
   EMAIL_SERVICE_TOKEN?: string;
   OPERATOR_EMAIL?: string;
-  OPERATOR_API_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
   /** telegram Gatekeeper over a service binding: the only path that carries buttons. */
@@ -195,8 +194,6 @@ async function deliver(
 }
 
 async function handleApprove(request: Request, env: Env): Promise<Response> {
-  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
-  if (denied) return denied;
   const body = await readJson<{ agentId?: string; heldId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, heldId } = body.value;
@@ -242,8 +239,6 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleReject(request: Request, env: Env): Promise<Response> {
-  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
-  if (denied) return denied;
   const body = await readJson<{ agentId?: string; heldId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, heldId } = body.value;
@@ -314,8 +309,6 @@ async function handleOriginal(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleOutbox(request: Request, env: Env): Promise<Response> {
-  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
-  if (denied) return denied;
   const body = await readJson<{ agentId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const roster = parseRoster(env.ROSTER);
@@ -374,15 +367,33 @@ export default {
       if (url.pathname === "/gatekeeper/email/pull") return handlePull(request, env);
       if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
       if (url.pathname === "/gatekeeper/email/original") return handleOriginal(request, env);
-      if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
-      if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
-      if (url.pathname === "/gatekeeper/email/reject") return handleReject(request, env);
-    }
-    if (url.pathname === "/gatekeeper/email/ledger" && request.method === "GET") {
-      const denied = requireAnyBearer(request, [env.EMAIL_SERVICE_TOKEN, env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
     }
     return errorResponse(404, "not_found");
   }
 } satisfies ExportedHandler<Env>;
+
+/**
+ * The operator's binding-only decision + read surface (spec 0003 step 3):
+ * approve/reject a held first-contact email, the outbox, the ledger. No
+ * bearer, the binding is the auth. Moving these off EMAIL_SERVICE_TOKEN
+ * (which the wake container also holds) also stops a compromised wake
+ * from approving its own held email.
+ */
+export class Ops extends OpsEntrypoint<Env> {
+  protected handle(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/gatekeeper/email/approve") {
+      return handleApprove(request, this.env);
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/email/reject") {
+      return handleReject(request, this.env);
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/email/outbox") {
+      return handleOutbox(request, this.env);
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/email/ledger") {
+      return Promise.resolve(ledger(this.env).recent()).then(rows => json(rows));
+    }
+    return Promise.resolve(errorResponse(404, "not_found"));
+  }
+}

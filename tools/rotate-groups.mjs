@@ -18,20 +18,6 @@ export function groupsFor(roster) {
       ["gatekeeper-vault", "NOTIFY_TOKEN"],
       ["gatekeeper-x", "NOTIFY_TOKEN"]
     ],
-    // Every ledger/read surface; the operator's own copy is refreshed too.
-    operator: [
-      ["gatekeeper-telegram", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-email", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-spend", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-till", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-github", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-pr", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-deploy", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-vault", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-chronicle", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-x", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-ops", "OPERATOR_API_TOKEN"]
-    ],
     publish: [
       ["gatekeeper-deploy", "PUBLISH_TOKEN"],
       ["scheduler", "PUBLISH_TOKEN"]

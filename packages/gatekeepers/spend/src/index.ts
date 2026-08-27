@@ -7,8 +7,7 @@ import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
-  type TelegramGatewayBinding
-} from "@operon/worker-kit";
+  type TelegramGatewayBinding, OpsEntrypoint } from "@operon/worker-kit";
 import { SpendLedger } from "./spend-do.js";
 import {
   parseCurrencyMap,
@@ -54,7 +53,6 @@ interface Env {
   NOTIFY_TOKEN?: string;
   /** telegram Gatekeeper over a service binding: the only path that carries buttons. */
   TELEGRAM?: TelegramGatewayBinding;
-  OPERATOR_API_TOKEN?: string;
   /** Per-agent bearers as SPEND_TOKEN_<AGENTID>. */
   [name: string]: unknown;
   SPEND: DurableObjectNamespace<SpendLedger>;
@@ -445,8 +443,6 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleDecision(request: Request, env: Env, approve: boolean): Promise<Response> {
-  const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-  if (denied) return denied;
   const body = await readJson<{ agentId?: string; heldId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, heldId } = body.value;
@@ -492,47 +488,61 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   return response;
 }
 
+/** Reconcile an ambiguous outbox row (operator ruling). */
+async function handleReconcile(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ outboxId?: string; ruling?: string }>(request);
+  if (
+    !body.ok ||
+    typeof body.value.outboxId !== "string" ||
+    (body.value.ruling !== "charged" && body.value.ruling !== "not_charged")
+  ) {
+    return errorResponse(400, "invalid_request");
+  }
+  const done = await spendLedger(env).reconcile(body.value.outboxId, body.value.ruling);
+  await ledger(env).append("reconciled", { outboxId: body.value.outboxId, ruling: body.value.ruling, done });
+  return done ? json({ ok: true }) : errorResponse(404, "outbox_row_not_unknown");
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/gatekeeper/spend/pay") {
       return handlePay(request, env);
     }
-    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/approve") {
-      return handleDecision(request, env, true);
-    }
-    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/reject") {
-      return handleDecision(request, env, false);
-    }
-    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/reconcile") {
-      const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-      if (denied) return denied;
-      const body = await readJson<{ outboxId?: string; ruling?: string }>(request);
-      if (
-        !body.ok ||
-        typeof body.value.outboxId !== "string" ||
-        (body.value.ruling !== "charged" && body.value.ruling !== "not_charged")
-      ) {
-        return errorResponse(400, "invalid_request");
-      }
-      const done = await spendLedger(env).reconcile(body.value.outboxId, body.value.ruling);
-      await ledger(env).append("reconciled", { outboxId: body.value.outboxId, ruling: body.value.ruling, done });
-      return done ? json({ ok: true }) : errorResponse(404, "outbox_row_not_unknown");
-    }
+    // An agent reads its OWN outbox with its per-agent bearer; the full
+    // outbox is the operator's, on the binding-only Ops entrypoint.
     if (request.method === "POST" && url.pathname === "/gatekeeper/spend/outbox") {
-      // Agents read their own outbox with their bearer; the operator token
-      // reads everything.
       const agent = agentFromBearer(request, env);
-      if (agent) return json({ ok: true, outbox: await spendLedger(env).outbox(agent.id) });
-      const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-      if (denied) return denied;
-      return json({ ok: true, outbox: await spendLedger(env).outbox() });
-    }
-    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/ledger") {
-      const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
+      if (!agent) return errorResponse(401, "unauthorized");
+      return json({ ok: true, outbox: await spendLedger(env).outbox(agent.id) });
     }
     return errorResponse(404, "not_found");
   }
 } satisfies ExportedHandler<Env>;
+
+/**
+ * The operator's binding-only decision + read surface (spec 0003 step 3):
+ * approve/reject/reconcile a hold, the full outbox, and the ledger. No
+ * bearer, the service binding is the authorization.
+ */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/approve") {
+      return handleDecision(request, this.env, true);
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/reject") {
+      return handleDecision(request, this.env, false);
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/reconcile") {
+      return handleReconcile(request, this.env);
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/outbox") {
+      return json({ ok: true, outbox: await spendLedger(this.env).outbox() });
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/ledger") {
+      return json(await ledger(this.env).recent());
+    }
+    return errorResponse(404, "not_found");
+  }
+}

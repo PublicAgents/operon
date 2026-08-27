@@ -12,49 +12,47 @@ export * from "./routes.js";
  * bearer. The operator holds no chassis token; identity is the GitHub
  * SSO session Access carries.
  *
- * Step 3 removes the per-Gatekeeper public operator endpoints and the
- * bearers this forwards with; until then, this is a thin, audited,
- * Access-gated front for them, and OPERATOR_API_TOKEN stops living on
- * the operator's laptop.
+ * Every operator operation now lives on each Gatekeeper's binding-only
+ * Ops entrypoint, reached bearer-free over a service binding; the only
+ * downstream bearer left is the scheduler's WAKE_TRIGGER_TOKEN (its
+ * control endpoints move to bindings with the umbilical). OPERATOR_API_TOKEN
+ * no longer exists anywhere.
  */
 
 interface Env {
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
-  /** The internal bearer each downstream still expects (removed in step 3). */
-  OPERATOR_API_TOKEN?: string;
-  EMAIL_SERVICE_TOKEN?: string;
-  NOTIFY_TOKEN?: string;
+  /** The scheduler's trigger bearer: the one operator path not yet an
+   * Ops entrypoint (wake/enable/disable move to bindings with the
+   * umbilical). Everything else forwards bearer-free over an Ops binding. */
   WAKE_TRIGGER_TOKEN?: string;
-  /** Service bindings to every Gatekeeper the operator surface touches. */
-  /** The chronicle Gatekeeper (read forwarding). */
-  CHRONICLE_GK?: Fetcher;
   /** The chronicle D1, so the audit ledger mirrors centrally. */
   CHRONICLE?: D1Database;
   /** This gateway's own operator-attributed audit ledger. */
   AUDIT: DurableObjectNamespace<Ledger>;
+  /** Service bindings, each targeting the Gatekeeper's binding-only Ops
+   * entrypoint (no bearer); SCHEDULER is the default fetch (bearer). */
+  CHRONICLE_GK?: Fetcher;
   EMAIL?: Fetcher;
   SPEND?: Fetcher;
   VAULT?: Fetcher;
   X?: Fetcher;
+  TILL?: Fetcher;
+  DEPLOY?: Fetcher;
+  GITHUB?: Fetcher;
+  PR?: Fetcher;
   TELEGRAM?: Fetcher;
   SCHEDULER?: Fetcher;
   [name: string]: unknown;
 }
 
-/** The bearer each binding's downstream endpoint currently checks. */
+/**
+ * The only downstream still reached with a bearer is the scheduler
+ * (wake/enable/disable); every other binding targets a binding-only Ops
+ * entrypoint and is called with no bearer at all.
+ */
 function bearerFor(route: OpsRoute, env: Env): string | undefined {
-  switch (route.binding) {
-    case "EMAIL":
-      return env.EMAIL_SERVICE_TOKEN;
-    case "TELEGRAM":
-      return route.downstreamPath === "/ledger" ? env.NOTIFY_TOKEN : env.OPERATOR_API_TOKEN;
-    case "SCHEDULER":
-      return env.WAKE_TRIGGER_TOKEN;
-    default:
-      // CHRONICLE_GK, spend, vault, x: OPERATOR_API_TOKEN
-      return env.OPERATOR_API_TOKEN;
-  }
+  return route.binding === "SCHEDULER" ? env.WAKE_TRIGGER_TOKEN : undefined;
 }
 
 export default {
@@ -81,7 +79,9 @@ export default {
     const binding = env[match.route.binding] as Fetcher | undefined;
     if (!binding) return errorResponse(503, "binding_unwired", match.route.binding);
     const bearer = bearerFor(match.route, env);
-    if (!bearer) return errorResponse(503, "downstream_token_missing", match.route.binding);
+    if (match.route.binding === "SCHEDULER" && !bearer) {
+      return errorResponse(503, "downstream_token_missing", match.route.binding);
+    }
 
     // Body for the downstream call. A POST operator request forwards its
     // body verbatim; a GET whose downstream is a POST (e.g. email/outbox,
@@ -121,7 +121,7 @@ export default {
     const response = await binding.fetch(target, {
       method: match.route.downstreamMethod,
       headers: {
-        authorization: `Bearer ${bearer}`,
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         "x-operon-operator": operator,
         ...(match.route.downstreamMethod === "POST" ? { "content-type": "application/json" } : {})
       },

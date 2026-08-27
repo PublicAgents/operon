@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { TillCatalog } from "./catalog-do.js";
 import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
 
@@ -44,7 +44,6 @@ interface Env {
    */
   TEMPO_API_KEY?: string;
   TILL_RPC_URL?: string;
-  OPERATOR_API_TOKEN?: string;
   /** Per-agent bearers as TILL_TOKEN_<AGENTID>. */
   [name: string]: unknown;
   DEPLOY: Fetcher;
@@ -162,13 +161,6 @@ app.post("/gatekeeper/till/sales", async c => {
   return json({ ok: true, offers, sales });
 });
 
-app.get("/gatekeeper/till/ledger", async c => {
-  const env = c.env;
-  const denied = requireAnyBearer(c.req.raw, [env.OPERATOR_API_TOKEN as string | undefined]);
-  if (denied) return denied;
-  return json(await ledger(env).recent());
-});
-
 // ---- serving overlay -------------------------------------------------
 
 app.all("*", async c => {
@@ -238,3 +230,13 @@ app.all("*", async c => {
 export default {
   fetch: app.fetch
 } satisfies ExportedHandler<Env>;
+
+/** The operator's binding-only view of the till ledger (spec 0003 step 3). */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/gatekeeper/till/ledger") {
+      return json(await ledger(this.env).recent());
+    }
+    return errorResponse(404, "not_found");
+  }
+}
