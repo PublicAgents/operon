@@ -74,11 +74,12 @@ function agentFromBearer(request: Request, env: Env): RosterAgent | null {
 async function notifyOperator(env: Env, text: string): Promise<void> {
   if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
   try {
-    await fetch(env.NOTIFY_URL, {
+    const response = await fetch(env.NOTIFY_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
       body: JSON.stringify({ text })
     });
+    if (!response.ok) console.error(`x notify rejected: ${response.status}`);
   } catch (error) {
     console.error("x notify failed", error);
   }

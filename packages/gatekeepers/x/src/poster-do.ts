@@ -43,16 +43,26 @@ export class PosterBox extends DurableObject {
     if (problem) return { ok: false, problem };
 
     await this.ctx.storage.put("window", { day, count: postedToday + 1 });
+    // The previous spacing clock is kept until the delivery is known
+    // good: a failed delivery must restore it, or the retry would be
+    // blocked 20 minutes for a post that never happened.
+    await this.ctx.storage.put("prevLastPostAt", lastPostAt);
     await this.ctx.storage.put("lastPostAt", Date.parse(nowIso));
     return { ok: true };
   }
 
-  /** Return a reserved-but-undelivered slot (delivery failed). */
+  /** Return a reserved-but-undelivered slot (delivery failed): cap AND spacing. */
   async release(nowIso: string): Promise<void> {
     const day = nowIso.slice(0, 10);
     const window = await this.ctx.storage.get<DayWindow>("window");
     if (window && window.day === day && window.count > 0) {
       await this.ctx.storage.put("window", { day, count: window.count - 1 });
+    }
+    const previous = await this.ctx.storage.get<number | null>("prevLastPostAt");
+    if (previous === null || previous === undefined) {
+      await this.ctx.storage.delete("lastPostAt");
+    } else {
+      await this.ctx.storage.put("lastPostAt", previous);
     }
   }
 
