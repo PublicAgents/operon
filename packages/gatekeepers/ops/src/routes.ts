@@ -40,6 +40,10 @@ export const OPS_ROUTES: OpsRoute[] = [
   { method: "GET", path: "/ledger/spend", binding: "SPEND", downstreamMethod: "GET", downstreamPath: "/gatekeeper/spend/ledger" },
   { method: "GET", path: "/ledger/vault", binding: "VAULT", downstreamMethod: "GET", downstreamPath: "/gatekeeper/vault/ledger" },
   { method: "GET", path: "/ledger/x", binding: "X", downstreamMethod: "GET", downstreamPath: "/gatekeeper/x/ledger" },
+  { method: "GET", path: "/ledger/till", binding: "TILL", downstreamMethod: "GET", downstreamPath: "/gatekeeper/till/ledger" },
+  { method: "GET", path: "/ledger/deploy", binding: "DEPLOY", downstreamMethod: "GET", downstreamPath: "/gatekeeper/deploy/ledger" },
+  { method: "GET", path: "/ledger/github", binding: "GITHUB", downstreamMethod: "GET", downstreamPath: "/gatekeeper/github/ledger" },
+  { method: "GET", path: "/ledger/pr", binding: "PR", downstreamMethod: "GET", downstreamPath: "/gatekeeper/pr/ledger" },
   { method: "GET", path: "/ledger/telegram", binding: "TELEGRAM", downstreamMethod: "GET", downstreamPath: "/ledger" },
 
   // ---- reads: money detail ------------------------------------------

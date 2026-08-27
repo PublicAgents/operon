@@ -1,5 +1,5 @@
 import { parseRoster } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import {
   hostLabel,
   storagePath,
@@ -9,6 +9,14 @@ import {
 import { SitePublisher } from "./site-publisher.js";
 
 export { Ledger, SitePublisher };
+
+/** The operator's binding-only view of the deploy ledger (spec 0003 step 3). */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/gatekeeper/deploy/ledger") return json(await ledger(this.env).recent());
+    return errorResponse(404, "not_found");
+  }
+}
 export * from "./gates.js";
 
 /**
@@ -20,7 +28,6 @@ export * from "./gates.js";
  */
 
 interface Env {
-  OPERATOR_API_TOKEN?: string;
   ROSTER: string;
   PUBLISH_TOKEN?: string;
   DISCLOSURE_MARKER?: string;
@@ -121,11 +128,6 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/gatekeeper/publish" && request.method === "POST") {
       return handlePublish(request, env);
-    }
-    if (url.pathname === "/gatekeeper/ledger" && request.method === "GET") {
-      const denied = requireAnyBearer(request, [env.PUBLISH_TOKEN, env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
     }
     if (request.method === "GET" || request.method === "HEAD") {
       return serve(request, env);

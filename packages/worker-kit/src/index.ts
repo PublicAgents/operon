@@ -1,5 +1,6 @@
 export { json, errorResponse, requireBearer, requireAnyBearer, readJson } from "./http.js";
 export { Ledger, type LedgerRow } from "./ledger.js";
+export { OpsEntrypoint } from "./ops-entry.js";
 export {
   notifyOperator,
   type OperatorAction,

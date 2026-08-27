@@ -5,7 +5,7 @@ import {
   queryWakes,
   recordWakeLogChunk
 } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, OpsEntrypoint } from "@operon/worker-kit";
 import { WakeLog } from "./wake-log-do.js";
 
 export { WakeLog };
@@ -28,7 +28,6 @@ interface Env {
   ROSTER: string;
   CHRONICLE: D1Database;
   CHRONICLE_SERVICE_TOKEN?: string;
-  OPERATOR_API_TOKEN?: string;
   WAKE_LOG: DurableObjectNamespace<WakeLog>;
 }
 
@@ -69,17 +68,13 @@ function intParam(url: URL, name: string, fallback: number): number {
   return Number.isInteger(value) ? value : fallback;
 }
 
-export default {
-  async fetch(request, env, ctx) {
+/**
+ * The operator's read surface, served ONLY over the binding-only Ops
+ * entrypoint (spec 0003 step 3): events, messages, wakes, wake tail. No
+ * bearer, the service binding is the authorization.
+ */
+async function operatorReads(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-
-    if (url.pathname === "/chronicle/wake-log/append" && request.method === "POST") {
-      return handleAppend(request, env, ctx);
-    }
-
-    // Everything below is the operator's read surface.
-    const denied = requireBearer(request, env.OPERATOR_API_TOKEN);
-    if (denied) return denied;
     if (request.method !== "GET") return errorResponse(404, "not_found");
 
     if (url.pathname === "/chronicle/events") {
@@ -136,5 +131,20 @@ export default {
       });
     }
     return errorResponse(404, "not_found");
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === "/chronicle/wake-log/append" && request.method === "POST") {
+      return handleAppend(request, env, ctx);
+    }
+    return errorResponse(404, "not_found");
   }
 } satisfies ExportedHandler<Env>;
+
+export class Ops extends OpsEntrypoint<Env> {
+  protected handle(request: Request): Promise<Response> {
+    return operatorReads(request, this.env);
+  }
+}

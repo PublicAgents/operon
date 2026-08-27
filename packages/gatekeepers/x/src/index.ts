@@ -1,6 +1,6 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireAnyBearer, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { authorizationHeader } from "./oauth1.js";
 import { PosterBox } from "./poster-do.js";
 import {
@@ -14,6 +14,14 @@ import {
 } from "./policy.js";
 
 export { Ledger, PosterBox };
+
+/** The operator's binding-only view of the X ledger (spec 0003 step 3). */
+export class Ops extends OpsEntrypoint<Env> {
+  protected async handle(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/gatekeeper/x/ledger") return json(await ledger(this.env).recent());
+    return errorResponse(404, "not_found");
+  }
+}
 export * from "./policy.js";
 export * from "./oauth1.js";
 
@@ -49,7 +57,6 @@ interface Env {
   X_API_KEY?: string;
   X_API_SECRET?: string;
   NOTIFY_TOKEN?: string;
-  OPERATOR_API_TOKEN?: string;
   /** Per-agent: X_TOKEN_<ID> (door bearer), X_ACCESS_TOKEN/SECRET_<ID> (account). */
   [name: string]: unknown;
   POSTER: DurableObjectNamespace<PosterBox>;
@@ -402,11 +409,6 @@ async function handleDmPull(env: Env, agent: RosterAgent, ctx: ExecutionContext)
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/gatekeeper/x/ledger" && request.method === "GET") {
-      const denied = requireAnyBearer(request, [env.OPERATOR_API_TOKEN]);
-      if (denied) return denied;
-      return json(await ledger(env).recent());
-    }
     if (request.method !== "POST") return errorResponse(404, "not_found");
     const agent = agentFromBearer(request, env);
     if (!agent) return errorResponse(401, "unauthorized");
