@@ -46,17 +46,21 @@ const wakeArg = args.find(arg => !arg.startsWith("--"));
 // browser SSO (`cloudflared access login <ops>`), then this refreshes
 // silently. Sent as the header the ops gateway's in-Worker verifier reads.
 function accessToken() {
-  try {
-    return execFileSync("cloudflared", ["access", "token", "--app", GK], {
-      encoding: "utf8"
-    }).trim();
-  } catch {
-    console.error(`no Access session for ${GK}. Run: cloudflared access login ${GK}`);
-    process.exit(2);
-  }
+  return execFileSync("cloudflared", ["access", "token", "--app", GK], {
+    encoding: "utf8"
+  }).trim();
 }
 
-let token = accessToken();
+// Startup is the only fatal path (no session at all is operator error);
+// a mid-tail refresh failure throws instead, so the polling loop's
+// retry window absorbs a transient cloudflared failure.
+let token;
+try {
+  token = accessToken();
+} catch {
+  console.error(`no Access session for ${GK}. Run: cloudflared access login ${GK}`);
+  process.exit(2);
+}
 
 async function api(path) {
   let response = await fetch(`${GK}${path}`, {
