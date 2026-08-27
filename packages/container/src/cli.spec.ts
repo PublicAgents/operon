@@ -112,6 +112,48 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["till", "dance"])).toThrowError(/till subcommand/);
   });
 
+  it("parses email original by id prefix", () => {
+    expect(parseArgs(["email", "original", "abcdef12"])).toEqual({
+      path: "/email/original",
+      payload: { id: "abcdef12" }
+    });
+    expect(() => parseArgs(["email", "original"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["email", "original", "short"])).toThrow(CliUsageError);
+  });
+
+  it("parses the vault doors, with and without an inline value", () => {
+    expect(parseArgs(["vault", "set", "lv-stats", "--value", "s3cr3t-value"])).toEqual({
+      path: "/vault/set",
+      payload: { label: "lv-stats", value: "s3cr3t-value" }
+    });
+    // Without --value the payload omits it; main() reads stdin instead.
+    expect(parseArgs(["vault", "set", "lv-stats"])).toEqual({
+      path: "/vault/set",
+      payload: { label: "lv-stats" }
+    });
+    expect(parseArgs(["vault", "get", "lv-stats"])).toEqual({
+      path: "/vault/get",
+      payload: { label: "lv-stats" }
+    });
+    expect(parseArgs(["vault", "list"])).toEqual({ path: "/vault/list", payload: {} });
+    expect(parseArgs(["vault", "delete", "lv-stats"])).toEqual({
+      path: "/vault/delete",
+      payload: { label: "lv-stats" }
+    });
+    expect(() => parseArgs(["vault", "set"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["vault", "unknown"])).toThrow(CliUsageError);
+  });
+
+  it("parses channel original by entry id", () => {
+    expect(parseArgs(["channel", "original", "123"])).toEqual({
+      path: "/channel/original",
+      payload: { id: 123 }
+    });
+    expect(() => parseArgs(["channel", "original"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["channel", "original", "zero"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["channel", "dance", "1"])).toThrow(CliUsageError);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

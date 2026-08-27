@@ -19,6 +19,18 @@ const HELP = `operon: the doors out of this wake
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
                                          inbound mail is in inbox/ each wake.
+  operon email original <id>             the stored, UNREDACTED original of an
+                                         inbound message (id = the 8-char prefix
+                                         in the inbox file's name): use it when a
+                                         line was withheld at delivery and you
+                                         need what it carried, e.g. a sign-up or
+                                         verification link. Never save the
+                                         credential parts to your repo.
+  operon channel original <id>           the stored, unredacted original of one
+                                         operator-channel entry (id = the [#id]
+                                         on its header line in
+                                         operator/channel.md), for when a
+                                         transcript line was withheld
 
 Till doors (sell your work; spec: your prices, the operator's ceilings;
 custody and recipients are the operator's alone):
@@ -38,6 +50,20 @@ custody and recipients are the operator's alone):
                                          key); a FIRST payment to a new merchant is
                                          held for the operator. Ambiguous outcomes
                                          freeze and are never retried by you.
+
+Vault doors (your own secret store, for anything that must survive
+between wakes but may NEVER sit in your repo, hard rule 7). A vaulted
+value is folded into the secret sweep: it cannot appear in your repo, a
+publish, a PR, or an email. Retrieve it when you need to USE it:
+
+  operon vault set <label> --value <v>   store or update a secret by label (or
+                                         pipe the value on stdin and omit
+                                         --value). Do not ALSO write it to a
+                                         repo file; the presleep gate blocks
+                                         any push containing it.
+  operon vault get <label>               retrieve a secret's value
+  operon vault list                      your labels and timestamps (no values)
+  operon vault delete <label>            remove a secret permanently
 
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
@@ -126,6 +152,13 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return { path: "/publish", payload: { dir: positionals(rest)[0] ?? "site", host } };
     }
     case "email": {
+      if (rest[0] === "original") {
+        const id = positionals(rest.slice(1))[0];
+        if (!id || id.length < 8) {
+          throw new CliUsageError("usage: operon email original <message id or its 8-char prefix>");
+        }
+        return { path: "/email/original", payload: { id } };
+      }
       const to = flagValue(rest, "--to");
       const subject = flagValue(rest, "--subject");
       const body = flagValue(rest, "--body");
@@ -138,6 +171,16 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseGithub(rest);
     case "till":
       return parseTill(rest);
+    case "vault":
+      return parseVault(rest);
+    case "channel": {
+      const [sub, idRaw] = positionals(rest);
+      const id = Number(idRaw);
+      if (sub !== "original" || !idRaw || !Number.isInteger(id) || id <= 0) {
+        throw new CliUsageError("usage: operon channel original <id> (the [#id] on the entry's header line)");
+      }
+      return { path: "/channel/original", payload: { id } };
+    }
     case "pay": {
       const [url] = positionals(rest);
       const max = flagValue(rest, "--max");
@@ -178,6 +221,34 @@ function parseTill(args: string[]): CliCall {
       return { path: "/till/sales", payload: {} };
     default:
       throw new CliUsageError("unknown till subcommand; expected one of: offer, retire, sales");
+  }
+}
+
+function parseVault(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  const label = positionals(rest)[0];
+  switch (sub) {
+    case "set": {
+      // --value may be omitted: main() then reads the value from stdin,
+      // which keeps the secret off the process argv.
+      const value = flagValue(rest, "--value");
+      if (!label) {
+        throw new CliUsageError(
+          "usage: operon vault set <label> --value <v> (or pipe the value on stdin)"
+        );
+      }
+      return { path: "/vault/set", payload: { label, ...(value !== undefined ? { value } : {}) } };
+    }
+    case "get":
+      if (!label) throw new CliUsageError("usage: operon vault get <label>");
+      return { path: "/vault/get", payload: { label } };
+    case "list":
+      return { path: "/vault/list", payload: {} };
+    case "delete":
+      if (!label) throw new CliUsageError("usage: operon vault delete <label>");
+      return { path: "/vault/delete", payload: { label } };
+    default:
+      throw new CliUsageError("unknown vault subcommand; expected one of: set, get, list, delete");
   }
 }
 
@@ -320,6 +391,22 @@ async function main(): Promise<number> {
   if (!porch) {
     console.error("no porch: OPERON_PORCH is not set, so no doors are wired this wake");
     return 3;
+  }
+
+  // vault set without --value: the value comes from stdin (kept off argv).
+  if (call.path === "/vault/set" && call.payload.value === undefined) {
+    if (process.stdin.isTTY) {
+      console.error("vault set: pass --value <v> or pipe the value on stdin");
+      return 2;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    if (!value) {
+      console.error("vault set: empty value on stdin");
+      return 2;
+    }
+    call.payload.value = value;
   }
 
   const isGet = call.path === "/capabilities";

@@ -1,0 +1,19 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-vault",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "VAULT", "class_name": "VaultBox" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VaultBox", "Ledger"] }]
+  // ROSTER injected at deploy.
+  // Secrets:
+  //   VAULT_TOKEN_<AGENTID>  per-agent bearers (identity from the bearer)
+  //   NOTIFY_TOKEN           telegram Gatekeeper bearer (set/delete notices)
+  //   OPERATOR_API_TOKEN     ledger reads
+}

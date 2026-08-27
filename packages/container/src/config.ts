@@ -34,7 +34,11 @@ export const ENV = {
   tillUrl: "OPERON_TILL_URL",
   tillToken: "OPERON_TILL_TOKEN",
   spendUrl: "OPERON_SPEND_URL",
-  spendToken: "OPERON_SPEND_TOKEN"
+  spendToken: "OPERON_SPEND_TOKEN",
+  vaultUrl: "OPERON_VAULT_URL",
+  vaultToken: "OPERON_VAULT_TOKEN",
+  chronicleUrl: "OPERON_CHRONICLE_URL",
+  chronicleToken: "OPERON_CHRONICLE_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -77,6 +81,12 @@ export interface WakeConfig {
   /** spend Gatekeeper endpoint + this agent's own money bearer. */
   spendUrl?: string;
   spendToken?: string;
+  /** vault Gatekeeper endpoint + this agent's own secret-store bearer. */
+  vaultUrl?: string;
+  vaultToken?: string;
+  /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
+  chronicleUrl?: string;
+  chronicleToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -148,7 +158,11 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     tillUrl: env[ENV.tillUrl],
     tillToken: env[ENV.tillToken],
     spendUrl: env[ENV.spendUrl],
-    spendToken: env[ENV.spendToken]
+    spendToken: env[ENV.spendToken],
+    vaultUrl: env[ENV.vaultUrl],
+    vaultToken: env[ENV.vaultToken],
+    chronicleUrl: env[ENV.chronicleUrl],
+    chronicleToken: env[ENV.chronicleToken]
   };
 }
 

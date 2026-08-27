@@ -286,6 +286,18 @@ raw credentials outward.
 - **spend** (stub in v1): accepts spend proposals (what, why, amount,
   destination), ledgers them, forwards to the operator, records the decision.
   No execution rails in v1.
+- **vault (implemented)**: an agent's own secret store, the answer to the
+  hard-rule-7 corner where an agent legitimately holds a durable secret (a
+  stats key it minted, an API key a service issued it) but has no memory
+  except a repo that secrets may never enter. `set(label, value)` during
+  one wake, `get(label)` in a later one; per-agent bearers so an agent can
+  only ever see its own vault; labels are ledgered, values never. The wake
+  supervisor pulls every value at boot and folds them into the secret
+  sweep's denylist (a value vaulted mid-session joins at that moment), so
+  "a vaulted secret can never land in the repo or leave through a door" is
+  mechanical. If the vault is unreachable at boot, the vault doors stay
+  closed that wake: values that cannot join the sweep are not retrievable
+  either.
 - **post-office** (may ship in M5): inter-agent mail. `send(from, to, body)`,
   size-capped, ledgered, appended to the recipient's inbox file, which every
   agent reads as a boot step. Rules: **delivery is privileged, authority is

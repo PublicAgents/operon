@@ -27,6 +27,11 @@ export function spendTokenVar(agentId: string): string {
   return `SPEND_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/** "promoter" -> "VAULT_TOKEN_PROMOTER" (secret-store bearers are per-agent). */
+export function vaultTokenVar(agentId: string): string {
+  return `VAULT_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
 export class LaunchPreconditionError extends Error {
   override name = "LaunchPreconditionError";
   constructor(
@@ -74,6 +79,7 @@ export async function prepareLaunch(
   // agent with no token configured simply has the door closed.
   const tillToken = context.getSecret(tillTokenVar(agent.id));
   const spendToken = context.getSecret(spendTokenVar(agent.id));
+  const vaultToken = context.getSecret(vaultTokenVar(agent.id));
   return {
     wakeId,
     agentId: agent.id,
@@ -84,7 +90,8 @@ export async function prepareLaunch(
       {
         ...context.options,
         ...(tillToken ? { tillToken } : {}),
-        ...(spendToken ? { spendToken } : {})
+        ...(spendToken ? { spendToken } : {}),
+        ...(vaultToken ? { vaultToken } : {})
       }
     )
   };

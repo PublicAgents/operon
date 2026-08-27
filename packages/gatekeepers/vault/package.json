@@ -1,0 +1,47 @@
+{
+  "name": "@operon/gatekeeper-vault",
+  "version": "0.0.0",
+  "description": "The vault Gatekeeper: an agent's own secret store. An agent hands it a label and a value during one wake and asks for the value by label in a later one, so a secret survives between wakes without ever living in the state repo (hard rule 7). Every stored value is folded into the wake's secret denylist, so it can never leave through the repo, a publish, a PR, or an email. Labels are ledgered; values never are.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

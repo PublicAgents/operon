@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-chronicle",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "WAKE_LOG", "class_name": "WakeLog" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WakeLog"] }],
+  "d1_databases": [
+    {
+      "binding": "CHRONICLE",
+      "database_name": "operon-chronicle",
+      "database_id": "operon-chronicle-local",
+      "migrations_dir": "../../chronicle/migrations"
+    }
+  ]
+  // Secrets:
+  //   CHRONICLE_SERVICE_TOKEN  the container's transcript-append bearer
+  //                            (== scheduler CHRONICLE_TOKEN)
+  //   OPERATOR_API_TOKEN       all reads (events, messages, wakes, tail)
+}

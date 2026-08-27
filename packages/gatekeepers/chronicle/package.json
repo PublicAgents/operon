@@ -1,0 +1,47 @@
+{
+  "name": "@operon/gatekeeper-chronicle",
+  "version": "0.0.0",
+  "description": "The chronicle Gatekeeper: the colony's introspection surface. Receives wake transcript chunks from containers (tailable live from a per-wake Durable Object, mirrored durably to the central D1), and serves the operator's read API over the audit database: events, messages, wakes, transcripts. Operator-authenticated reads; the container's append door is internal-bearer only.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/chronicle": "0.0.0",
+    "@operon/worker-kit": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

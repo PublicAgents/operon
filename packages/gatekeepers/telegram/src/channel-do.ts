@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { recordMessage } from "@operon/chronicle";
 import {
   effectiveCursors,
   prunableIds,
@@ -27,6 +28,21 @@ export class Channel extends DurableObject {
     const stored: ChannelEntry = { id: nextId, ...entry };
     await this.ctx.storage.put(`e:${String(nextId).padStart(10, "0")}`, stored);
     await this.ctx.storage.put("nextId", nextId + 1);
+    // Chronicle mirror: the channel prunes (it is a window, not an
+    // archive); the mirror is where history stops being lost. Best-effort.
+    const chronicle = (this.env as { CHRONICLE?: D1Database }).CHRONICLE;
+    if (chronicle) {
+      this.ctx.waitUntil(
+        recordMessage(chronicle, {
+          at: stored.at,
+          kind: stored.from === "operator" ? "channel_operator" : "channel_agent",
+          agentId: stored.agentId,
+          sender: stored.from,
+          body: stored.text,
+          refId: String(stored.id)
+        })
+      );
+    }
     // Prune cursor-aware: only entries every known agent has acked are
     // dropped at the normal retention (a long-idle agent must not lose
     // unread instructions), with a hard bound as the logged backstop. The
@@ -62,6 +78,11 @@ export class Channel extends DurableObject {
     const entries = [...(await this.ctx.storage.list<ChannelEntry>({ prefix: "e:" })).values()];
     const cursor = (await this.ctx.storage.get<number>(`cursor:${agentId}`)) ?? 0;
     return transcriptFor(entries, agentId, cursor);
+  }
+
+  /** One stored entry by id; null once pruned (the channel is a window, not an archive). */
+  async entry(id: number): Promise<ChannelEntry | null> {
+    return (await this.ctx.storage.get<ChannelEntry>(`e:${String(id).padStart(10, "0")}`)) ?? null;
   }
 
   async ack(agentId: string, upTo: number): Promise<void> {

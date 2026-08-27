@@ -166,6 +166,22 @@ export function verifyPresleep(
 }
 
 /**
+ * The changed-file set reduced to what the AGENT introduced: files the
+ * chassis itself wrote this wake (inbox mail, the operator-channel
+ * transcript) and that are byte-identical to what it wrote are excluded.
+ * The generic gitleaks layer judges only this reduced set (operon#24:
+ * inbound mail must not be able to cost the agent its persistence), while
+ * the denylist scan stays on the FULL set: a chassis credential must
+ * never persist no matter who wrote the file carrying it.
+ */
+export function excludeChassisWritten(
+  changed: ChangedFile[],
+  chassisWritten: Map<string, string>
+): ChangedFile[] {
+  return changed.filter(file => file.content !== chassisWritten.get(file.path));
+}
+
+/**
  * The submitted content reduced to lines that do NOT already exist in the
  * upstream version of the same file. Used to scope the outbound sweep of
  * an EXISTING upstream file to what the agent actually introduced: a line

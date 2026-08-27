@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { recordMessage } from "@operon/chronicle";
 import { DAILY_SEND_CAP, decideSend, type SendDecision } from "./policy.js";
 
 export type SendReservation =
@@ -48,6 +49,9 @@ function today(nowIso: string): string {
   return nowIso.slice(0, 10);
 }
 
+/** Archived originals kept per agent; the oldest beyond this fall off. */
+export const ARCHIVE_KEEP = 200;
+
 export class Mailbox extends DurableObject {
   /** Store an inbound message and record its sender as a correspondent. */
   async deliver(message: Omit<InboundMessage, "id">): Promise<void> {
@@ -58,6 +62,23 @@ export class Mailbox extends DurableObject {
     if (!correspondents.includes(from)) {
       correspondents.push(from);
       await this.ctx.storage.put("correspondents", correspondents);
+    }
+    // Chronicle mirror: this Mailbox is named after its agent, so the DO
+    // knows both halves of the message row. Best-effort, off the hot path.
+    const chronicle = (this.env as { CHRONICLE?: D1Database }).CHRONICLE;
+    if (chronicle) {
+      this.ctx.waitUntil(
+        recordMessage(chronicle, {
+          at: message.date,
+          kind: "email_in",
+          agentId: this.ctx.id.name ?? "unknown",
+          sender: message.from,
+          subject: message.subject,
+          body: message.text,
+          refId: id,
+          meta: message.attachments?.length ? { attachments: message.attachments } : undefined
+        })
+      );
     }
   }
 
@@ -73,12 +94,44 @@ export class Mailbox extends DurableObject {
     return [...entries.values()];
   }
 
-  /** Delete inbound messages the caller has durably taken. */
+  /**
+   * Archive inbound messages the caller has durably taken. Archived, not
+   * deleted: what lands in the state repo may be REDACTED at delivery
+   * (a credential in a footer, operon#24), so the stored original is the
+   * agent's only way to read a verification link or sign-up URL the
+   * redaction withheld. Bounded: the oldest beyond ARCHIVE_KEEP fall off.
+   */
   async ack(ids: string[]): Promise<void> {
     const wanted = new Set(ids);
     const entries = await this.ctx.storage.list<InboundMessage>({ prefix: "in:" });
-    const keys = [...entries.entries()].filter(([, m]) => wanted.has(m.id)).map(([k]) => k);
-    if (keys.length > 0) await this.ctx.storage.delete(keys);
+    for (const [key, message] of entries) {
+      if (!wanted.has(message.id)) continue;
+      await this.ctx.storage.put(`arch:${key.slice("in:".length)}`, message);
+      await this.ctx.storage.delete(key);
+    }
+    const archived = await this.ctx.storage.list<InboundMessage>({ prefix: "arch:" });
+    const excess = archived.size - ARCHIVE_KEEP;
+    if (excess > 0) {
+      // list() returns keys in ascending order; the date-prefixed keys make
+      // ascending oldest-first.
+      await this.ctx.storage.delete([...archived.keys()].slice(0, excess));
+    }
+  }
+
+  /**
+   * The stored original of one message, pending or archived, by full id
+   * or the 8+ character prefix inbox file names carry. Ambiguity (two
+   * messages sharing the prefix) returns the newest.
+   */
+  async original(idPrefix: string): Promise<InboundMessage | null> {
+    if (idPrefix.length < 8) return null;
+    for (const prefix of ["in:", "arch:"]) {
+      const entries = await this.ctx.storage.list<InboundMessage>({ prefix, reverse: true });
+      for (const message of entries.values()) {
+        if (message.id.startsWith(idPrefix)) return message;
+      }
+    }
+    return null;
   }
 
   async correspondents(): Promise<string[]> {

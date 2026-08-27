@@ -1,4 +1,5 @@
 import { findAgent, parseRoster } from "@operon/core";
+import { recordMessage } from "@operon/chronicle";
 import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import PostalMime from "postal-mime";
 import { Mailbox, type AttachmentMeta } from "./mailbox.js";
@@ -26,6 +27,8 @@ interface Env {
   OPERATOR_API_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** Central audit mirror; optional (a deployment without D1 still works). */
+  CHRONICLE?: D1Database;
   EMAIL: {
     send(message: {
       to: string;
@@ -160,6 +163,19 @@ async function deliver(
   } catch (error) {
     console.error("email ledger append failed", error);
   }
+  // Chronicle mirror with the full body (the ledger row above carries the
+  // envelope only). Best-effort like every mirror write.
+  await recordMessage(env.CHRONICLE, {
+    at: now,
+    kind: "email_out",
+    agentId,
+    sender: identity.address,
+    recipient: msg.to,
+    subject: msg.subject,
+    body: msg.text,
+    refId: result.messageId,
+    meta: { count }
+  });
 
   const copyTo = operatorCopy(env, identity.localPart, zone);
   let copied = true;
@@ -270,6 +286,36 @@ async function handleAck(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, acked: ids.length });
 }
 
+/**
+ * The stored, UNREDACTED original of one inbound message. Delivery may
+ * have redacted a scanner-tripping line (operon#24), but a verification
+ * link or sign-up URL in that line is still the agent's mail to read:
+ * redaction protects the repo, not the agent's access. The value flows
+ * to the wake only; whatever the agent does with it stays subject to the
+ * same sweeps as everything else.
+ */
+async function handleOriginal(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; id?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, id } = body.value;
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  if (typeof id !== "string" || !/^[0-9a-f-]{8,36}$/.test(id)) {
+    return errorResponse(400, "invalid_id", "pass the message id (or its 8+ char prefix from the inbox file name)");
+  }
+  const message = await mailbox(env, agent.id).original(id);
+  if (!message) return errorResponse(404, "message_not_found", id);
+  try {
+    await ledger(env).append("original_read", { agentId: agent.id, id: message.id });
+  } catch (error) {
+    console.error("email ledger append failed", error);
+  }
+  return json({ ok: true, message });
+}
+
 async function handleOutbox(request: Request, env: Env): Promise<Response> {
   const denied = requireBearer(request, env.EMAIL_SERVICE_TOKEN);
   if (denied) return denied;
@@ -314,6 +360,7 @@ export default {
       if (url.pathname === "/gatekeeper/email/send") return handleSend(request, env);
       if (url.pathname === "/gatekeeper/email/pull") return handlePull(request, env);
       if (url.pathname === "/gatekeeper/email/ack") return handleAck(request, env);
+      if (url.pathname === "/gatekeeper/email/original") return handleOriginal(request, env);
       if (url.pathname === "/gatekeeper/email/outbox") return handleOutbox(request, env);
       if (url.pathname === "/gatekeeper/email/approve") return handleApprove(request, env);
       if (url.pathname === "/gatekeeper/email/reject") return handleReject(request, env);

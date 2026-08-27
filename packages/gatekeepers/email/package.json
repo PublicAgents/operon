@@ -17,14 +17,21 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "!**/*.tsbuildinfo"],
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
   "nx": {
     "includedScripts": [],
     "targets": {
       "dev": {
         "command": "wrangler dev",
-        "options": { "cwd": "{projectRoot}" },
-        "dependsOn": ["^build"],
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": [
+          "^build"
+        ],
         "continuous": true
       }
     }
@@ -32,7 +39,8 @@
   "dependencies": {
     "@operon/core": "0.0.0",
     "@operon/worker-kit": "0.0.0",
-    "postal-mime": "^2.4.4"
+    "postal-mime": "^2.4.4",
+    "@operon/chronicle": "0.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260801.1",

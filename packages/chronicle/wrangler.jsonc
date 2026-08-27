@@ -1,0 +1,17 @@
+{
+  // Dev-only config: gives the spec suite (getPlatformProxy) and local
+  // drizzle work a real local D1. The deployed binding lives in the
+  // colony's worker configs.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "operon-chronicle-dev",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "d1_databases": [
+    {
+      "binding": "CHRONICLE",
+      "database_name": "operon-chronicle",
+      "database_id": "operon-chronicle-local",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

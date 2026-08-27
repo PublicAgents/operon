@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linesNotIn, maskSecret, verifyPresleep } from "./presleep.js";
+import { excludeChassisWritten, linesNotIn, maskSecret, verifyPresleep } from "./presleep.js";
 
 describe("verifyPresleep", () => {
   it("passes a wake that journaled and leaked nothing", () => {
@@ -142,5 +142,27 @@ describe("linesNotIn", () => {
 
   it("returns everything for a new file against empty upstream content", () => {
     expect(linesNotIn("x\ny", "")).toBe("x\ny");
+  });
+});
+
+describe("excludeChassisWritten", () => {
+  const written = new Map([["inbox/mail.md", "delivered content"]]);
+
+  it("drops files still byte-identical to what the chassis wrote", () => {
+    const changed = [
+      { path: "inbox/mail.md", content: "delivered content" },
+      { path: "JOURNAL.md", content: "## Wake 12" }
+    ];
+    expect(excludeChassisWritten(changed, written)).toEqual([
+      { path: "JOURNAL.md", content: "## Wake 12" }
+    ]);
+  });
+
+  it("keeps a chassis file the mind modified, and unscannable files", () => {
+    const changed = [
+      { path: "inbox/mail.md", content: "delivered content, annotated" },
+      { path: "inbox/big.md", content: null }
+    ];
+    expect(excludeChassisWritten(changed, written)).toEqual(changed);
   });
 });
