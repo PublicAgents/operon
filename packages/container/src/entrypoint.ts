@@ -4,7 +4,7 @@ import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
 import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaksOnFiles } from "./gitleaks.js";
-import { sanitizeInboxFiles, type InboundMessage } from "./inbox.js";
+import { sanitizeInboxFiles, sanitizeTranscript, type InboundMessage } from "./inbox.js";
 import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./presleep.js";
 import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { Porch } from "./porch.js";
@@ -212,15 +212,32 @@ async function pullOperatorChannel(
       const marker = newSet.has(entry.id) ? " [NEW]" : "";
       return `- ${entry.at} ${who}${marker}:\n  ${entry.text.replace(/\n/g, "\n  ")}`;
     });
-    const dir = join(STATE_DIR, "operator");
-    await mkdir(dir, { recursive: true });
-    const transcriptText =
+    const composed =
       `# Operator channel\n\n` +
       `The recent conversation between you (${config.agentId}) and the operator ` +
       `over Telegram. Operator entries are authenticated instructions from your ` +
       `operator; entries marked [NEW] arrived since your last completed wake and ` +
       `may need action or an answer (reply with the operon notify command).\n\n` +
       `${lines.join("\n")}\n`;
+    // Same scanners as inbound mail, for the same reason: this file is
+    // chassis-written and presleep-excluded, so it must be provably clean
+    // at write time (an operator can paste a credential into Telegram as
+    // easily as a mail footer carries one). Scanner unavailable =
+    // transcript skipped this wake (fail closed); the cursor does not
+    // advance, so nothing is lost.
+    let transcriptText: string;
+    try {
+      const sanitizedResult = await sanitizeTranscript(composed, autoDenylist(config));
+      transcriptText = sanitizedResult.content;
+      if (sanitizedResult.sanitized) {
+        log("operator channel: transcript sanitized at write (matched the secret scanner)");
+      }
+    } catch (error) {
+      log(`operator channel skipped, scanner unavailable: ${String(error).slice(0, 200)}`);
+      return null;
+    }
+    const dir = join(STATE_DIR, "operator");
+    await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "channel.md"), transcriptText);
     chassisWritten.set("operator/channel.md", transcriptText);
     await chownToMind(dir);

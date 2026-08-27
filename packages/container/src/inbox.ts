@@ -156,6 +156,40 @@ async function scanBatch(
 }
 
 /**
+ * Sanitize the operator-channel transcript with the same scanners as
+ * inbound mail: it is chassis-written and presleep-excluded exactly like
+ * inbox files, so it must be provably clean at write time too (an
+ * operator can paste a credential into Telegram as easily as a mail
+ * footer can carry one). Escalation is line -> everything; the full
+ * conversation always remains in Telegram itself. Throws only if
+ * gitleaks cannot run (the caller then skips writing the transcript).
+ */
+export async function sanitizeTranscript(
+  content: string,
+  denylist: string[],
+  gitleaksOptions?: GitleaksOptions
+): Promise<{ content: string; sanitized: boolean }> {
+  const NAME = "channel.md";
+  const marker = "[line withheld: matched the secret scanner; the full conversation remains in Telegram]";
+  const stub =
+    "# Operator channel\n\n[transcript withheld: it matched the secret scanner even after " +
+    "line-level redaction. The full conversation remains in Telegram.]\n";
+  let current = content;
+  for (let round = 0; ; round++) {
+    const findings = await scanBatch([{ name: NAME, content: current }], denylist, gitleaksOptions);
+    const found = findings.perFile.get(NAME);
+    if (!found && !findings.corpus) return { content: current, sanitized: current !== content };
+    if (round >= 1 || !found || found.beyondLines || found.lines.size === 0) {
+      return { content: stub, sanitized: true };
+    }
+    current = current
+      .split("\n")
+      .map((line, index) => (found.lines.has(index + 1) ? marker : line))
+      .join("\n");
+  }
+}
+
+/**
  * Sanitize a batch of composed inbox files until every one provably scans
  * clean. Returns the files to write plus which were touched. Throws only
  * if gitleaks itself cannot run (the caller then withholds delivery this

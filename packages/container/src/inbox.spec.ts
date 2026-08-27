@@ -9,6 +9,7 @@ import {
   originalHint,
   redactLines,
   sanitizeInboxFiles,
+  sanitizeTranscript,
   type InboundMessage
 } from "./inbox.js";
 
@@ -118,5 +119,38 @@ describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)"
     });
     const { files } = await sanitizeInboxFiles([m], [literal], gitleaks);
     expect(files[0].content).toBe(fullStub(originalHint(m.id)));
+  });
+});
+
+describe.skipIf(!hasGitleaks)("sanitizeTranscript (integration, local gitleaks)", () => {
+  const gitleaks = { configPath: CONFIG };
+
+  it("passes a clean transcript through byte-identical", async () => {
+    const transcript = "# Operator channel\n\n- 2026-08-27 OPERATOR:\n  please check the deploy\n";
+    expect(await sanitizeTranscript(transcript, ["some-denylisted"], gitleaks)).toEqual({
+      content: transcript,
+      sanitized: false
+    });
+  });
+
+  it("withholds only the line an operator-pasted credential sits on", async () => {
+    const transcript =
+      "# Operator channel\n\n- 2026-08-27 OPERATOR:\n" +
+      `  use token ${FAKE_PAT} for the thing\n` +
+      "- 2026-08-27 promoter:\n  will do\n";
+    const result = await sanitizeTranscript(transcript, [], gitleaks);
+    expect(result.sanitized).toBe(true);
+    expect(result.content).not.toContain(FAKE_PAT);
+    expect(result.content).toContain("will do");
+    expect(result.content).toContain("[line withheld");
+  });
+
+  it("falls to the stub when redaction cannot make it clean", async () => {
+    const literal = "super-secret-literal";
+    const encoded = Buffer.from(literal, "utf8").toString("base64");
+    const result = await sanitizeTranscript(`- entry\n${encoded}\n`, [literal], gitleaks);
+    expect(result.sanitized).toBe(true);
+    expect(result.content).toContain("[transcript withheld");
+    expect(result.content).not.toContain(encoded);
   });
 });
