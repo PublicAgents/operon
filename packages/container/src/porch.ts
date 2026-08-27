@@ -143,6 +143,17 @@ export class Porch {
   private async route(request: IncomingMessage): Promise<JsonResult> {
     const url = new URL(request.url ?? "/", "http://porch");
     try {
+      // The browser boundary: a custom header makes every cross-origin
+      // request non-simple, so page JS in any browser the mind runs must
+      // preflight, and the porch never approves a preflight. Door calls
+      // therefore come only from real HTTP clients (the operon CLI), not
+      // from a webpage CSRF-ing the loopback.
+      if (request.method === "OPTIONS") {
+        return fail(403, "no_preflight", "the porch never approves cross-origin callers");
+      }
+      if (request.headers["x-operon-porch"] !== "1") {
+        return fail(403, "porch_header_missing", "send x-operon-porch: 1 (the operon CLI does)");
+      }
       if (request.method === "GET" && url.pathname === "/capabilities") {
         return ok(capabilities(this.context.config));
       }
