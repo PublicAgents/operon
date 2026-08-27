@@ -341,17 +341,33 @@ export default {
       mimeType: a.mimeType ?? "application/octet-stream",
       size: typeof a.content === "string" ? a.content.length : (a.content?.byteLength ?? 0)
     }));
+    const from = parsed.from?.address ?? message.from;
+    const subject = parsed.subject ?? "(no subject)";
+    const text = (parsed.text ?? "").slice(0, 100_000);
     await mailbox(env, identity.agentId).deliver({
-      from: parsed.from?.address ?? message.from,
-      subject: parsed.subject ?? "(no subject)",
+      from,
+      subject,
       date: parsed.date ?? new Date().toISOString(),
-      text: (parsed.text ?? "").slice(0, 100_000),
+      text,
       messageId: parsed.messageId,
       attachments: attachments.length ? attachments : undefined
     });
     // Full copy (attachments and all) to the operator's catch-all box.
     const copyTo = operatorCopy(env, identity.localPart, roster.zone);
     ctx.waitUntil(message.forward(copyTo).catch(err => console.error("forward failed", err)));
+    // Telegram is the oversight channel the colony controls end to end:
+    // the email forward above rides third-party deliverability (strict-
+    // DMARC senders routinely get spam-foldered after forwarding), so
+    // the operator hears about every inbound mail here too. Content is
+    // untrusted display text, exactly like a held-send notification.
+    ctx.waitUntil(
+      notifyOperator(
+        env,
+        `[${identity.agentId}] inbound email from ${from.slice(0, 200)}: "${subject.slice(0, 200)}"\n\n` +
+          `${text.slice(0, 800)}${text.length > 800 ? "…" : ""}\n\n` +
+          `(full copy: the chronicle, the agent's next wake, and your mailbox forward)`
+      )
+    );
   },
 
   async fetch(request, env) {
