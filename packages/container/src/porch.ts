@@ -170,6 +170,12 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/x/post") return await this.xPost(body);
       if (request.method === "POST" && url.pathname === "/x/posts") return await this.xCall("posts", {});
       if (request.method === "POST" && url.pathname === "/x/dm") return await this.xDm(body);
+      if (request.method === "POST" && url.pathname === "/x/profile") return await this.xProfile(body);
+      if (request.method === "POST" && url.pathname === "/x/avatar") return await this.xImage(body, "avatar");
+      if (request.method === "POST" && url.pathname === "/x/banner") return await this.xImage(body, "banner");
+      if (request.method === "POST" && url.pathname === "/x/follow") return await this.xFollow(body, "follow");
+      if (request.method === "POST" && url.pathname === "/x/unfollow") return await this.xFollow(body, "unfollow");
+      if (request.method === "POST" && url.pathname === "/x/read") return await this.xRead(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -686,14 +692,76 @@ export class Porch {
     return this.xCall("dm", { to, text });
   }
 
+  /** Profile fields are outbound text; swept like the rest. */
+  private async xProfile(body: Record<string, unknown>): Promise<JsonResult> {
+    const fields: Record<string, unknown> = {};
+    for (const key of ["bio", "url", "location"]) {
+      if (body[key] !== undefined) {
+        if (typeof body[key] !== "string") return fail(400, `invalid_${key}`);
+        fields[key] = body[key];
+      }
+    }
+    if (Object.keys(fields).length === 0) return fail(400, "empty_profile_update");
+    const blocked = this.sweepFields(fields);
+    if (blocked) return blocked;
+    this.context.log(`x: profile update (${Object.keys(fields).join(", ")})`);
+    return this.xCall("profile", fields);
+  }
+
+  /** Avatar/banner from a state-repo image file, validated before it leaves. */
+  private async xImage(body: Record<string, unknown>, kind: "avatar" | "banner"): Promise<JsonResult> {
+    const { file } = body;
+    if (typeof file !== "string" || file.includes("..") || file.startsWith("/")) {
+      return fail(400, "invalid_file");
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(join(this.context.stateDir, file));
+    } catch {
+      return fail(404, "file_not_found", file);
+    }
+    const maxBytes = kind === "avatar" ? 2 * 1024 * 1024 : 5 * 1024 * 1024;
+    const isPng = bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50;
+    const isJpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8;
+    if (!isPng && !isJpeg) return fail(422, "not_png_or_jpeg");
+    if (bytes.length > maxBytes) return fail(413, "image_too_large", `${bytes.length} bytes`);
+    this.context.log(`x: ${kind} update (${Math.round(bytes.length / 1024)}KB from ${file})`);
+    return this.xCall(kind, { imageBase64: bytes.toString("base64") });
+  }
+
+  private async xFollow(body: Record<string, unknown>, verb: "follow" | "unfollow"): Promise<JsonResult> {
+    const { handle } = body;
+    if (typeof handle !== "string" || handle.length === 0) return fail(400, "missing_handle");
+    const blocked = this.sweepFields({ handle });
+    if (blocked) return blocked;
+    this.context.log(`x: ${verb} ${handle}`);
+    return this.xCall(verb, { handle });
+  }
+
+  /** Reads: the path and params are outbound (a query could smuggle); swept. */
+  private async xRead(body: Record<string, unknown>): Promise<JsonResult> {
+    const { path, params } = body;
+    if (typeof path !== "string") return fail(400, "missing_path");
+    const sweepable: Record<string, unknown> = { path };
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
+        if (typeof value === "string") sweepable[`param_${key}`] = value;
+      }
+    }
+    const blocked = this.sweepFields(sweepable);
+    if (blocked) return blocked;
+    return this.xCall("read", { path, ...(params !== undefined ? { params } : {}) });
+  }
+
   /** Post to the agent's own X account: outbound text, swept like all of it. */
   private async xPost(body: Record<string, unknown>): Promise<JsonResult> {
-    const { text } = body;
+    const { text, replyTo } = body;
     if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+    if (replyTo !== undefined && typeof replyTo !== "string") return fail(400, "invalid_reply_to");
     const blocked = this.sweepFields({ text });
     if (blocked) return blocked;
-    this.context.log(`x: posting (${text.length} chars)`);
-    return this.xCall("post", { text });
+    this.context.log(`x: posting (${text.length} chars${replyTo ? `, replying to ${replyTo}` : ""})`);
+    return this.xCall("post", { text, ...(replyTo ? { replyTo } : {}) });
   }
 
   /** POST a payload to the vault Gatekeeper with this agent's OWN bearer. */

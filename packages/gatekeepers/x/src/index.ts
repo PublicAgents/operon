@@ -8,6 +8,16 @@ import {
   dmContentProblem,
   effectiveDailyCap,
   effectiveDmDailyCap,
+  effectiveFollowDailyCap,
+  effectiveProfileDailyCap,
+  imageProblem,
+  MAX_AVATAR_BYTES,
+  MAX_BANNER_BYTES,
+  normalizeHandle,
+  profileProblem,
+  boundReadParams,
+  effectiveReadDailyCap,
+  validateReadPath,
   xAccessSecretVar,
   xAccessTokenVar,
   xTokenVar
@@ -42,6 +52,11 @@ interface Env {
   X_DISCLOSURE_ATTESTED?: string;
   X_DAILY_CAP?: string;
   X_DM_DAILY_CAP?: string;
+  X_PROFILE_DAILY_CAP?: string;
+  X_FOLLOW_DAILY_CAP?: string;
+  X_READ_DAILY_CAP?: string;
+  /** The disclosure marker every bio must keep (case-insensitive). */
+  X_BIO_DISCLOSURE?: string;
   /** Central audit mirror; optional. */
   CHRONICLE?: D1Database;
   NOTIFY_URL?: string;
@@ -84,6 +99,56 @@ function credentialsFor(env: Env, agent: RosterAgent): XCredentials | null {
     accessToken,
     accessSecret
   };
+}
+
+/** Form-encoded v1.1 call: the form params join the OAuth signature. */
+async function xApiForm(
+  credentials: XCredentials,
+  url: string,
+  params: Record<string, string>
+): Promise<Response> {
+  const authorization = await authorizationHeader(
+    {
+      method: "POST",
+      url,
+      nonce: crypto.randomUUID().replace(/-/g, ""),
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      extraParams: params
+    },
+    credentials
+  );
+  return fetch(url, {
+    method: "POST",
+    headers: { authorization, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(20_000)
+  });
+}
+
+/** Multipart v1.1 call (profile media): body params stay OUT of the signature. */
+async function xApiMultipart(
+  credentials: XCredentials,
+  url: string,
+  field: string,
+  base64: string
+): Promise<Response> {
+  const authorization = await authorizationHeader(
+    {
+      method: "POST",
+      url,
+      nonce: crypto.randomUUID().replace(/-/g, ""),
+      timestamp: String(Math.floor(Date.now() / 1000))
+    },
+    credentials
+  );
+  const form = new FormData();
+  form.set(field, base64);
+  return fetch(url, {
+    method: "POST",
+    headers: { authorization },
+    body: form,
+    signal: AbortSignal.timeout(30_000)
+  });
 }
 
 /** One OAuth1-signed call to the X API (query params join the signature). */
@@ -170,9 +235,12 @@ async function handlePost(request: Request, env: Env, agent: RosterAgent): Promi
     );
   }
 
-  const body = await readJson<{ text?: unknown }>(request);
+  const body = await readJson<{ text?: unknown; replyTo?: unknown }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
-  const { text } = body.value;
+  const { text, replyTo } = body.value;
+  if (replyTo !== undefined && (typeof replyTo !== "string" || !/^\d+$/.test(replyTo))) {
+    return errorResponse(400, "invalid_reply_to");
+  }
   const problem = contentProblem(text);
   if (problem) {
     await record(env, "post_refused", { agentId: agent.id, reason: problem });
@@ -196,7 +264,11 @@ async function handlePost(request: Request, env: Env, agent: RosterAgent): Promi
 
   let response: Response;
   try {
-    response = await xApi(credentials, "POST", POST_ENDPOINT, undefined, { text: post });
+    response = await xApi(credentials, "POST", POST_ENDPOINT, undefined, {
+      text: post,
+      // Replying to a mention is solicited engagement; same caps apply.
+      ...(typeof replyTo === "string" ? { reply: { in_reply_to_tweet_id: replyTo } } : {})
+    });
   } catch (error) {
     await poster(env, agent.id).release(now, reservation.prevLastPostAt);
     await record(env, "post_failed", { agentId: agent.id, detail: String(error).slice(0, 200) });
@@ -399,6 +471,245 @@ async function handleDmPull(env: Env, agent: RosterAgent, ctx: ExecutionContext)
   return json({ ok: true, messages, upTo: messages.length ? maxId.toString() : null });
 }
 
+/**
+ * Profile self-expression with the disclosure self-maintaining: a bio
+ * missing the operator-configured marker is refused, so the account
+ * attestation cannot be invalidated by the agent's own edits.
+ */
+async function handleProfile(request: Request, env: Env, agent: RosterAgent): Promise<Response> {
+  if (env.X_DISCLOSURE_ATTESTED !== "true") return errorResponse(503, "x_disclosure_unattested");
+  const body = await readJson<{ bio?: unknown; url?: unknown; location?: unknown }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const disclosure = env.X_BIO_DISCLOSURE ?? "AI agent";
+  const problem = profileProblem(body.value, disclosure);
+  if (problem) {
+    await record(env, "profile_refused", { agentId: agent.id, reason: problem });
+    return errorResponse(
+      422,
+      `x_${problem}`,
+      problem === "bio_missing_disclosure" ? `the bio must keep "${disclosure}"` : undefined
+    );
+  }
+  const credentials = credentialsFor(env, agent);
+  if (!credentials) return errorResponse(503, "x_unconfigured");
+
+  const now = new Date().toISOString();
+  const box = poster(env, agent.id);
+  const reservation = await box.reserveProfileUpdate(
+    now,
+    effectiveProfileDailyCap(env.X_PROFILE_DAILY_CAP)
+  );
+  if (!reservation.ok) {
+    await record(env, "profile_refused", { agentId: agent.id, reason: "over_daily_cap" });
+    return errorResponse(429, "x_profile_over_daily_cap");
+  }
+
+  const params: Record<string, string> = {};
+  if (typeof body.value.bio === "string") params.description = body.value.bio;
+  if (typeof body.value.url === "string") params.url = body.value.url;
+  if (typeof body.value.location === "string") params.location = body.value.location;
+  let response: Response;
+  try {
+    response = await xApiForm(credentials, "https://api.x.com/1.1/account/update_profile.json", params);
+  } catch (error) {
+    await box.releaseProfileUpdate(now);
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    await box.releaseProfileUpdate(now);
+    await record(env, "profile_failed", { agentId: agent.id, status: response.status, detail });
+    return errorResponse(502, "x_rejected", `${response.status}: ${detail}`);
+  }
+  await record(env, "profile_updated", { agentId: agent.id, fields: Object.keys(params), ...params });
+  await notifyOperator(env, `[${agent.id}] updated its X profile (${Object.keys(params).join(", ")})` +
+    (params.description ? `\n\nbio: ${params.description}` : ""));
+  return json({ ok: true, updated: Object.keys(params) });
+}
+
+/** Avatar and banner: PNG/JPEG by magic bytes, X's byte budgets, same cap pool. */
+async function handleProfileImage(
+  request: Request,
+  env: Env,
+  agent: RosterAgent,
+  kind: "avatar" | "banner"
+): Promise<Response> {
+  if (env.X_DISCLOSURE_ATTESTED !== "true") return errorResponse(503, "x_disclosure_unattested");
+  const body = await readJson<{ imageBase64?: unknown }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  if (typeof body.value.imageBase64 !== "string") return errorResponse(400, "missing_image");
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(body.value.imageBase64), char => char.charCodeAt(0));
+  } catch {
+    return errorResponse(400, "invalid_base64");
+  }
+  const maxBytes = kind === "avatar" ? MAX_AVATAR_BYTES : MAX_BANNER_BYTES;
+  const problem = imageProblem(bytes, maxBytes);
+  if (problem) {
+    await record(env, "profile_refused", { agentId: agent.id, reason: problem, kind });
+    return errorResponse(422, `x_${problem}`);
+  }
+  const credentials = credentialsFor(env, agent);
+  if (!credentials) return errorResponse(503, "x_unconfigured");
+
+  const now = new Date().toISOString();
+  const box = poster(env, agent.id);
+  const reservation = await box.reserveProfileUpdate(
+    now,
+    effectiveProfileDailyCap(env.X_PROFILE_DAILY_CAP)
+  );
+  if (!reservation.ok) return errorResponse(429, "x_profile_over_daily_cap");
+
+  const endpoint =
+    kind === "avatar"
+      ? "https://api.x.com/1.1/account/update_profile_image.json"
+      : "https://api.x.com/1.1/account/update_profile_banner.json";
+  const field = kind === "avatar" ? "image" : "banner";
+  let response: Response;
+  try {
+    response = await xApiMultipart(credentials, endpoint, field, body.value.imageBase64);
+  } catch (error) {
+    await box.releaseProfileUpdate(now);
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 300);
+    await box.releaseProfileUpdate(now);
+    await record(env, "profile_failed", { agentId: agent.id, status: response.status, detail, kind });
+    return errorResponse(502, "x_rejected", `${response.status}: ${detail}`);
+  }
+  await record(env, "profile_updated", { agentId: agent.id, kind, bytes: bytes.length });
+  await notifyOperator(env, `[${agent.id}] updated its X ${kind} (${Math.round(bytes.length / 1024)}KB)`);
+  return json({ ok: true, kind });
+}
+
+/**
+ * Follow/unfollow, small shared cap (aggressive following is X's classic
+ * automation-suspension vector; churn spends the same budget). The
+ * handle lookup here is a public read: following people the agent
+ * discovers publicly is the point, unlike DMs.
+ */
+async function handleFollow(
+  request: Request,
+  env: Env,
+  agent: RosterAgent,
+  follow: boolean
+): Promise<Response> {
+  if (env.X_DISCLOSURE_ATTESTED !== "true") return errorResponse(503, "x_disclosure_unattested");
+  const body = await readJson<{ handle?: unknown }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const handle = normalizeHandle(body.value.handle);
+  if (!handle) return errorResponse(400, "invalid_handle");
+  const credentials = credentialsFor(env, agent);
+  if (!credentials) return errorResponse(503, "x_unconfigured");
+  const box = poster(env, agent.id);
+
+  let selfId = await box.selfId();
+  if (!selfId) {
+    const me = await xApi(credentials, "GET", ME_ENDPOINT);
+    if (!me.ok) return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
+    const parsed = (await me.json()) as { data?: { id?: string } };
+    if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+    selfId = parsed.data.id;
+    await box.setSelfId(selfId);
+  }
+
+  const now = new Date().toISOString();
+  const reservation = await box.reserveFollow(now, effectiveFollowDailyCap(env.X_FOLLOW_DAILY_CAP));
+  if (!reservation.ok) {
+    await record(env, "follow_refused", { agentId: agent.id, reason: "over_daily_cap" });
+    return errorResponse(429, "x_follow_over_daily_cap");
+  }
+
+  try {
+    const lookup = await xApi(credentials, "GET", `https://api.x.com/2/users/by/username/${handle}`);
+    if (!lookup.ok) {
+      await box.releaseFollow(now);
+      return errorResponse(502, "x_rejected", `user lookup answered ${lookup.status}`);
+    }
+    const target = ((await lookup.json()) as { data?: { id?: string } }).data?.id;
+    if (!target) {
+      await box.releaseFollow(now);
+      return errorResponse(404, "x_user_not_found", `@${handle}`);
+    }
+    const response = follow
+      ? await xApi(credentials, "POST", `https://api.x.com/2/users/${selfId}/following`, undefined, {
+          target_user_id: target
+        })
+      : await xApi(credentials, "DELETE" as "POST", `https://api.x.com/2/users/${selfId}/following/${target}`);
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 300);
+      await box.releaseFollow(now);
+      await record(env, "follow_failed", { agentId: agent.id, handle, status: response.status, detail });
+      return errorResponse(502, "x_rejected", `${response.status}: ${detail}`);
+    }
+  } catch (error) {
+    await box.releaseFollow(now);
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
+  const verb = follow ? "followed" : "unfollowed";
+  await record(env, verb, { agentId: agent.id, handle: `@${handle}` });
+  await notifyOperator(env, `[${agent.id}] ${verb} @${handle} on X`);
+  return json({ ok: true, [verb]: `@${handle}` });
+}
+
+/**
+ * The read door: an allowlisted GET passthrough. Reads are data
+ * acquisition (the mind fetches public pages freely already); the
+ * Gatekeeper's only jobs here are holding the credential, bounding the
+ * spend (reads bill per use), and ledgering what was asked. The
+ * RESPONSE is untrusted data to the mind, like everything it reads.
+ */
+async function handleRead(request: Request, env: Env, agent: RosterAgent): Promise<Response> {
+  const body = await readJson<{ path?: unknown; params?: unknown }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const path = validateReadPath(body.value.path);
+  if (!path) return errorResponse(403, "x_path_not_allowlisted");
+  const params = boundReadParams(body.value.params);
+  if (params === null) return errorResponse(400, "invalid_params");
+  const credentials = credentialsFor(env, agent);
+  if (!credentials) return errorResponse(503, "x_unconfigured");
+  const box = poster(env, agent.id);
+
+  let resolved = path;
+  if (path.includes(":self")) {
+    let selfId = await box.selfId();
+    if (!selfId) {
+      const me = await xApi(credentials, "GET", ME_ENDPOINT);
+      if (!me.ok) return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
+      const parsed = (await me.json()) as { data?: { id?: string } };
+      if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+      selfId = parsed.data.id;
+      await box.setSelfId(selfId);
+    }
+    resolved = path.replace(":self", selfId);
+  }
+
+  const now = new Date().toISOString();
+  const reservation = await box.reserveRead(now, effectiveReadDailyCap(env.X_READ_DAILY_CAP));
+  if (!reservation.ok) {
+    await record(env, "read_refused", { agentId: agent.id, path, reason: "over_daily_cap" });
+    return errorResponse(429, "x_read_over_daily_cap");
+  }
+
+  let response: Response;
+  try {
+    response = await xApi(
+      credentials,
+      "GET",
+      `https://api.x.com${resolved}`,
+      Object.keys(params).length ? params : undefined
+    );
+  } catch (error) {
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
+  const text = (await response.text()).slice(0, 200_000);
+  await record(env, "read", { agentId: agent.id, path, params, status: response.status });
+  if (!response.ok) return errorResponse(502, "x_rejected", `${response.status}: ${text.slice(0, 300)}`);
+  return new Response(text, { status: 200, headers: { "content-type": "application/json" } });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -415,6 +726,12 @@ export default {
       return json({ ok: true, posts: await poster(env, agent.id).posts() });
     }
     if (url.pathname === "/gatekeeper/x/dm") return handleDm(request, env, agent);
+    if (url.pathname === "/gatekeeper/x/profile") return handleProfile(request, env, agent);
+    if (url.pathname === "/gatekeeper/x/avatar") return handleProfileImage(request, env, agent, "avatar");
+    if (url.pathname === "/gatekeeper/x/banner") return handleProfileImage(request, env, agent, "banner");
+    if (url.pathname === "/gatekeeper/x/read") return handleRead(request, env, agent);
+    if (url.pathname === "/gatekeeper/x/follow") return handleFollow(request, env, agent, true);
+    if (url.pathname === "/gatekeeper/x/unfollow") return handleFollow(request, env, agent, false);
     if (url.pathname === "/gatekeeper/x/dm/pull") return handleDmPull(env, agent, ctx);
     if (url.pathname === "/gatekeeper/x/dm/ack") {
       const body = await readJson<{ upTo?: unknown }>(request);

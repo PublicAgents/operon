@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { percentEncode, sign, signatureBaseString } from "./oauth1.js";
-import { contentProblem, decidePost, dmContentProblem, dupKey, effectiveDailyCap, effectiveDmDailyCap, MIN_SPACING_MS, xTokenVar } from "./policy.js";
+import { boundReadParams, contentProblem, decidePost, dmContentProblem, dupKey, effectiveDailyCap, effectiveDmDailyCap, imageProblem, MIN_SPACING_MS, normalizeHandle, profileProblem, validateReadPath, xTokenVar } from "./policy.js";
 
 /**
  * The signing implementation is verified against X's OWN documented
@@ -79,6 +79,47 @@ describe("x policy", () => {
     expect(dmContentProblem("thanks! here is the link")).toBeNull();
     expect(dmContentProblem("")).toBe("empty");
     expect(dmContentProblem("x".repeat(9501))).toBe("too_long");
+  });
+
+  it("keeps the bio disclosure structural and bounds profile fields", () => {
+    const D = "AI agent";
+    expect(profileProblem({ bio: "An autonomous AI agent promoting LiveVariant." }, D)).toBeNull();
+    expect(profileProblem({ bio: "just a guy" }, D)).toBe("bio_missing_disclosure");
+    expect(profileProblem({ bio: "x".repeat(161) }, D)).toBe("bio_too_long");
+    expect(profileProblem({}, D)).toBe("empty");
+    expect(profileProblem({ url: "https://prior.livevariant.ai" }, D)).toBeNull();
+  });
+
+  it("judges images by magic bytes and budget", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0, 0]);
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+    expect(imageProblem(png, 1024)).toBeNull();
+    expect(imageProblem(jpeg, 1024)).toBeNull();
+    expect(imageProblem(new TextEncoder().encode("<svg xmlns='x'>"), 1024)).toBe("not_png_or_jpeg");
+    const bigPng = new Uint8Array(2000);
+    bigPng.set([0x89, 0x50, 0x4e, 0x47]);
+    expect(imageProblem(bigPng, 100)).toBe("too_large");
+  });
+
+  it("normalizes handles and allowlists read paths", () => {
+    expect(normalizeHandle("@Some_One1")).toBe("some_one1");
+    expect(normalizeHandle("not a handle")).toBeNull();
+    expect(validateReadPath("/2/tweets/search/recent")).toBe("/2/tweets/search/recent");
+    expect(validateReadPath("2/users/me")).toBe("/2/users/me");
+    expect(validateReadPath("/2/users/:self/mentions")).toBe("/2/users/:self/mentions");
+    expect(validateReadPath("/2/tweets/search/all")).toBeNull();
+    expect(validateReadPath("/2/users/me?x=1")).toBeNull();
+    expect(validateReadPath("/1.1/account/update_profile.json")).toBeNull();
+  });
+
+  it("bounds read params and clamps max_results", () => {
+    expect(boundReadParams({ query: "hello", max_results: "500" })).toEqual({
+      query: "hello",
+      max_results: "100"
+    });
+    expect(boundReadParams(undefined)).toEqual({});
+    expect(boundReadParams({ ["x".repeat(50)]: "v" })).toBeNull();
+    expect(boundReadParams({ q: "x".repeat(600) })).toBeNull();
   });
 
   it("enforces cap, spacing, and duplicates atomically comparable", () => {

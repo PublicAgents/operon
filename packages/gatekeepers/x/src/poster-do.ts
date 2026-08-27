@@ -160,6 +160,52 @@ export class PosterBox extends DurableObject {
     await this.ctx.storage.put("selfId", id);
   }
 
+  /** Atomic daily cap over ALL profile changes (bio, avatar, banner). */
+  async reserveProfileUpdate(nowIso: string, dailyCap: number): Promise<{ ok: boolean }> {
+    const day = nowIso.slice(0, 10);
+    const window = await this.ctx.storage.get<DayWindow>("profileWindow");
+    const today = window && window.day === day ? window.count : 0;
+    if (today >= dailyCap) return { ok: false };
+    await this.ctx.storage.put("profileWindow", { day, count: today + 1 });
+    return { ok: true };
+  }
+
+  async releaseProfileUpdate(nowIso: string): Promise<void> {
+    const day = nowIso.slice(0, 10);
+    const window = await this.ctx.storage.get<DayWindow>("profileWindow");
+    if (window && window.day === day && window.count > 0) {
+      await this.ctx.storage.put("profileWindow", { day, count: window.count - 1 });
+    }
+  }
+
+  /** Atomic daily cap shared by follow AND unfollow (churn is spend). */
+  async reserveFollow(nowIso: string, dailyCap: number): Promise<{ ok: boolean }> {
+    const day = nowIso.slice(0, 10);
+    const window = await this.ctx.storage.get<DayWindow>("followWindow");
+    const today = window && window.day === day ? window.count : 0;
+    if (today >= dailyCap) return { ok: false };
+    await this.ctx.storage.put("followWindow", { day, count: today + 1 });
+    return { ok: true };
+  }
+
+  async releaseFollow(nowIso: string): Promise<void> {
+    const day = nowIso.slice(0, 10);
+    const window = await this.ctx.storage.get<DayWindow>("followWindow");
+    if (window && window.day === day && window.count > 0) {
+      await this.ctx.storage.put("followWindow", { day, count: window.count - 1 });
+    }
+  }
+
+  /** Atomic daily read budget (reads bill per use; no rollback needed). */
+  async reserveRead(nowIso: string, dailyCap: number): Promise<{ ok: boolean }> {
+    const day = nowIso.slice(0, 10);
+    const window = await this.ctx.storage.get<DayWindow>("readWindow");
+    const today = window && window.day === day ? window.count : 0;
+    if (today >= dailyCap) return { ok: false };
+    await this.ctx.storage.put("readWindow", { day, count: today + 1 });
+    return { ok: true };
+  }
+
   /** The agent's own recent posts, newest first (cross-wake memory). */
   async posts(limit = 20): Promise<PostRecord[]> {
     const entries = await this.ctx.storage.list<PostRecord>({

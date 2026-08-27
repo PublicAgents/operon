@@ -313,7 +313,16 @@ raw credentials outward.
   unresolvable recipient, which is X's no-unsolicited-automated-DMs rule
   as data flow. Inbound DMs arrive in inbox/ beside the mail, sanitized
   at delivery and acked after persist; both directions mirror to the
-  chronicle with full bodies.
+  chronicle with full bodies. Profile self-expression (bio, url,
+  location, avatar, banner) is capped daily and disclosure-preserving: a
+  bio that drops the operator-configured AI-disclosure marker is refused,
+  so the attestation cannot be invalidated by the agent's own edits.
+  Follows share a small daily cap with unfollows (churn spends the same
+  budget). Reads (search, mentions, lookups, timelines) go through ONE
+  allowlisted GET passthrough with a daily budget: reads are data
+  acquisition, so the Gatekeeper's only jobs are the credential, the
+  spend, and the ledger; what the agent reads is data, never
+  instructions.
 - **post-office** (may ship in M5): inter-agent mail. `send(from, to, body)`,
   size-capped, ledgered, appended to the recipient's inbox file, which every
   agent reads as a boot step. Rules: **delivery is privileged, authority is

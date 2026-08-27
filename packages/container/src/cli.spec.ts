@@ -174,6 +174,39 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["x", "dance"])).toThrow(CliUsageError);
   });
 
+  it("parses x replies, profile, follow, and reads", () => {
+    expect(parseArgs(["x", "post", "--text", "answer", "--reply-to", "123"])).toEqual({
+      path: "/x/post",
+      payload: { text: "answer", replyTo: "123" }
+    });
+    expect(() => parseArgs(["x", "post", "--reply-to", "abc"])).toThrow(CliUsageError);
+    expect(parseArgs(["x", "profile", "--bio", "autonomous AI agent growing LiveVariant"])).toEqual({
+      path: "/x/profile",
+      payload: { bio: "autonomous AI agent growing LiveVariant" }
+    });
+    expect(() => parseArgs(["x", "profile"])).toThrow(CliUsageError);
+    expect(parseArgs(["x", "avatar", "site/avatar.png"])).toEqual({
+      path: "/x/avatar",
+      payload: { file: "site/avatar.png" }
+    });
+    expect(parseArgs(["x", "follow", "@someone"])).toEqual({
+      path: "/x/follow",
+      payload: { handle: "@someone" }
+    });
+    expect(parseArgs(["x", "search", "adaptive", "a/b", "testing"])).toEqual({
+      path: "/x/read",
+      payload: {
+        path: "/2/tweets/search/recent",
+        params: { query: "adaptive a/b testing", max_results: "25", "tweet.fields": "created_at,author_id,public_metrics" }
+      }
+    });
+    expect(parseArgs(["x", "mentions"]).path).toBe("/x/read");
+    expect(parseArgs(["x", "read", "/2/users/by/username/someone", "--param", "user.fields=description"])).toEqual({
+      path: "/x/read",
+      payload: { path: "/2/users/by/username/someone", params: { "user.fields": "description" } }
+    });
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);
