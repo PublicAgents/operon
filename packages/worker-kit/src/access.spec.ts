@@ -82,6 +82,14 @@ describe("verifyAccessJwt", () => {
     expect(result).toEqual({ ok: false, reason: "bad_signature" });
   });
 
+  it("returns 401 (not a throw) for an invalid-base64 signature segment", async () => {
+    const token = await sign(validPayload());
+    const [h, b] = token.split(".");
+    const result = await verifyAccessJwt(`${h}.${b}.!!!not-base64!!!`, config);
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toBe("bad_signature");
+  });
+
   it("rejects an unknown key id", async () => {
     const result = await verifyAccessJwt(await sign(validPayload(), "unknown-kid"), config);
     expect(result).toEqual({ ok: false, reason: "unknown_kid" });

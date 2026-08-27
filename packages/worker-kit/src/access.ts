@@ -122,12 +122,14 @@ export async function verifyAccessJwt(token: string, config: AccessConfig): Prom
     return { ok: false, reason: "bad_key" };
   }
   const signed = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
-  const valid = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5",
-    cryptoKey,
-    base64UrlToBytes(parts[2]),
-    signed
-  );
+  let valid: boolean;
+  try {
+    // base64UrlToBytes can throw on an invalid signature segment; a bad
+    // token must be a stable 401, never a Worker exception.
+    valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, base64UrlToBytes(parts[2]), signed);
+  } catch {
+    return { ok: false, reason: "bad_signature" };
+  }
   if (!valid) return { ok: false, reason: "bad_signature" };
 
   const email = typeof payload.email === "string" ? payload.email : "";

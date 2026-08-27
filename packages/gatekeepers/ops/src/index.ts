@@ -1,6 +1,7 @@
-import { errorResponse, json, verifyAccessRequest, type AccessConfig } from "@operon/worker-kit";
+import { errorResponse, json, verifyAccessRequest, Ledger, type AccessConfig } from "@operon/worker-kit";
 import { downstreamPath, matchRoute, OPS_ROUTES, type OpsRoute } from "./routes.js";
 
+export { Ledger };
 export * from "./routes.js";
 
 /**
@@ -26,7 +27,12 @@ interface Env {
   NOTIFY_TOKEN?: string;
   WAKE_TRIGGER_TOKEN?: string;
   /** Service bindings to every Gatekeeper the operator surface touches. */
-  CHRONICLE?: Fetcher;
+  /** The chronicle Gatekeeper (read forwarding). */
+  CHRONICLE_GK?: Fetcher;
+  /** The chronicle D1, so the audit ledger mirrors centrally. */
+  CHRONICLE?: D1Database;
+  /** This gateway's own operator-attributed audit ledger. */
+  AUDIT: DurableObjectNamespace<Ledger>;
   EMAIL?: Fetcher;
   SPEND?: Fetcher;
   VAULT?: Fetcher;
@@ -46,7 +52,7 @@ function bearerFor(route: OpsRoute, env: Env): string | undefined {
     case "SCHEDULER":
       return env.WAKE_TRIGGER_TOKEN;
     default:
-      // chronicle, spend, vault, x: OPERATOR_API_TOKEN
+      // CHRONICLE_GK, spend, vault, x: OPERATOR_API_TOKEN
       return env.OPERATOR_API_TOKEN;
   }
 }
@@ -77,23 +83,52 @@ export default {
     const bearer = bearerFor(match.route, env);
     if (!bearer) return errorResponse(503, "downstream_token_missing", match.route.binding);
 
-    // Forward over the private binding, carrying the query string and, for
-    // POSTs, the body. The operator's identity is logged; downstream sees
-    // the internal bearer (removed in step 3).
-    const target = `https://internal${downstreamPath(match)}${url.search}`;
-    const init: RequestInit = {
+    // Body for the downstream call. A POST operator request forwards its
+    // body verbatim; a GET whose downstream is a POST (e.g. email/outbox,
+    // which reads {agentId} from a body) carries the query params AS the
+    // body, so ?agentId=promoter reaches the handler.
+    let body: string | undefined;
+    if (match.route.downstreamMethod === "POST") {
+      body =
+        request.method === "POST"
+          ? await request.text()
+          : JSON.stringify(Object.fromEntries(url.searchParams));
+    }
+
+    const operator = access.identity.email || access.identity.sub;
+    const target = `https://internal${downstreamPath(match)}${match.route.downstreamMethod === "GET" ? url.search : ""}`;
+    const response = await binding.fetch(target, {
       method: match.route.downstreamMethod,
       headers: {
         authorization: `Bearer ${bearer}`,
-        "x-operon-operator": access.identity.email || access.identity.sub,
+        "x-operon-operator": operator,
         ...(match.route.downstreamMethod === "POST" ? { "content-type": "application/json" } : {})
       },
-      ...(match.route.downstreamMethod === "POST"
-        ? { body: request.method === "POST" ? await request.text() : "{}" }
-        : {})
-    };
-    const response = await binding.fetch(target, init);
+      ...(body !== undefined ? { body } : {})
+    });
     const text = await response.text();
+
+    // Operator-attributed audit (spec 0003): every action this gateway
+    // performs is recorded WITH the Access identity, in this gateway's
+    // own ledger (mirrored to the chronicle when the D1 is bound), so a
+    // decision record always says which operator made it.
+    try {
+      await env.AUDIT.get(env.AUDIT.idFromName("ops")).append(
+        match.route.decision ? "operator_decision" : "operator_read",
+        {
+          operator,
+          method: match.route.method,
+          path: url.pathname,
+          status: response.status,
+          ...(match.route.decision ? { decision: true } : {})
+        }
+      );
+    } catch (error) {
+      // Audit is oversight, not the action; a ledger hiccup must not fail
+      // a decision the downstream already made. Logged, never thrown.
+      console.error("ops audit append failed", error);
+    }
+
     return new Response(text, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "application/json" }

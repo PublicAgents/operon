@@ -4,13 +4,13 @@ import { downstreamPath, matchRoute, OPS_ROUTES } from "./routes.js";
 describe("ops route table", () => {
   it("matches an exact read route", () => {
     const m = matchRoute("GET", "/chronicle/events");
-    expect(m?.route.binding).toBe("CHRONICLE");
+    expect(m?.route.binding).toBe("CHRONICLE_GK");
     expect(m && downstreamPath(m)).toBe("/chronicle/events");
   });
 
   it("captures the tail of a wildcard route", () => {
     const m = matchRoute("GET", "/chronicle/wake-log/abc-123");
-    expect(m?.route.binding).toBe("CHRONICLE");
+    expect(m?.route.binding).toBe("CHRONICLE_GK");
     expect(m && downstreamPath(m)).toBe("/chronicle/wake-log/abc-123");
   });
 

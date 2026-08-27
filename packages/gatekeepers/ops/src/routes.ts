@@ -30,10 +30,10 @@ export interface OpsRoute {
 
 export const OPS_ROUTES: OpsRoute[] = [
   // ---- reads: the chronicle (the audit database) --------------------
-  { method: "GET", path: "/chronicle/events", binding: "CHRONICLE", downstreamMethod: "GET", downstreamPath: "/chronicle/events" },
-  { method: "GET", path: "/chronicle/messages", binding: "CHRONICLE", downstreamMethod: "GET", downstreamPath: "/chronicle/messages" },
-  { method: "GET", path: "/chronicle/wakes", binding: "CHRONICLE", downstreamMethod: "GET", downstreamPath: "/chronicle/wakes" },
-  { method: "GET", path: "/chronicle/wake-log/*", binding: "CHRONICLE", downstreamMethod: "GET", downstreamPath: "/chronicle/wake-log/*" },
+  { method: "GET", path: "/chronicle/events", binding: "CHRONICLE_GK", downstreamMethod: "GET", downstreamPath: "/chronicle/events" },
+  { method: "GET", path: "/chronicle/messages", binding: "CHRONICLE_GK", downstreamMethod: "GET", downstreamPath: "/chronicle/messages" },
+  { method: "GET", path: "/chronicle/wakes", binding: "CHRONICLE_GK", downstreamMethod: "GET", downstreamPath: "/chronicle/wakes" },
+  { method: "GET", path: "/chronicle/wake-log/*", binding: "CHRONICLE_GK", downstreamMethod: "GET", downstreamPath: "/chronicle/wake-log/*" },
 
   // ---- reads: every Gatekeeper's ledger -----------------------------
   { method: "GET", path: "/ledger/email", binding: "EMAIL", downstreamMethod: "GET", downstreamPath: "/gatekeeper/email/ledger" },
