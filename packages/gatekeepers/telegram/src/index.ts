@@ -14,7 +14,7 @@ import { Channel } from "./channel-do.js";
 import { concernsAgent } from "./channel.js";
 
 export { Ledger, Channel };
-export { TelegramGateway };
+
 export { triageUpdate, type TelegramUpdate, type WebhookAction } from "./webhook.js";
 export * from "./channel.js";
 

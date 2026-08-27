@@ -48,12 +48,17 @@ export async function notifyOperator(
 ): Promise<void> {
   if (env.TELEGRAM) {
     try {
-      await env.TELEGRAM.notify({
+      const result = await env.TELEGRAM.notify({
         text,
         ...(options.actions ? { actions: options.actions } : {}),
         ...(options.agentId ? { agentId: options.agentId } : {})
       });
-      return;
+      // Delivered over the binding, buttons and all: done. If the binding
+      // reports non-delivery (Telegram refused, or it is unreachable),
+      // fall through to the public path so the operator still hears about
+      // it, text-only (a held notice with no button beats silence; the
+      // /approve command still works).
+      if (result?.delivered) return;
     } catch (error) {
       console.error("notify over binding failed", error);
     }

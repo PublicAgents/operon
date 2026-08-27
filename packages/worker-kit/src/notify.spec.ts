@@ -24,6 +24,17 @@ describe("notifyOperator button-gating", () => {
     vi.unstubAllGlobals();
   });
 
+  it("falls back to the public path when the binding reports non-delivery", async () => {
+    const notify = vi.fn(async () => ({ delivered: false }));
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await notifyOperator({ TELEGRAM: { notify }, NOTIFY_URL: "https://tg/notify", NOTIFY_TOKEN: "t" }, "held", { actions });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    // still text-only on the fallback
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).actions).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it("falls back to the public path when the binding throws", async () => {
     const notify = vi.fn(async () => {
       throw new Error("binding down");
