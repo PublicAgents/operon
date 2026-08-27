@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import { UmbilicalRouter } from "./umbilical.js";
+import { allDoorHosts } from "./umbilical-routes.js";
 import type { WakeRecord, WakeTrigger } from "@operon/core";
 import {
   decideAlarmAction,
@@ -31,6 +33,12 @@ export interface LaunchArgs {
   staleAfterMs: number;
   /** Hard wall for this wake in ms; past it the container is stopped. */
   hardWallMs: number;
+  /**
+   * The umbilical nonce (spec 0003 step 4): the container carries it as
+   * every door's bearer; the router validates it, so only the root-held
+   * porch (not the mind, not a browser page) can reach the doors.
+   */
+  umbilicalNonce?: string;
 }
 
 export type LaunchResult =
@@ -42,6 +50,9 @@ export type LaunchResult =
 interface WakeEnv {
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** The umbilical router reads the real door bearers and Gatekeeper
+   * service bindings from this (the scheduler worker) env. */
+  [name: string]: unknown;
 }
 
 const CURRENT = "current";
@@ -115,6 +126,27 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       // Awaited so an asynchronous rejection is caught here: otherwise the
       // already-persisted CURRENT lock would never clear and every later
       // wake for this agent would be blocked or stale indefinitely.
+      // The umbilical (spec 0003 step 4): intercept the container's door
+      // egress (http://<door>.operon.internal) and route it through the
+      // supervisor, which holds the real bearers. No door credential rides
+      // in the container. The router is created with the agent id and the
+      // wake's nonce baked into its env, so identity is a fact of the
+      // supervisor, not a container header, and only the porch can pass
+      // the nonce.
+      if (args.umbilicalNonce) {
+        const routerEnv = {
+          ...(this.env as Record<string, unknown>),
+          OPERON_UMBILICAL_NONCE: args.umbilicalNonce,
+          OPERON_ROUTED_AGENT: args.agentId
+        };
+        const router = new UmbilicalRouter(this.ctx as unknown as ExecutionContext, routerEnv);
+        const intercept = this.ctx.container as unknown as {
+          interceptOutboundHttp(host: string, worker: unknown): Promise<void>;
+        };
+        for (const host of allDoorHosts()) {
+          await intercept.interceptOutboundHttp(host, router);
+        }
+      }
       await this.ctx.container.start({ env: args.env, enableInternet: true });
     } catch (error) {
       await this.finish(record, "failed", String(error));
