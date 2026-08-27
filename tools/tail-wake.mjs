@@ -6,23 +6,26 @@
  *   npm run tail-wake -- <wakeId>     # a specific wake (also historical)
  *   npm run tail-wake -- --raw        # unrendered transcript (raw JSONL)
  *
- * Auth: the operator bearer at ~/.operon-operator-api-token. While a
- * wake runs this reads the live WakeLog DO; afterwards the same URL
- * serves the durable D1 copy, so the command works identically on any
- * wake the chronicle remembers. Sessions stream JSONL events
+ * Auth: the Cloudflare Access session on the ops gateway (spec 0003).
+ * The chronicle's operator reads are binding-only now, reached only
+ * through ops.<zone>; this fetches a short-lived Access JWT with
+ * `cloudflared access token` and sends it. Run `cloudflared access
+ * login https://ops.<zone>` once first. While a wake runs this reads the
+ * live WakeLog DO; afterwards the same URL serves the durable D1 copy.
+ * Sessions stream JSONL events
  * (HARNESS_EXTRA_ARGS sets --output-format stream-json); this renders
  * them readably and passes chassis [operon] lines through untouched.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-// Chassis tooling, colony data: the chronicle's URL comes from the
-// colony checkout this runs in (the worker's own route), or the
-// OPERON_CHRONICLE_URL override.
-function chronicleUrl() {
-  if (process.env.OPERON_CHRONICLE_URL) return process.env.OPERON_CHRONICLE_URL;
-  const configPath = join(process.cwd(), "workers", "gatekeeper-chronicle", "wrangler.jsonc");
+// Chassis tooling, colony data: the ops gateway URL comes from the
+// colony checkout this runs in (the ops worker's own route), or the
+// OPERON_OPS_URL override. Reads proxy through it, Access-gated.
+function opsUrl() {
+  if (process.env.OPERON_OPS_URL) return process.env.OPERON_OPS_URL;
+  const configPath = join(process.cwd(), "workers", "gatekeeper-ops", "wrangler.jsonc");
   if (existsSync(configPath)) {
     const raw = readFileSync(configPath, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -30,27 +33,47 @@ function chronicleUrl() {
     const pattern = JSON.parse(raw).routes?.[0]?.pattern;
     if (pattern) return `https://${pattern}`;
   }
-  console.error("no chronicle URL: run from a colony root or set OPERON_CHRONICLE_URL");
+  console.error("no ops URL: run from a colony root or set OPERON_OPS_URL");
   process.exit(2);
 }
 
-const GK = chronicleUrl();
+const GK = opsUrl();
 const args = process.argv.slice(2);
 const raw = args.includes("--raw");
 const wakeArg = args.find(arg => !arg.startsWith("--"));
 
+// A short-lived Access JWT for the ops gateway; the login is a one-time
+// browser SSO (`cloudflared access login <ops>`), then this refreshes
+// silently. Sent as the header the ops gateway's in-Worker verifier reads.
+function accessToken() {
+  return execFileSync("cloudflared", ["access", "token", "--app", GK], {
+    encoding: "utf8"
+  }).trim();
+}
+
+// Startup is the only fatal path (no session at all is operator error);
+// a mid-tail refresh failure throws instead, so the polling loop's
+// retry window absorbs a transient cloudflared failure.
 let token;
 try {
-  token = readFileSync(join(homedir(), ".operon-operator-api-token"), "utf8").trim();
+  token = accessToken();
 } catch {
-  console.error("no operator token at ~/.operon-operator-api-token");
+  console.error(`no Access session for ${GK}. Run: cloudflared access login ${GK}`);
   process.exit(2);
 }
 
 async function api(path) {
-  const response = await fetch(`${GK}${path}`, {
-    headers: { authorization: `Bearer ${token}` }
+  let response = await fetch(`${GK}${path}`, {
+    headers: { "cf-access-jwt-assertion": token }
   });
+  // A live tail can outlast the short-lived JWT: on an auth failure,
+  // refresh it once (cloudflared refreshes silently) and retry.
+  if (response.status === 401 || response.status === 403) {
+    token = accessToken();
+    response = await fetch(`${GK}${path}`, {
+      headers: { "cf-access-jwt-assertion": token }
+    });
+  }
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
   return response.json();
 }
@@ -118,8 +141,29 @@ console.log(`tailing wake ${wakeId} (ctrl-c to stop)\n`);
 let after = -1;
 let carry = "";
 let quietPolls = 0;
+let pollFailures = 0;
 for (;;) {
-  const result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+  // A live tail must survive transient failures (a gateway 5xx, a
+  // momentary Access-verifier outage answering 401, a dropped
+  // connection): the cursor makes every poll idempotent, so failures
+  // just wait for the next poll. Only a long unbroken failure streak
+  // (~2 min) gives up.
+  let result;
+  try {
+    result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+    pollFailures = 0;
+  } catch (error) {
+    pollFailures += 1;
+    if (pollFailures >= 40) {
+      console.error(`[tail-wake] giving up after ${pollFailures} consecutive failed polls: ${error.message}`);
+      process.exit(1);
+    }
+    if (pollFailures % 10 === 1) {
+      console.error(`[tail-wake] poll failed (${error.message}); retrying`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    continue;
+  }
   const chunks = result.chunks ?? [];
   if (chunks.length > 0) {
     after = Math.max(...chunks.map(chunk => chunk.seq));
