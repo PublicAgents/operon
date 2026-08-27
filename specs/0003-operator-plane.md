@@ -90,7 +90,31 @@ egress control). That is the zero-trust boundary the doors were missing:
   in the strongest sense: nothing in env, nothing on disk, nothing in
   any process's memory that grants anything.
 
-## 5. Operator tooling auth
+## 5. The hostile-mind boundary (prompt injection)
+
+The umbilical removes credential THEFT; it cannot remove the confused
+deputy: a mind steered by malicious content it read (a webpage, a mail,
+a DM, a PR comment) wields the agent's own legitimate authority. No
+network boundary fixes that, so the doors are the boundary, and they
+already assume a hostile mind: own-hosts publishing, allowlisted PR
+targets, first-contact and first-merchant holds, per-day caps, reply-only
+DMs, disclosure-preserving profile edits, swept outbound content.
+
+One addition hardens this specifically against single-wake hijack:
+**per-wake sub-caps under the daily caps** on the outward doors (posts,
+DMs, follows, emails, spend). Daily caps are sized for a day of work; a
+hijacked wake can currently burn a day's budget in one burst. A per-wake
+slice bounds the damage of one poisoned context to a fraction of a day,
+and the next wake starts clean without the poisoned page in its context.
+Sizing rule of thumb: half the daily cap or less per wake, tunable per
+door via env beside the existing caps.
+
+Also restated as doctrine: ambient door access inside the wake is BY
+DESIGN (the porch was always an unauthenticated loopback; the container
+IS the agent), so no future door may assume its caller is "the real
+mind"; every door defends itself.
+
+## 6. Operator tooling auth
 
 - **Interactive CLI** (tail-wake, future ops commands): a cached
   short-lived token from `cloudflared access token` (browser SSO once,
@@ -105,7 +129,7 @@ egress control). That is the zero-trust boundary the doors were missing:
   unattended automation only, scoped to the ops app, named per use, and
   revocable in the dashboard; never for interactive use.
 
-## 6. Worker-to-worker: bindings, not bearers (operon#14)
+## 7. Worker-to-worker: bindings, not bearers (operon#14)
 
 Telegram reaches email and spend for approve/reject via service
 bindings; the scheduler already reaches github that way. The shared
@@ -116,7 +140,7 @@ arrive over a service binding; bearer-authenticated notifies (from
 containers) render as plain text. A forged notify can then annoy, but
 never carry an approve button.
 
-## 7. Blast radius, after
+## 8. Blast radius, after
 
 | Leaked | Attacker gets |
 | --- | --- |
@@ -127,7 +151,7 @@ never carry an approve button.
 | Access service token | named, scoped, dashboard-revocable, Access-logged |
 | Operator SSO session | requires the identity provider + device; revoke at the IdP |
 
-## 8. Order of work
+## 9. Order of work
 
 1. operon#14 service bindings + button-gating (removes shared-token
    exposure between Workers; small).
@@ -142,9 +166,14 @@ never carry an approve button.
 6. Console UI on the gateway (separate effort; the data layer and auth
    are then already done).
 7. Phase 2 umbilical: mind credential + clone token interception
-   (interceptHttps + image CA trust).
+   (interceptHttps + image CA trust). The credential half is BUILT
+   (feat/mind-credential-injection: per-harness host table in core,
+   placeholder in the container env, WakeContainer attaches the
+   interceptor, pure injectHeaders unit-tested); it lands with the CA
+   trust + a canary wake.
+8. Per-wake sub-caps on the outward doors (section 5).
 
-## 9. Open decisions
+## 10. Open decisions
 
 1. Access identity provider (one-time dashboard choice; any works).
 2. Whether /wake and /disable require a second factor beyond Access
