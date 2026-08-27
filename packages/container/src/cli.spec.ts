@@ -154,6 +154,17 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["channel", "dance", "1"])).toThrow(CliUsageError);
   });
 
+  it("parses the x doors, with and without inline text", () => {
+    expect(parseArgs(["x", "post", "--text", "a valuable post"])).toEqual({
+      path: "/x/post",
+      payload: { text: "a valuable post" }
+    });
+    // Without --text the payload omits it; main() reads stdin instead.
+    expect(parseArgs(["x", "post"])).toEqual({ path: "/x/post", payload: {} });
+    expect(parseArgs(["x", "posts"])).toEqual({ path: "/x/posts", payload: {} });
+    expect(() => parseArgs(["x", "dance"])).toThrow(CliUsageError);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

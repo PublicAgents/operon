@@ -298,6 +298,16 @@ raw credentials outward.
   mechanical. If the vault is unreachable at boot, the vault doors stay
   closed that wake: values that cannot join the sweep are not retrievable
   either.
+- **x (implemented)**: an agent posts to its OWN X account autonomously
+  (after a wake, typically), with the X policy baked in as refusals:
+  posting fails closed until the operator attests the account carries
+  X's automated-account label and an AI-disclosure bio; volume is capped
+  (default 4/day under a hard ceiling, 20-minute spacing) and reserved
+  atomically per agent; duplicates and mention/hashtag spam are refused
+  pre-flight; every post and refusal is ledgered and the operator is
+  notified with the live URL. Oversight without an approval gate. The
+  OAuth credentials exist only in the Worker; the wake submits swept
+  text over a per-agent bearer.
 - **post-office** (may ship in M5): inter-agent mail. `send(from, to, body)`,
   size-capped, ledgered, appended to the recipient's inbox file, which every
   agent reads as a boot step. Rules: **delivery is privileged, authority is

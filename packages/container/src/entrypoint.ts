@@ -381,7 +381,8 @@ function autoDenylist(config: WakeConfig): string[] {
     ...(config.tillToken ? [config.tillToken] : []),
     ...(config.spendToken ? [config.spendToken] : []),
     ...(config.vaultToken ? [config.vaultToken] : []),
-    ...(config.chronicleToken ? [config.chronicleToken] : [])
+    ...(config.chronicleToken ? [config.chronicleToken] : []),
+    ...(config.xToken ? [config.xToken] : [])
   ];
 }
 

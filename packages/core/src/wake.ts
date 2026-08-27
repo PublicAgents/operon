@@ -61,6 +61,9 @@ export interface WakeOptions {
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
+  /** X Gatekeeper endpoint + this agent's OWN posting bearer (per-agent). */
+  xUrl?: string;
+  xToken?: string;
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -103,7 +106,9 @@ export const WAKE_ENV = {
   vaultUrl: "OPERON_VAULT_URL",
   vaultToken: "OPERON_VAULT_TOKEN",
   chronicleUrl: "OPERON_CHRONICLE_URL",
-  chronicleToken: "OPERON_CHRONICLE_TOKEN"
+  chronicleToken: "OPERON_CHRONICLE_TOKEN",
+  xUrl: "OPERON_X_URL",
+  xToken: "OPERON_X_TOKEN"
 } as const;
 
 export function wakeEnv(
@@ -145,6 +150,8 @@ export function wakeEnv(
   if (options.vaultToken) env[WAKE_ENV.vaultToken] = options.vaultToken;
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
+  if (options.xUrl) env[WAKE_ENV.xUrl] = options.xUrl;
+  if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   return env;

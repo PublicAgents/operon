@@ -32,6 +32,11 @@ export function vaultTokenVar(agentId: string): string {
   return `VAULT_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/** "promoter" -> "X_TOKEN_PROMOTER" (posting bearers are per-agent). */
+export function xTokenVar(agentId: string): string {
+  return `X_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
 export class LaunchPreconditionError extends Error {
   override name = "LaunchPreconditionError";
   constructor(
@@ -80,6 +85,7 @@ export async function prepareLaunch(
   const tillToken = context.getSecret(tillTokenVar(agent.id));
   const spendToken = context.getSecret(spendTokenVar(agent.id));
   const vaultToken = context.getSecret(vaultTokenVar(agent.id));
+  const xToken = context.getSecret(xTokenVar(agent.id));
   return {
     wakeId,
     agentId: agent.id,
@@ -91,7 +97,8 @@ export async function prepareLaunch(
         ...context.options,
         ...(tillToken ? { tillToken } : {}),
         ...(spendToken ? { spendToken } : {}),
-        ...(vaultToken ? { vaultToken } : {})
+        ...(vaultToken ? { vaultToken } : {}),
+        ...(xToken ? { xToken } : {})
       }
     )
   };

@@ -38,7 +38,9 @@ export const ENV = {
   vaultUrl: "OPERON_VAULT_URL",
   vaultToken: "OPERON_VAULT_TOKEN",
   chronicleUrl: "OPERON_CHRONICLE_URL",
-  chronicleToken: "OPERON_CHRONICLE_TOKEN"
+  chronicleToken: "OPERON_CHRONICLE_TOKEN",
+  xUrl: "OPERON_X_URL",
+  xToken: "OPERON_X_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -87,6 +89,9 @@ export interface WakeConfig {
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
+  /** X Gatekeeper endpoint + this agent's own posting bearer. */
+  xUrl?: string;
+  xToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -162,7 +167,9 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     vaultUrl: env[ENV.vaultUrl],
     vaultToken: env[ENV.vaultToken],
     chronicleUrl: env[ENV.chronicleUrl],
-    chronicleToken: env[ENV.chronicleToken]
+    chronicleToken: env[ENV.chronicleToken],
+    xUrl: env[ENV.xUrl],
+    xToken: env[ENV.xToken]
   };
 }
 

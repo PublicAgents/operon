@@ -90,6 +90,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     till: Boolean(config.tillUrl && config.tillToken),
     pay: Boolean(config.spendUrl && config.spendToken),
     vault: Boolean(config.vaultUrl && config.vaultToken),
+    x: Boolean(config.xUrl && config.xToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -166,6 +167,8 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/vault/get") return await this.vaultCall("get", body);
       if (request.method === "POST" && url.pathname === "/vault/list") return await this.vaultCall("list", {});
       if (request.method === "POST" && url.pathname === "/vault/delete") return await this.vaultCall("delete", body);
+      if (request.method === "POST" && url.pathname === "/x/post") return await this.xPost(body);
+      if (request.method === "POST" && url.pathname === "/x/posts") return await this.xCall("posts", {});
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -655,6 +658,30 @@ export class Porch {
       return fail(502, "channel_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
     }
     return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /** POST a payload to the X Gatekeeper with this agent's OWN bearer. */
+  private async xCall(door: string, payload: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.xUrl || !config.xToken) return fail(503, "x_not_wired");
+    const response = await fetch(`${config.xUrl}/gatekeeper/x/${door}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.xToken}` },
+      body: JSON.stringify(payload)
+    });
+    const resultText = (await response.text()).slice(0, 10000);
+    if (!response.ok) return fail(502, `x_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /** Post to the agent's own X account: outbound text, swept like all of it. */
+  private async xPost(body: Record<string, unknown>): Promise<JsonResult> {
+    const { text } = body;
+    if (typeof text !== "string" || text.length === 0) return fail(400, "missing_text");
+    const blocked = this.sweepFields({ text });
+    if (blocked) return blocked;
+    this.context.log(`x: posting (${text.length} chars)`);
+    return this.xCall("post", { text });
   }
 
   /** POST a payload to the vault Gatekeeper with this agent's OWN bearer. */
