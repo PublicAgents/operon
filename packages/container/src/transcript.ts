@@ -104,10 +104,14 @@ export class TranscriptShipper {
 
   private async flush(done: boolean): Promise<void> {
     if (!this.started) return;
+    // Redact the WHOLE buffer before any chunk is cut from it: a literal
+    // can then never straddle a chunk boundary and ship reconstructable
+    // across two chunks. Re-redacting on every flush is idempotent and is
+    // also what applies denylist values added since the last flush.
+    this.buffer = redactLiterals(this.buffer, this.options.denylist);
     while (this.buffer.length > 0 || done) {
-      const raw = this.buffer.slice(0, this.maxChunkBytes);
-      this.buffer = this.buffer.slice(raw.length);
-      const text = redactLiterals(raw, this.options.denylist);
+      const text = this.buffer.slice(0, this.maxChunkBytes);
+      this.buffer = this.buffer.slice(text.length);
       const isLast = done && this.buffer.length === 0;
       try {
         const response = await (this.options.fetchImpl ?? fetch)(
@@ -133,7 +137,7 @@ export class TranscriptShipper {
       } catch (error) {
         // Put the unshipped text back and stop this round; the next tick
         // (or close) retries. Transcript loss must never fail a wake.
-        this.buffer = raw + this.buffer;
+        this.buffer = text + this.buffer;
         this.options.log?.(`transcript ship failed: ${String(error).slice(0, 200)}`);
         return;
       }

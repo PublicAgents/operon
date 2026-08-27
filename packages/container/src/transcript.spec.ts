@@ -66,6 +66,30 @@ describe("TranscriptShipper", () => {
     expect(chunks).toEqual([]);
   });
 
+  it("never lets a literal straddle a chunk boundary (redact before chunking)", async () => {
+    const { chunks, fetchImpl } = collectingFetch();
+    const secret = "straddling-secret-value";
+    const s = new TranscriptShipper({
+      url: "http://chronicle.test",
+      token: "t",
+      wakeId: "wake-1",
+      agentId: "promoter",
+      denylist: [secret],
+      flushIntervalMs: 60_000,
+      // A cap small enough that a naive slice would cut INSIDE the literal.
+      maxChunkBytes: 10,
+      fetchImpl
+    });
+    s.ready();
+    s.write(`aaaa${secret}bbbb\n`);
+    await s.close();
+    const all = chunks.map(chunk => chunk.text).join("");
+    expect(all).toContain(REDACTED);
+    expect(all).not.toContain(secret);
+    // Even reassembled across every chunk, the secret is not present.
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
   it("keeps unshipped text and retries when the chronicle is down", async () => {
     let failures = 1;
     const { chunks, fetchImpl } = collectingFetch();
