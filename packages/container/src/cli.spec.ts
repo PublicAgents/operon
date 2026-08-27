@@ -144,6 +144,16 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["vault", "unknown"])).toThrow(CliUsageError);
   });
 
+  it("parses channel original by entry id", () => {
+    expect(parseArgs(["channel", "original", "123"])).toEqual({
+      path: "/channel/original",
+      payload: { id: 123 }
+    });
+    expect(() => parseArgs(["channel", "original"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["channel", "original", "zero"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["channel", "dance", "1"])).toThrow(CliUsageError);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

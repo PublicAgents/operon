@@ -161,6 +161,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
       if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
       if (request.method === "POST" && url.pathname === "/pay") return await this.pay(body);
+      if (request.method === "POST" && url.pathname === "/channel/original") return await this.channelOriginal(body);
       if (request.method === "POST" && url.pathname === "/vault/set") return await this.vaultSet(body);
       if (request.method === "POST" && url.pathname === "/vault/get") return await this.vaultCall("get", body);
       if (request.method === "POST" && url.pathname === "/vault/list") return await this.vaultCall("list", {});
@@ -177,6 +178,11 @@ export class Porch {
     if (!config.notifyUrl || !config.notifyToken) return fail(503, "notify_not_wired");
     const text = body.text;
     if (typeof text !== "string" || text.length === 0) return fail(400, "empty_text");
+    // Notify text leaves the container (Telegram, and the channel record):
+    // it is swept like every other outbound field, so a denylisted or
+    // vaulted value can no more exfiltrate through a notify than a PR title.
+    const blocked = this.sweepFields({ text });
+    if (blocked) return blocked;
     const response = await fetch(config.notifyUrl, {
       method: "POST",
       headers: {
@@ -624,6 +630,30 @@ export class Porch {
     });
     const resultText = (await response.text()).slice(0, 8 * 1024 * 1024);
     if (!response.ok) return fail(502, "pay_rejected", `${response.status}: ${resultText.slice(0, 400)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /**
+   * The stored, unredacted original of one operator-channel entry (the
+   * [#id] on a transcript header line): the write-time scan may withhold
+   * a transcript line, but the message remains the agent's conversation
+   * to read. Same posture as email originals.
+   */
+  private async channelOriginal(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.notifyUrl || !config.notifyToken) return fail(503, "notify_not_wired");
+    const { id } = body;
+    if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) return fail(400, "invalid_id");
+    const base = config.notifyUrl.replace(/\/notify$/, "");
+    const response = await fetch(`${base}/channel/original`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.notifyToken}` },
+      body: JSON.stringify({ agentId: config.agentId, id })
+    });
+    const resultText = (await response.text()).slice(0, 20000);
+    if (!response.ok) {
+      return fail(502, "channel_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    }
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
 

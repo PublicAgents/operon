@@ -26,6 +26,11 @@ const HELP = `operon: the doors out of this wake
                                          need what it carried, e.g. a sign-up or
                                          verification link. Never save the
                                          credential parts to your repo.
+  operon channel original <id>           the stored, unredacted original of one
+                                         operator-channel entry (id = the [#id]
+                                         on its header line in
+                                         operator/channel.md), for when a
+                                         transcript line was withheld
 
 Till doors (sell your work; spec: your prices, the operator's ceilings;
 custody and recipients are the operator's alone):
@@ -168,6 +173,14 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseTill(rest);
     case "vault":
       return parseVault(rest);
+    case "channel": {
+      const [sub, idRaw] = positionals(rest);
+      const id = Number(idRaw);
+      if (sub !== "original" || !idRaw || !Number.isInteger(id) || id <= 0) {
+        throw new CliUsageError("usage: operon channel original <id> (the [#id] on the entry's header line)");
+      }
+      return { path: "/channel/original", payload: { id } };
+    }
     case "pay": {
       const [url] = positionals(rest);
       const max = flagValue(rest, "--max");

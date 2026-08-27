@@ -64,6 +64,11 @@ export class Channel extends DurableObject {
     return transcriptFor(entries, agentId, cursor);
   }
 
+  /** One stored entry by id; null once pruned (the channel is a window, not an archive). */
+  async entry(id: number): Promise<ChannelEntry | null> {
+    return (await this.ctx.storage.get<ChannelEntry>(`e:${String(id).padStart(10, "0")}`)) ?? null;
+  }
+
   async ack(agentId: string, upTo: number): Promise<void> {
     const cursor = (await this.ctx.storage.get<number>(`cursor:${agentId}`)) ?? 0;
     if (upTo > cursor) await this.ctx.storage.put(`cursor:${agentId}`, upTo);

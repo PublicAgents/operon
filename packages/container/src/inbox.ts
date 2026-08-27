@@ -170,10 +170,13 @@ export async function sanitizeTranscript(
   gitleaksOptions?: GitleaksOptions
 ): Promise<{ content: string; sanitized: boolean }> {
   const NAME = "channel.md";
-  const marker = "[line withheld: matched the secret scanner; the full conversation remains in Telegram]";
+  const marker =
+    "[line withheld: matched the secret scanner; recover the full entry with " +
+    "`operon channel original <id>` using the [#id] on its header line]";
   const stub =
     "# Operator channel\n\n[transcript withheld: it matched the secret scanner even after " +
-    "line-level redaction. The full conversation remains in Telegram.]\n";
+    "line-level redaction. Recover entries with `operon channel original <id>`; the full " +
+    "conversation also remains in Telegram.]\n";
   let current = content;
   for (let round = 0; ; round++) {
     const findings = await scanBatch([{ name: NAME, content: current }], denylist, gitleaksOptions);

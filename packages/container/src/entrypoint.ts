@@ -215,7 +215,10 @@ async function pullOperatorChannel(
             : "OPERATOR"
           : entry.agentId;
       const marker = newSet.has(entry.id) ? " [NEW]" : "";
-      return `- ${entry.at} ${who}${marker}:\n  ${entry.text.replace(/\n/g, "\n  ")}`;
+      // The [#id] is the handle for `operon channel original <id>`: the
+      // stored, unredacted entry, for when the write-time scan below
+      // withheld a line of this transcript.
+      return `- [#${entry.id}] ${entry.at} ${who}${marker}:\n  ${entry.text.replace(/\n/g, "\n  ")}`;
     });
     const composed =
       `# Operator channel\n\n` +

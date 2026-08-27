@@ -2,6 +2,7 @@ import { parseRoster } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
 import { triageUpdate, type TelegramUpdate } from "./webhook.js";
 import { Channel } from "./channel-do.js";
+import { concernsAgent } from "./channel.js";
 
 export { Ledger, Channel };
 export { triageUpdate, type TelegramUpdate, type WebhookAction } from "./webhook.js";
@@ -365,6 +366,29 @@ export default {
       }
       await channel(env).ack(body.value.agentId, body.value.upTo);
       return json({ ok: true });
+    }
+    if (url.pathname === "/channel/original" && request.method === "POST") {
+      // The stored, unredacted original of one channel entry: the wake's
+      // transcript may have withheld a scanner-tripping line, but the
+      // message remains the agent's conversation to read. Scoped to
+      // entries that concern the requesting agent.
+      const denied = requireBearer(request, env.NOTIFY_TOKEN);
+      if (denied) return denied;
+      const body = await readJson<{ agentId?: string; id?: number }>(request);
+      if (
+        !body.ok ||
+        typeof body.value.agentId !== "string" ||
+        !body.value.agentId ||
+        typeof body.value.id !== "number" ||
+        !Number.isInteger(body.value.id)
+      ) {
+        return errorResponse(400, "invalid_request");
+      }
+      const entry = await channel(env).entry(body.value.id);
+      if (!entry || !concernsAgent(entry, body.value.agentId)) {
+        return errorResponse(404, "entry_not_found", String(body.value.id));
+      }
+      return json({ ok: true, entry });
     }
     if (url.pathname === "/channel/send" && request.method === "POST") {
       // Operator UI surface: same append the Telegram webhook uses, so a
