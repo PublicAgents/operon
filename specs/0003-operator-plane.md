@@ -25,11 +25,7 @@ which is a social-engineering path to real money decisions.
   till's paid paths (buyers), inbound email (platform-delivered), and
   the Telegram webhook, the ONE public operator-control endpoint,
   already gated by secret header + exact chat id.
-- **Container-facing, stays public HTTPS**: wake containers egress over
-  the public internet, so the agent doors keep per-agent bearers. This
-  is the designed containment: a leaked bearer is one agent's capped,
-  held, ledgered doors, and rotation is one command with CI-enforced
-  coverage. No change.
+- **Container-facing, goes credential-free**: the umbilical (section 4).
 - **Worker-to-worker, goes private**: service bindings (operon#14).
 - **Operator-facing, gets identity**: this spec.
 
@@ -58,7 +54,43 @@ Access application's audience tag (a worker-kit helper; env carries
 team domain + aud). Route-level Access alone is not trusted: the JWT
 check runs in-Worker so a routing mistake fails closed.
 
-## 4. Operator tooling auth
+## 4. The umbilical: no credential ever enters the container
+
+Cloudflare Containers support Outbound Workers: handlers on the
+Container class intercept the container's outbound HTTP IN THE WORKERS
+RUNTIME, on the same machine, outside the container sandbox, with full
+access to env and service bindings (`outboundByHost` /
+`outbound`, plus `enableInternet` / `allowedHosts` / `deniedHosts` for
+egress control). That is the zero-trust boundary the doors were missing:
+
+- The entrypoint calls doors at VIRTUAL hostnames (plain
+  `http://<door>.operon.internal/...`). The traffic never leaves the
+  machine; the outbound handler intercepts it before any network.
+- The handler runs on the WakeContainer class, the per-agent
+  supervisor, so it KNOWS which agent's container is calling. It asserts
+  the agent identity itself and forwards via service bindings to the
+  Gatekeepers. Identity stops being a bearer and becomes a fact of the
+  supervisor: unforgeable by the mind, unphishable, unleakable.
+- Every door token disappears from the wake environment: till, spend,
+  vault, x, email, notify, publish, persist, pr, chronicle. A fully
+  compromised container holds NOTHING to exfiltrate; it can call its own
+  agent's doors (it always could; it IS the agent) and nothing else.
+- `deniedHosts` blocks the Gatekeepers' real public hostnames from
+  container egress, so the doors work ONLY through the supervised path,
+  and the SSRF fence gains a platform-level layer.
+- Gatekeepers keep accepting per-agent bearers during migration; once
+  every caller is the umbilical, the container-door bearers are deleted
+  and the rotation table shrinks again. The transcript shipper and
+  inbox/DM pulls ride the same path.
+- **Phase 2, the last two credentials**: the mind credential (intercept
+  `api.anthropic.com` with `interceptHttps` + the Cloudflare CA trusted
+  in the image, inject the auth header outside the sandbox, so the
+  session runs with a placeholder) and the short-lived git clone token
+  (inject on `github.com`). After that the container is credential-free
+  in the strongest sense: nothing in env, nothing on disk, nothing in
+  any process's memory that grants anything.
+
+## 5. Operator tooling auth
 
 - **Interactive CLI** (tail-wake, future ops commands): a cached
   short-lived token from `cloudflared access token` (browser SSO once,
@@ -73,7 +105,7 @@ check runs in-Worker so a routing mistake fails closed.
   unattended automation only, scoped to the ops app, named per use, and
   revocable in the dashboard; never for interactive use.
 
-## 5. Worker-to-worker: bindings, not bearers (operon#14)
+## 6. Worker-to-worker: bindings, not bearers (operon#14)
 
 Telegram reaches email and spend for approve/reject via service
 bindings; the scheduler already reaches github that way. The shared
@@ -84,31 +116,42 @@ arrive over a service binding; bearer-authenticated notifies (from
 containers) render as plain text. A forged notify can then annoy, but
 never carry an approve button.
 
-## 6. Blast radius, after
+## 7. Blast radius, after
 
 | Leaked | Attacker gets |
 | --- | --- |
 | OPERATOR_API_TOKEN | nothing; it no longer exists |
-| A per-agent door bearer | one agent's capped/held/ledgered doors until one rotate command |
+| A container compromise | the agent's own capped/held/ledgered doors, which it had anyway; no credentials exist inside to steal |
+| A per-agent door bearer (during migration only) | one agent's capped doors until one rotate command; deleted once the umbilical lands |
 | NOTIFY_TOKEN | text-only notify spam; no buttons, no decisions |
 | Access service token | named, scoped, dashboard-revocable, Access-logged |
 | Operator SSO session | requires the identity provider + device; revoke at the IdP |
 
-## 7. Order of work
+## 8. Order of work
 
 1. operon#14 service bindings + button-gating (removes shared-token
    exposure between Workers; small).
 2. gatekeeper-ops + worker-kit Access-JWT verification + Access app
    (the gateway, reads first, then decisions).
 3. Strip per-Gatekeeper operator endpoints + delete OPERATOR_API_TOKEN.
-4. Tooling: tail-wake via Access token + `--wrangler` fallback mode.
-5. Console UI on the gateway (separate effort; the data layer and auth
+4. The umbilical: outbound handlers on WakeContainer, virtual door
+   hosts in the entrypoint, scheduler service bindings to every
+   Gatekeeper, then delete the container-door bearers and their env
+   plumbing.
+5. Tooling: tail-wake via Access token + `--wrangler` fallback mode.
+6. Console UI on the gateway (separate effort; the data layer and auth
    are then already done).
+7. Phase 2 umbilical: mind credential + clone token interception
+   (interceptHttps + image CA trust).
 
-## 8. Open decisions
+## 9. Open decisions
 
 1. Access identity provider (one-time dashboard choice; any works).
 2. Whether /wake and /disable require a second factor beyond Access
    (e.g. confirm via Telegram) or Access device posture suffices.
 3. Ops-gateway rate limits (Access already throttles, but the money
    decision endpoints deserve their own modest caps).
+4. Whether container egress moves to an allowlist posture
+   (`allowedHosts`) once the mind's legitimate destinations are
+   understood, or stays open-with-denials (the mind's work needs the
+   open web; a too-tight list starves it).
