@@ -1,10 +1,20 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseRoster } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
+import {
+  errorResponse,
+  json,
+  readJson,
+  requireBearer,
+  requireAnyBearer,
+  Ledger,
+  type OperatorAction
+} from "@operon/worker-kit";
 import { triageUpdate, type TelegramUpdate } from "./webhook.js";
 import { Channel } from "./channel-do.js";
 import { concernsAgent } from "./channel.js";
 
 export { Ledger, Channel };
+
 export { triageUpdate, type TelegramUpdate, type WebhookAction } from "./webhook.js";
 export * from "./channel.js";
 
@@ -298,6 +308,18 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   }
 }
 
+/** Attribute an agent notify into the operator conversation log (best-effort). */
+async function recordAgentNotify(env: Env, agentId: string, text: string): Promise<void> {
+  try {
+    await channel(env).append(
+      { at: new Date().toISOString(), from: "agent", agentId, text: text.slice(0, 4000) },
+      protectedAgents(env)
+    );
+  } catch (error) {
+    console.error("channel append failed", error);
+  }
+}
+
 async function handleNotify(request: Request, env: Env): Promise<Response> {
   const denied = requireBearer(request, env.NOTIFY_TOKEN);
   if (denied) {
@@ -314,28 +336,44 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("notify_failed", { reason: "empty_text" });
     return errorResponse(400, "empty_text");
   }
-  const delivered = await sendToOperator(env, text.slice(0, 4000), body.value.actions);
+  // Button-gating (spec 0003 §7): the PUBLIC, bearer-authenticated path
+  // NEVER renders action buttons. Buttons come only from our own Workers
+  // over the TELEGRAM service binding (the entrypoint below), so a forged
+  // notify with a leaked NOTIFY_TOKEN is text spam, never a decision.
+  if (body.value.actions && body.value.actions.length > 0) {
+    await ledger(env).append("notify_actions_stripped", { count: body.value.actions.length });
+  }
+  const delivered = await sendToOperator(env, text.slice(0, 4000));
   await ledger(env).append("notify", { delivered, length: text.length });
   // Attributed notifies join the conversation log, so when the operator
   // answers later, the agent's next wake sees what it had said. Recorded
   // even if the Telegram delivery failed: the channel is the memory.
   if (typeof body.value.agentId === "string" && body.value.agentId.length > 0) {
-    try {
-      await channel(env).append(
-        {
-          at: new Date().toISOString(),
-          from: "agent",
-          agentId: body.value.agentId,
-          text: text.slice(0, 4000)
-        },
-        protectedAgents(env)
-      );
-    } catch (error) {
-      console.error("channel append failed", error);
-    }
+    await recordAgentNotify(env, body.value.agentId, text);
   }
   if (!delivered) return errorResponse(502, "telegram_send_failed");
   return json({ ok: true });
+}
+
+/**
+ * The binding-only operator gateway (spec 0003 §7): our own Workers call
+ * env.TELEGRAM.notify(...) over a private service binding, and ONLY this
+ * path renders action buttons. No bearer, no public route, so a leaked
+ * token cannot reach it.
+ */
+export class TelegramGateway extends WorkerEntrypoint<Env> {
+  async notify(input: { text: string; actions?: OperatorAction[]; agentId?: string }): Promise<{
+    delivered: boolean;
+  }> {
+    const text = String(input.text ?? "").slice(0, 4000);
+    if (!text) return { delivered: false };
+    const delivered = await sendToOperator(this.env, text, input.actions);
+    await ledger(this.env).append("notify", { delivered, length: text.length, viaBinding: true });
+    if (typeof input.agentId === "string" && input.agentId.length > 0) {
+      await recordAgentNotify(this.env, input.agentId, text);
+    }
+    return { delivered };
+  }
 }
 
 export default {

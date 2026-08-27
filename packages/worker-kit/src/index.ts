@@ -1,6 +1,13 @@
 export { json, errorResponse, requireBearer, requireAnyBearer, readJson } from "./http.js";
 export { Ledger, type LedgerRow } from "./ledger.js";
 export {
+  notifyOperator,
+  type OperatorAction,
+  type NotifyEnv,
+  type NotifyOptions,
+  type TelegramGatewayBinding
+} from "./notify.js";
+export {
   githubApi,
   buildTree,
   commitToBranch,
