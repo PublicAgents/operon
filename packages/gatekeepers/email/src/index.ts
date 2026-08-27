@@ -1,6 +1,10 @@
 import { findAgent, parseRoster } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, requireAnyBearer, Ledger,
+  notifyOperator as sendOperatorNotify,
+  type OperatorAction,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import PostalMime from "postal-mime";
 import { Mailbox, type AttachmentMeta } from "./mailbox.js";
 import { identityForAgent, identityForRecipient } from "./identity.js";
@@ -27,6 +31,8 @@ interface Env {
   OPERATOR_API_TOKEN?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** telegram Gatekeeper over a service binding: the only path that carries buttons. */
+  TELEGRAM?: TelegramGatewayBinding;
   /** Central audit mirror; optional (a deployment without D1 still works). */
   CHRONICLE?: D1Database;
   EMAIL: {
@@ -65,18 +71,9 @@ function operatorCopy(env: Env, localPart: string, zone: string): string {
 async function notifyOperator(
   env: Env,
   text: string,
-  actions?: Array<{ label: string; kind: string; agentId: string; id: string }>
+  actions?: OperatorAction[]
 ): Promise<void> {
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
-  try {
-    await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text, ...(actions ? { actions } : {}) })
-    });
-  } catch (error) {
-    console.error("email gatekeeper notify failed", error);
-  }
+  await sendOperatorNotify(env, text, actions ? { actions } : {});
 }
 
 async function handleSend(request: Request, env: Env): Promise<Response> {

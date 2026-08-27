@@ -4,7 +4,11 @@ import { createClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { tempo as tempoMainnetChain, tempoModerato } from "viem/tempo/chains";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger,
+  notifyOperator as sendOperatorNotify,
+  type OperatorAction,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import { SpendLedger } from "./spend-do.js";
 import {
   parseCurrencyMap,
@@ -48,6 +52,8 @@ interface Env {
   /** Secrets. */
   MPP_PRIVATE_KEY?: string;
   NOTIFY_TOKEN?: string;
+  /** telegram Gatekeeper over a service binding: the only path that carries buttons. */
+  TELEGRAM?: TelegramGatewayBinding;
   OPERATOR_API_TOKEN?: string;
   /** Per-agent bearers as SPEND_TOKEN_<AGENTID>. */
   [name: string]: unknown;
@@ -80,18 +86,9 @@ function agentFromBearer(request: Request, env: Env): RosterAgent | null {
 async function notifyOperator(
   env: Env,
   text: string,
-  actions?: Array<{ label: string; kind: string; agentId: string; id: string }>
+  actions?: OperatorAction[]
 ): Promise<void> {
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
-  try {
-    await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text, ...(actions ? { actions } : {}) })
-    });
-  } catch (error) {
-    console.error("spend notify failed", error);
-  }
+  await sendOperatorNotify(env, text, actions ? { actions } : {});
 }
 
 /**
