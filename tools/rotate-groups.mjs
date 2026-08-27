@@ -11,6 +11,7 @@ export function groupsFor(roster) {
     // telegram accepts; scheduler and the notifying gatekeepers present.
     notify: [
       ["gatekeeper-telegram", "NOTIFY_TOKEN"],
+      ["gatekeeper-ops", "NOTIFY_TOKEN"],
       ["scheduler", "NOTIFY_TOKEN"],
       ["gatekeeper-email", "NOTIFY_TOKEN"],
       ["gatekeeper-spend", "NOTIFY_TOKEN"],
@@ -28,7 +29,8 @@ export function groupsFor(roster) {
       ["gatekeeper-deploy", "OPERATOR_API_TOKEN"],
       ["gatekeeper-vault", "OPERATOR_API_TOKEN"],
       ["gatekeeper-chronicle", "OPERATOR_API_TOKEN"],
-      ["gatekeeper-x", "OPERATOR_API_TOKEN"]
+      ["gatekeeper-x", "OPERATOR_API_TOKEN"],
+      ["gatekeeper-ops", "OPERATOR_API_TOKEN"]
     ],
     publish: [
       ["gatekeeper-deploy", "PUBLISH_TOKEN"],
@@ -48,11 +50,13 @@ export function groupsFor(roster) {
     ],
     email: [
       ["gatekeeper-email", "EMAIL_SERVICE_TOKEN"],
-      ["scheduler", "EMAIL_TOKEN"]
+      ["scheduler", "EMAIL_TOKEN"],
+      ["gatekeeper-ops", "EMAIL_SERVICE_TOKEN"]
     ],
     "wake-trigger": [
       ["scheduler", "WAKE_TRIGGER_TOKEN"],
-      ["gatekeeper-telegram", "WAKE_TRIGGER_TOKEN"]
+      ["gatekeeper-telegram", "WAKE_TRIGGER_TOKEN"],
+      ["gatekeeper-ops", "WAKE_TRIGGER_TOKEN"]
     ],
     chronicle: [
       ["gatekeeper-chronicle", "CHRONICLE_SERVICE_TOKEN"],
