@@ -363,7 +363,7 @@ export default {
     ctx.waitUntil(
       notifyOperator(
         env,
-        `[${identity.agentId}] inbound email from ${from}: "${subject.slice(0, 200)}"\n\n` +
+        `[${identity.agentId}] inbound email from ${from.slice(0, 200)}: "${subject.slice(0, 200)}"\n\n` +
           `${text.slice(0, 800)}${text.length > 800 ? "…" : ""}\n\n` +
           `(full copy: the chronicle, the agent's next wake, and your mailbox forward)`
       )

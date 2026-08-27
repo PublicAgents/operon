@@ -95,6 +95,10 @@ async function sendToOperator(env: Env, text: string, actions?: NotifyAction[]):
       body: JSON.stringify({
         chat_id: env.OPERATOR_CHAT_ID,
         text,
+        // Notify text routinely quotes untrusted content (inbound mail,
+        // merchant URLs, post text); a link preview would let a sender
+        // decorate the operator's oversight channel with chosen content.
+        link_preview_options: { is_disabled: true },
         ...(buttons.length > 0 ? { reply_markup: { inline_keyboard: [buttons] } } : {})
       })
     }
