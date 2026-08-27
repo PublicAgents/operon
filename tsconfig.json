@@ -44,6 +44,9 @@
     },
     {
       "path": "./packages/chronicle"
+    },
+    {
+      "path": "./packages/gatekeepers/x"
     }
   ]
 }

@@ -65,6 +65,23 @@ publish, a PR, or an email. Retrieve it when you need to USE it:
   operon vault list                      your labels and timestamps (no values)
   operon vault delete <label>            remove a secret permanently
 
+X doors (post to YOUR OWN X account; the policy is enforced by the
+Gatekeeper, not by trust: the account is labeled automated with an AI
+disclosure, volume is capped (default 4/day, 20 min apart), duplicates
+and mention/hashtag spam are refused, and every post is ledgered and
+shown to the operator. Low volume, value first):
+
+  operon x post --text <t>               post to your own account (or pipe the
+                                         text on stdin and omit --text); answers
+                                         with the live URL
+  operon x posts                         your recent posts (cross-wake memory)
+  operon x dm <@handle> --text <t>       DM someone who has DM'd YOU first (or
+                                         pipe the text on stdin). Reply-only by
+                                         construction: a cold DM is not a
+                                         refusal, the recipient simply does not
+                                         resolve. Inbound DMs arrive in inbox/
+                                         each wake, beside your mail.
+
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
 allowlisted repos = you may read and comment on anything in them.
@@ -173,6 +190,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseTill(rest);
     case "vault":
       return parseVault(rest);
+    case "x":
+      return parseX(rest);
     case "channel": {
       const [sub, idRaw] = positionals(rest);
       const id = Number(idRaw);
@@ -249,6 +268,27 @@ function parseVault(args: string[]): CliCall {
       return { path: "/vault/delete", payload: { label } };
     default:
       throw new CliUsageError("unknown vault subcommand; expected one of: set, get, list, delete");
+  }
+}
+
+function parseX(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  switch (sub) {
+    case "post": {
+      // --text may be omitted: main() then reads the text from stdin.
+      const text = flagValue(rest, "--text");
+      return { path: "/x/post", payload: { ...(text !== undefined ? { text } : {}) } };
+    }
+    case "posts":
+      return { path: "/x/posts", payload: {} };
+    case "dm": {
+      const [to] = positionals(rest);
+      const text = flagValue(rest, "--text");
+      if (!to) throw new CliUsageError("usage: operon x dm <@handle> --text <t> (or pipe the text on stdin)");
+      return { path: "/x/dm", payload: { to, ...(text !== undefined ? { text } : {}) } };
+    }
+    default:
+      throw new CliUsageError("unknown x subcommand; expected one of: post, posts, dm");
   }
 }
 
@@ -393,20 +433,30 @@ async function main(): Promise<number> {
     return 3;
   }
 
-  // vault set without --value: the value comes from stdin (kept off argv).
-  if (call.path === "/vault/set" && call.payload.value === undefined) {
+  // vault set / x post without the inline flag: the payload text comes
+  // from stdin (kept off argv; posts keep their formatting).
+  const stdinField =
+    call.path === "/vault/set" && call.payload.value === undefined
+      ? { name: "value", usage: "vault set: pass --value <v> or pipe the value on stdin", trim: true }
+      : call.path === "/x/post" && call.payload.text === undefined
+        ? { name: "text", usage: "x post: pass --text <t> or pipe the text on stdin", trim: false }
+        : call.path === "/x/dm" && call.payload.text === undefined
+          ? { name: "text", usage: "x dm: pass --text <t> or pipe the text on stdin", trim: false }
+          : null;
+  if (stdinField) {
     if (process.stdin.isTTY) {
-      console.error("vault set: pass --value <v> or pipe the value on stdin");
+      console.error(stdinField.usage);
       return 2;
     }
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-    const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    let value = Buffer.concat(chunks).toString("utf8");
+    value = stdinField.trim ? value.replace(/\r?\n$/, "") : value.replace(/\n$/, "");
     if (!value) {
-      console.error("vault set: empty value on stdin");
+      console.error(`${stdinField.name} was empty on stdin`);
       return 2;
     }
-    call.payload.value = value;
+    call.payload[stdinField.name] = value;
   }
 
   const isGet = call.path === "/capabilities";

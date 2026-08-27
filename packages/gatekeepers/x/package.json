@@ -1,0 +1,48 @@
+{
+  "name": "@operon/gatekeeper-x",
+  "version": "0.0.0",
+  "description": "The X Gatekeeper: an agent posts to its OWN X account autonomously, with the X policy baked in as refusals rather than guidelines. Disclosure fails closed (no posting until the operator attests the account carries X's automated label and an AI-disclosure bio), volume is capped and spaced atomically per agent, duplicates and mention/hashtag spam are refused pre-flight, and every post and refusal is ledgered and notified. The OAuth credentials exist only in this Worker; the wake submits text over a per-agent bearer.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0",
+    "@operon/chronicle": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

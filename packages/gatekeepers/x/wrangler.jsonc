@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-x",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "POSTER", "class_name": "PosterBox" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PosterBox", "Ledger"] }]
+  // ROSTER injected at deploy.
+  // Vars:
+  //   X_DISCLOSURE_ATTESTED  "true" ONLY after the operator has set the
+  //                          automated-account label + AI-disclosure bio
+  //                          on x.com; posting fails closed without it
+  //   X_DAILY_CAP            posts/day (default 4, hard ceiling 10)
+  // Secrets:
+  //   X_API_KEY / X_API_SECRET            the developer app (OAuth1)
+  //   X_ACCESS_TOKEN_<ID> / X_ACCESS_SECRET_<ID>  the agent's own account
+  //   X_TOKEN_<AGENTID>                   per-agent door bearer
+  //   NOTIFY_TOKEN, OPERATOR_API_TOKEN    the usual pair
+}
