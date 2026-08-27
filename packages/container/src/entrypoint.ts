@@ -185,7 +185,8 @@ async function ackInbox(config: WakeConfig, ids: string[]): Promise<void> {
  */
 async function pullOperatorChannel(
   config: WakeConfig,
-  chassisWritten: Map<string, string>
+  chassisWritten: Map<string, string>,
+  denylist: string[]
 ): Promise<number | null> {
   if (!config.notifyUrl || !config.notifyToken) return null;
   const base = config.notifyUrl.replace(/\/notify$/, "");
@@ -231,7 +232,7 @@ async function pullOperatorChannel(
     // advance, so nothing is lost.
     let transcriptText: string;
     try {
-      const sanitizedResult = await sanitizeTranscript(composed, autoDenylist(config));
+      const sanitizedResult = await sanitizeTranscript(composed, denylist);
       transcriptText = sanitizedResult.content;
       if (sanitizedResult.sanitized) {
         log("operator channel: transcript sanitized at write (matched the secret scanner)");
@@ -516,7 +517,7 @@ async function main(): Promise<number> {
   const denylist = [...autoDenylist(config), ...vault.values];
 
   const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
-  const channelUpTo = await pullOperatorChannel(config, chassisWritten);
+  const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
