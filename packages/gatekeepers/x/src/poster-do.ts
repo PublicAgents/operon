@@ -20,12 +20,18 @@ interface DayWindow {
 }
 
 export class PosterBox extends DurableObject {
-  /** Atomically apply the policy and reserve the slot. */
+  /**
+   * Atomically apply the policy and reserve the slot. The returned
+   * prevLastPostAt is the reservation's OWN rollback value: release()
+   * takes it back and restores it only if this reservation is still the
+   * latest (compare-and-swap on the spacing clock), so overlapping
+   * attempts cannot corrupt each other's rollback state.
+   */
   async reservePost(
     text: string,
     nowIso: string,
     dailyCap: number
-  ): Promise<{ ok: true } | { ok: false; problem: PostProblem }> {
+  ): Promise<{ ok: true; prevLastPostAt: number | null } | { ok: false; problem: PostProblem }> {
     const day = nowIso.slice(0, 10);
     const window = await this.ctx.storage.get<DayWindow>("window");
     const postedToday = window && window.day === day ? window.count : 0;
@@ -43,26 +49,27 @@ export class PosterBox extends DurableObject {
     if (problem) return { ok: false, problem };
 
     await this.ctx.storage.put("window", { day, count: postedToday + 1 });
-    // The previous spacing clock is kept until the delivery is known
-    // good: a failed delivery must restore it, or the retry would be
-    // blocked 20 minutes for a post that never happened.
-    await this.ctx.storage.put("prevLastPostAt", lastPostAt);
     await this.ctx.storage.put("lastPostAt", Date.parse(nowIso));
-    return { ok: true };
+    return { ok: true, prevLastPostAt: lastPostAt };
   }
 
-  /** Return a reserved-but-undelivered slot (delivery failed): cap AND spacing. */
-  async release(nowIso: string): Promise<void> {
+  /**
+   * Return a reserved-but-undelivered slot (delivery failed): the cap
+   * slot always, the spacing clock only if this reservation is still
+   * the latest one (a later reservation owns the clock now).
+   */
+  async release(nowIso: string, prevLastPostAt: number | null): Promise<void> {
     const day = nowIso.slice(0, 10);
     const window = await this.ctx.storage.get<DayWindow>("window");
     if (window && window.day === day && window.count > 0) {
       await this.ctx.storage.put("window", { day, count: window.count - 1 });
     }
-    const previous = await this.ctx.storage.get<number | null>("prevLastPostAt");
-    if (previous === null || previous === undefined) {
+    const current = await this.ctx.storage.get<number>("lastPostAt");
+    if (current !== Date.parse(nowIso)) return; // a later reservation owns the clock
+    if (prevLastPostAt === null) {
       await this.ctx.storage.delete("lastPostAt");
     } else {
-      await this.ctx.storage.put("lastPostAt", previous);
+      await this.ctx.storage.put("lastPostAt", prevLastPostAt);
     }
   }
 

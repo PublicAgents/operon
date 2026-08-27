@@ -156,17 +156,20 @@ async function handlePost(request: Request, env: Env, agent: RosterAgent): Promi
     response = await fetch(POST_ENDPOINT, {
       method: "POST",
       headers: { authorization, "content-type": "application/json" },
-      body: JSON.stringify({ text: post })
+      body: JSON.stringify({ text: post }),
+      // Bounded in-flight time: the reservation's rollback logic assumes
+      // deliveries settle promptly.
+      signal: AbortSignal.timeout(15_000)
     });
   } catch (error) {
-    await poster(env, agent.id).release(now);
+    await poster(env, agent.id).release(now, reservation.prevLastPostAt);
     await record(env, "post_failed", { agentId: agent.id, detail: String(error).slice(0, 200) });
     return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
   }
 
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 300);
-    await poster(env, agent.id).release(now);
+    await poster(env, agent.id).release(now, reservation.prevLastPostAt);
     await record(env, "post_failed", { agentId: agent.id, status: response.status, detail });
     return errorResponse(502, "x_rejected", `${response.status}: ${detail}`);
   }
