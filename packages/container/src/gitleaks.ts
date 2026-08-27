@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runCapture } from "./exec.js";
@@ -67,6 +67,38 @@ export async function runGitleaks(
     return parseReport(await readFile(reportPath, "utf8"));
   } finally {
     await rm(reportPath, { force: true });
+  }
+}
+
+/**
+ * Run gitleaks over an in-memory file set (a temp dir is materialized and
+ * removed): the presleep gate hands it the agent-introduced changes only,
+ * not the whole tree, so unchanged history and chassis-written files
+ * cannot re-trip the gate. Files whose content could not be read are the
+ * unscannable failure's job, not this one's.
+ */
+export async function runGitleaksOnFiles(
+  files: Array<{ path: string; content: string | null }>,
+  options: GitleaksOptions = {}
+): Promise<GitleaksFinding[]> {
+  const scannable = files.filter(
+    (file): file is { path: string; content: string } => typeof file.content === "string"
+  );
+  if (scannable.length === 0) return [];
+  const dir = await mkdtemp(join(tmpdir(), "operon-presleep-"));
+  try {
+    for (const file of scannable) {
+      const target = join(dir, file.path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.content);
+    }
+    // Report repo-relative paths, not the temp dir's.
+    return (await runGitleaks(dir, options)).map(finding => ({
+      ...finding,
+      file: finding.file.startsWith(`${dir}/`) ? finding.file.slice(dir.length + 1) : finding.file
+    }));
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

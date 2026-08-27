@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseReport, runGitleaks } from "./gitleaks.js";
+import { parseReport, runGitleaks, runGitleaksOnFiles } from "./gitleaks.js";
 
 // A pattern-valid but fake GitHub PAT, assembled at runtime so this repo
 // never contains a token-shaped literal (push protection, and our own
@@ -84,5 +84,25 @@ describe.skipIf(!hasGitleaks)("runGitleaks (integration, local gitleaks)", () =>
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe.skipIf(!hasGitleaks)("runGitleaksOnFiles (integration, local gitleaks)", () => {
+  it("scans exactly the given set and reports repo-relative paths", async () => {
+    const findings = await runGitleaksOnFiles(
+      [
+        { path: "notes/leak.md", content: `token: ${FAKE_PAT}\n` },
+        { path: "JOURNAL.md", content: "## Wake 12\nclean\n" },
+        { path: "unreadable.bin", content: null }
+      ],
+      { configPath: CONFIG }
+    );
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every(f => f.file === "notes/leak.md")).toBe(true);
+  });
+
+  it("returns no findings for an empty or all-unscannable set", async () => {
+    expect(await runGitleaksOnFiles([], { configPath: CONFIG })).toEqual([]);
+    expect(await runGitleaksOnFiles([{ path: "a", content: null }], { configPath: CONFIG })).toEqual([]);
   });
 });
