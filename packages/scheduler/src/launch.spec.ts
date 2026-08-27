@@ -46,9 +46,20 @@ describe("prepareLaunch", () => {
     expect(prepared.env[WAKE_ENV.fallbackModel]).toBe("claude-haiku-4-5");
     expect(prepared.env[WAKE_ENV.githubToken]).toBe("gh-token");
     expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
-    expect(prepared.env[WAKE_ENV.notifyUrl]).toBe("https://tg/notify");
     expect(prepared.env[WAKE_ENV.secretDenylist]).toBe("a,b");
     expect(prepared.env[WAKE_ENV.maxWakeMinutes]).toBe("120");
+    // The umbilical (spec 0003 step 4): the door URL is a virtual host and
+    // the door token is the per-wake nonce, never a real bearer.
+    // The umbilical: door URLs are virtual hosts, tokens are the nonce.
+    // The direct-call doors (notify/publish/persist) carry their route in
+    // the URL; the rest are bases their callers append paths to.
+    expect(prepared.env[WAKE_ENV.notifyUrl]).toBe("http://notify.operon.internal/notify");
+    expect(prepared.env[WAKE_ENV.publishUrl]).toBe("http://publish.operon.internal/gatekeeper/publish");
+    expect(prepared.env[WAKE_ENV.persistUrl]).toBe("http://persist.operon.internal/commit");
+    expect(prepared.env[WAKE_ENV.prUrl]).toBe("http://pr.operon.internal/gatekeeper/pr");
+    expect(prepared.env[WAKE_ENV.emailUrl]).toBe("http://email.operon.internal");
+    expect(prepared.env[WAKE_ENV.notifyToken]).toBe(prepared.umbilicalNonce);
+    expect(prepared.umbilicalNonce).toMatch(/[0-9a-f-]{36}/);
   });
 
   it("fails closed with a named error when the mind credential is missing", async () => {

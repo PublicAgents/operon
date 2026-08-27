@@ -1,3 +1,4 @@
+import { doorHost } from "./umbilical-routes.js";
 import {
   wakeEnv,
   type RosterAgent,
@@ -60,6 +61,14 @@ export interface PreparedLaunch {
   agentId: string;
   trigger: WakeTrigger;
   env: Record<string, string>;
+  /**
+   * The umbilical (spec 0003 step 4): the container's door URLs point at
+   * virtual `<door>.operon.internal` hosts and every door token is this
+   * per-wake NONCE. The WakeContainer intercepts that egress, validates
+   * the nonce, swaps in the real bearer from the scheduler env, and
+   * forwards over a binding, so no door credential enters the container.
+   */
+  umbilicalNonce: string;
 }
 
 export async function prepareLaunch(
@@ -78,14 +87,42 @@ export async function prepareLaunch(
   }
 
   const githubToken = await context.getGithubToken(agent);
+  // The umbilical rewrites every door to a virtual host with the per-wake
+  // nonce as its bearer; the real bearers stay in the scheduler env and
+  // the WakeContainer's router attaches them. The mind credential and the
+  // github clone token are phase 2, untouched here.
+  const umbilicalNonce = crypto.randomUUID();
+  const doorOptions = {
+    // These three are called with the URL DIRECTLY (the caller appends no
+    // path), so the route lives in the URL; the others append their own.
+    notifyUrl: "http://" + doorHost("notify") + "/notify",
+    notifyToken: umbilicalNonce,
+    publishUrl: "http://" + doorHost("publish") + "/gatekeeper/publish",
+    publishToken: umbilicalNonce,
+    persistUrl: "http://" + doorHost("persist") + "/commit",
+    persistToken: umbilicalNonce,
+    prUrl: "http://" + doorHost("pr") + "/gatekeeper/pr",
+    prToken: umbilicalNonce,
+    emailUrl: "http://" + doorHost("email"),
+    emailToken: umbilicalNonce,
+    chronicleUrl: "http://" + doorHost("chronicle"),
+    chronicleToken: umbilicalNonce,
+    tillUrl: "http://" + doorHost("till"),
+    spendUrl: "http://" + doorHost("spend"),
+    vaultUrl: "http://" + doorHost("vault"),
+    xUrl: "http://" + doorHost("x")
+  };
   const secrets: WakeSecrets = { githubToken, mindCredential };
-  // Money bearers are per-agent (spec 0002 §3): each wake receives only
-  // its OWN till token, so a compromised wake sells only as itself. An
-  // agent with no token configured simply has the door closed.
-  const tillToken = context.getSecret(tillTokenVar(agent.id));
-  const spendToken = context.getSecret(spendTokenVar(agent.id));
-  const vaultToken = context.getSecret(vaultTokenVar(agent.id));
-  const xToken = context.getSecret(xTokenVar(agent.id));
+  // A per-agent door (spec 0002 §3) is open only when its REAL bearer is
+  // configured in the scheduler env; the container then carries the nonce
+  // as that door's token, never the real bearer (the umbilical router
+  // attaches the real one from env, keyed to this agent).
+  const perAgent = {
+    ...(context.getSecret(tillTokenVar(agent.id)) ? { tillToken: umbilicalNonce } : {}),
+    ...(context.getSecret(spendTokenVar(agent.id)) ? { spendToken: umbilicalNonce } : {}),
+    ...(context.getSecret(vaultTokenVar(agent.id)) ? { vaultToken: umbilicalNonce } : {}),
+    ...(context.getSecret(xTokenVar(agent.id)) ? { xToken: umbilicalNonce } : {})
+  };
   return {
     wakeId,
     agentId: agent.id,
@@ -93,13 +130,8 @@ export async function prepareLaunch(
     env: wakeEnv(
       { wakeId, trigger, agent },
       secrets,
-      {
-        ...context.options,
-        ...(tillToken ? { tillToken } : {}),
-        ...(spendToken ? { spendToken } : {}),
-        ...(vaultToken ? { vaultToken } : {}),
-        ...(xToken ? { xToken } : {})
-      }
-    )
+      { ...context.options, ...doorOptions, ...perAgent }
+    ),
+    umbilicalNonce
   };
 }
