@@ -151,6 +151,7 @@ export default {
 
     const target = new URL(request.url);
     target.searchParams.set("name", name);
+    target.searchParams.set("wake", wakeId);
     return session(env, agentId, name).fetch(new Request(target.toString(), request));
   }
 } satisfies ExportedHandler<Env>;

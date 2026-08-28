@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFill, cdpDecision, hostMatches, originOnDomain } from "./cdp-policy.js";
+import { applyFill, cdpDecision, hostMatches, originOnDomain, redactCredentials } from "./cdp-policy.js";
 
 const CREDS = {
   credentials: { github: { value: "p@ss'w\"o\\rd${x}", domains: ["github.com"] } }
@@ -120,6 +120,33 @@ describe("credential injection", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.reason).toBe("unknown_credential");
+  });
+});
+
+describe("response redaction", () => {
+  it("redacts a minted password read back out of the page", () => {
+    // The fill put the real value INTO the page; an ordinary evaluate
+    // reading input.value must not hand it to the mind.
+    const response = JSON.stringify({
+      id: 12,
+      result: { result: { type: "string", value: CREDS.credentials.github.value } }
+    });
+    const { frame, redacted } = redactCredentials(response, CREDS);
+    expect(redacted).toEqual(["github"]);
+    expect(frame).not.toContain(CREDS.credentials.github.value);
+    expect(frame).toContain("{{vault:web/github}}");
+  });
+
+  it("leaves ordinary frames untouched", () => {
+    const response = '{"id":3,"result":{"result":{"value":"hello"}}}';
+    const { frame, redacted } = redactCredentials(response, CREDS);
+    expect(frame).toBe(response);
+    expect(redacted).toEqual([]);
+  });
+
+  it("is a no-op when the session holds no credentials", () => {
+    const response = '{"id":3,"result":{}}';
+    expect(redactCredentials(response, {}).frame).toBe(response);
   });
 });
 

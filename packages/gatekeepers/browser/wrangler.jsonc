@@ -11,7 +11,12 @@
       { "name": "LEDGER", "class_name": "Ledger" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebSession", "WebMeter", "Ledger"] }]
+  // v1 shipped with the relay; WebMeter is a NEW class and needs its own
+  // tag: adding it to an applied migration would never register it.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WebSession", "Ledger"] },
+    { "tag": "v2", "new_sqlite_classes": ["WebMeter"] }
+  ]
   // No routes and no workers_dev: a service binding is the only way in
   // (binding-only auth; identity is x-operon-agent from the umbilical).
   // Vars: CF_ACCOUNT_ID, WEB_ORIGIN_DENYLIST, WEB_MAX_CONCURRENT.

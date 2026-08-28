@@ -135,7 +135,8 @@ export class Porch {
     this.server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       const took = handleWebUpgrade(request, socket, head, {
         webUrl: this.context.config.webUrl,
-        webToken: this.context.config.webToken
+        webToken: this.context.config.webToken,
+        wakeId: this.context.config.wakeId
       });
       if (!took) {
         socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");

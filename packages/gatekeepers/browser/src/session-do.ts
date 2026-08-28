@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { auditEvent, upstreamEndpoint } from "./audit.js";
-import { applyFill, cdpDecision, type RelayPolicy } from "./cdp-policy.js";
+import { applyFill, cdpDecision, redactCredentials, type RelayPolicy } from "./cdp-policy.js";
 
 /**
  * One browser session per (agent, session name): the relay, its policy,
@@ -56,6 +56,7 @@ export class WebSession extends DurableObject<SessionEnv> {
   private nextId = 900_000_000;
   private pendingOrigin = new Map<number, { raw: string; credential: string }>();
   private pendingCookieCapture = new Set<number>();
+  private pendingStorageCapture = new Set<number>();
   private timers: ReturnType<typeof setInterval>[] = [];
 
   /** Drop any live relay, then forget the saved identity (remote logout). */
@@ -124,6 +125,7 @@ export class WebSession extends DurableObject<SessionEnv> {
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
     const url = new URL(request.url);
     const name = url.searchParams.get("name") ?? "unnamed";
+    const wakeId = url.searchParams.get("wake") ?? "unknown";
     const generation = (await this.ctx.storage.get<number>("generation")) ?? 0;
     const policy = await this.policy();
 
@@ -164,6 +166,9 @@ export class WebSession extends DurableObject<SessionEnv> {
       this.opening = false;
       this.stopTimers();
       record("web_session_close", { reason });
+      // Free the concurrency slot and accrue this session's minutes, or
+      // a closed session would hold its slot until the cap is exhausted.
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
       try {
         upstream.close();
       } catch {
@@ -202,10 +207,21 @@ export class WebSession extends DurableObject<SessionEnv> {
         // Our own probes and captures never reach the client.
         if (this.consumeOriginReply(event.data, upstream, server, policy, record, teardown)) return;
         if (this.consumeCookieCapture(event.data, generation)) return;
+        if (this.consumeStorageCapture(event.data, generation)) return;
         const audit = auditEvent(event.data);
         if (audit) record(`web_${audit.kind}`, { url: audit.url });
+        // A fill puts the real password INTO the page, so an ordinary
+        // read-back (input.value via evaluate) would hand it to the mind.
+        // Redact every known credential value on the way out; the mind
+        // sees the placeholder it typed.
+        const scrubbed = redactCredentials(event.data, policy);
+        if (scrubbed.redacted.length > 0) {
+          record("web_credential_redacted", { credentials: scrubbed.redacted });
+        }
+        this.send(server, scrubbed.frame, teardown);
+        return;
       }
-      this.send(server, event.data as string | ArrayBuffer, teardown);
+      this.send(server, event.data as ArrayBuffer, teardown);
     });
     server.addEventListener("close", () => teardown("client_closed"));
     upstream.addEventListener("close", () => teardown("upstream_closed"));
@@ -325,6 +341,49 @@ export class WebSession extends DurableObject<SessionEnv> {
     return true;
   }
 
+  /** True when the frame answered one of our localStorage captures. */
+  private consumeStorageCapture(data: string, generation: number): boolean {
+    if (this.pendingStorageCapture.size === 0) return false;
+    let message: { id?: number; result?: { result?: { value?: unknown } } };
+    try {
+      message = JSON.parse(data);
+    } catch {
+      return false;
+    }
+    const id = typeof message.id === "number" ? message.id : -1;
+    if (!this.pendingStorageCapture.has(id)) return false;
+    this.pendingStorageCapture.delete(id);
+    const raw = message.result?.result?.value;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw) as { origin?: string; data?: Record<string, string> };
+        if (parsed.origin && parsed.data && Object.keys(parsed.data).length > 0) {
+          this.ctx.waitUntil(this.saveLocalStorage(parsed.origin, parsed.data, generation));
+        }
+      } catch {
+        /* a page can refuse localStorage access; nothing to store */
+      }
+    }
+    return true;
+  }
+
+  /** Merge one origin's localStorage into the saved identity. */
+  private async saveLocalStorage(
+    origin: string,
+    data: Record<string, string>,
+    generation: number
+  ): Promise<void> {
+    const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
+    if (current !== generation) return;
+    const previous = await this.ctx.storage.get<StoredState>("state");
+    const state: StoredState = {
+      cookies: previous?.cookies ?? [],
+      localStorage: { ...(previous?.localStorage ?? {}), [origin]: data },
+      savedAt: new Date().toISOString()
+    };
+    await this.ctx.storage.put("state", state);
+  }
+
   private startTimers(upstream: WebSocket): void {
     this.stopTimers();
     // keep_alive is an IDLE window, not a lifetime: a cheap call inside
@@ -350,6 +409,25 @@ export class WebSession extends DurableObject<SessionEnv> {
           upstream.send(JSON.stringify({ id, method: "Storage.getCookies" }));
         } catch {
           this.pendingCookieCapture.delete(id);
+        }
+        // Plenty of apps keep auth in localStorage, so cookies alone are
+        // an incomplete identity: capture it too, per origin.
+        const storageId = this.nextId++;
+        this.pendingStorageCapture.add(storageId);
+        try {
+          upstream.send(
+            JSON.stringify({
+              id: storageId,
+              method: "Runtime.evaluate",
+              params: {
+                expression:
+                  "JSON.stringify({origin: location.origin, data: Object.fromEntries(Object.entries(localStorage))})",
+                returnByValue: true
+              }
+            })
+          );
+        } catch {
+          this.pendingStorageCapture.delete(storageId);
         }
       }, SNAPSHOT_MS)
     );
@@ -420,6 +498,20 @@ export class WebSession extends DurableObject<SessionEnv> {
       .filter(host => host.length > 0);
     const credentials = await this.ctx.storage.get<RelayPolicy["credentials"]>("credentials");
     return { originDenylist: denylist, ...(credentials ? { credentials } : {}) };
+  }
+
+  /** Hand the concurrency slot back to the agent's meter. */
+  private async releaseSlot(agentId: string, name: string, wakeId: string): Promise<void> {
+    const namespace = this.env.WEB_METER as DurableObjectNamespace | undefined;
+    if (!namespace) return;
+    try {
+      const meter = namespace.get(namespace.idFromName(agentId)) as unknown as {
+        release(name: string, wakeId: string): Promise<void>;
+      };
+      await meter.release(name, wakeId);
+    } catch (error) {
+      console.error("web meter release failed", error);
+    }
   }
 
   private async reportEvent(kind: string, detail: Record<string, unknown>): Promise<void> {

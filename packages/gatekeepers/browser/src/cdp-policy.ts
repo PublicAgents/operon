@@ -270,6 +270,33 @@ export function applyFill(
   return { ok: true, frame: JSON.stringify(message) };
 }
 
+/**
+ * The response path: a fill puts the real password INTO the page, so an
+ * ordinary placeholder-free `Runtime.evaluate` could read it back out
+ * (`input.value`) and the mind would learn a value it must never hold.
+ * Every upstream frame is therefore scanned for known credential values
+ * and they are redacted before the client sees them. The mind gets the
+ * placeholder back, which is exactly what it typed.
+ */
+export function redactCredentials(frame: string, policy: RelayPolicy): { frame: string; redacted: string[] } {
+  const credentials = policy.credentials;
+  if (!credentials) return { frame, redacted: [] };
+  let out = frame;
+  const redacted: string[] = [];
+  for (const [name, credential] of Object.entries(credentials)) {
+    if (!credential.value || credential.value.length < 8) continue;
+    // JSON-encoded frames carry escaped forms of the value too.
+    const encoded = JSON.stringify(credential.value).slice(1, -1);
+    for (const needle of new Set([credential.value, encoded])) {
+      if (out.includes(needle)) {
+        out = out.split(needle).join(`{{vault:web/${name}}}`);
+        if (!redacted.includes(name)) redacted.push(name);
+      }
+    }
+  }
+  return { frame: out, redacted };
+}
+
 function hasPlaceholder(text: string): boolean {
   PLACEHOLDER.lastIndex = 0;
   return PLACEHOLDER.test(text);
