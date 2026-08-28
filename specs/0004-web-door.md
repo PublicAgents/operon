@@ -58,19 +58,22 @@ Cloudflare API token that reaches Browser Run.
 
 Each `WebSession` DO:
 
-- **Opens, fence FIRST, fail closed**: before any credential is
-  restored or any client frame is accepted, the relay raises the
-  wake's `allowedHosts` egress fence (section 5) and confirms it
-  active; if the fence cannot be raised, the open FAILS and nothing is
-  restored. Only then does it dial
+- **Opens (into an already-fenced container)**: the egress fence is
+  NOT raised by this DO, and could not be, `allowedHosts` belongs to
+  the `WakeContainer` (the scheduler-side supervisor), across the
+  umbilical from browser-gk, with no control path back. Instead a
+  web-capable agent's container is launched WITH the fence already in
+  force (section 5): there is no unfenced window to close because the
+  container never runs unfenced. So open simply dials
   `wss://api.cloudflare.com/.../browser-rendering/
   devtools/browser?keep_alive=600000&recording=true` with the
-  Worker-held API token, restore the saved storage state (CDP
-  `Storage.setCookies` + an init script for localStorage), fold those
-  cookie/token values into the wake denylist, and mark the session
-  live. Ordering is the invariant: cookies never exist in a reachable
-  session before the fence that contains them, so the first-open window
-  cannot leak.
+  Worker-held API token, restores the saved storage state (CDP
+  `Storage.setCookies` + an init script for localStorage), and folds
+  those cookie/token values into the wake denylist. browser-gk can rely
+  on the fence because the scheduler only wires the web door (the
+  BROWSER binding, the `web` option) for agents whose container is
+  launched fenced; a web upgrade cannot reach browser-gk from an
+  unfenced container.
 - **Relays**: pipes CDP frames both ways between the container side and
   Browser Run. The relay is transparent to clients and is where all
   policy lives.
@@ -427,15 +430,16 @@ interception machinery closes that gap:
     allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
     ships in the web door MVP: outbound is allowed only to the door
     hosts, the agent's own hosts, and wake infra (npm, GitHub), never
-    a browsing target (browsing is remote). The fence is WAKE-SCOPED
-    and MONOTONIC, not per-session: the FIRST web session to open in a
-    wake raises it, and it stays up until wake end. It is never lowered
-    on a session close, a reconnect gap, or when one of several
-    concurrent sessions ends, because once any session has run, a
-    credential may already sit in the mind's context; there is no safe
-    moment to reopen egress mid-wake. This removes the "while a session
-    is open" ambiguity: it is "from the first open to wake end." No
-    real account is created before this exists.
+    a browsing target (browsing is remote). The fence is a LAUNCH
+    property of the container, owned by the `WakeContainer` supervisor
+    that owns `allowedHosts`: a web-capable agent's container is started
+    WITH the deny-by-default allowlist already in force, for the whole
+    wake. This is why there is no cross-worker raise/confirm path to
+    define and no first-open window: the container never runs unfenced,
+    so `allowedHosts` predates any session. It is wake-scoped by
+    construction (a container is one wake) and never lowered mid-wake.
+    Non-web agents launch unfenced exactly as today. No real account is
+    created before this exists.
   - Content-logging every request (this section's JSONL/aggregates)
     over `interceptOutboundHttps` needs the CA-trust image change and
     stays phase 5. Losing the log for non-web traffic is not a
