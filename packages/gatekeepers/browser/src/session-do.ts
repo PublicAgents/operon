@@ -52,10 +52,19 @@ const SNAPSHOT_MS = 60_000;
 /** How long a closing session waits for its last capture to land. */
 const FINAL_CAPTURE_MS = 3_000;
 
+/** An unpredictable CDP frame id, so a client cannot forge a probe reply. */
+function randomFrameId(): number {
+  const bytes = crypto.getRandomValues(new Uint32Array(1));
+  // Well above any client's counter, and not guessable.
+  return 1_000_000_000 + (bytes[0] % 1_000_000_000);
+}
+
 export class WebSession extends DurableObject<SessionEnv> {
   private upstream: WebSocket | null = null;
   private opening = false;
   private nextId = 900_000_000;
+  /** This relay's instance token: a stale relay must not write over a new one. */
+  private relayId = "";
   private pendingOrigin = new Map<number, { raw: string; credential: string }>();
   private pendingCookieCapture = new Set<number>();
   private pendingStorageCapture = new Set<number>();
@@ -164,6 +173,10 @@ export class WebSession extends DurableObject<SessionEnv> {
     server.accept();
     this.upstream = upstream;
     this.opening = false;
+    // Each relay gets an instance token; a capture from a PRIOR relay
+    // that is still settling must not overwrite the replacement's state.
+    const relayId = crypto.randomUUID();
+    this.relayId = relayId;
 
     const record = (kind: string, detail: Record<string, unknown>) => {
       this.ctx.waitUntil(this.reportEvent(kind, { agentId, name, ...detail }));
@@ -205,6 +218,12 @@ export class WebSession extends DurableObject<SessionEnv> {
         this.send(upstream, event.data as ArrayBuffer, teardown);
         return;
       }
+      // A client frame must never carry one of OUR in-flight ids: that
+      // is the origin-spoofing attempt above, so drop it outright.
+      if (this.usesReservedId(event.data)) {
+        record("web_blocked", { method: "reserved_id", reason: "probe_id_collision" });
+        return;
+      }
       const decision = cdpDecision(event.data, policy);
       if (decision.action === "block") {
         record("web_blocked", { method: decision.method, reason: decision.reason });
@@ -225,8 +244,8 @@ export class WebSession extends DurableObject<SessionEnv> {
       if (typeof event.data === "string") {
         // Our own probes and captures never reach the client.
         if (this.consumeOriginReply(event.data, upstream, server, policy, record, teardown)) return;
-        if (this.consumeCookieCapture(event.data, generation)) return;
-        if (this.consumeStorageCapture(event.data, generation)) return;
+        if (this.consumeCookieCapture(event.data, generation, relayId)) return;
+        if (this.consumeStorageCapture(event.data, generation, relayId)) return;
         const audit = auditEvent(event.data);
         if (audit) record(`web_${audit.kind}`, { url: audit.url });
         // A fill puts the real password INTO the page, so an ordinary
@@ -279,7 +298,11 @@ export class WebSession extends DurableObject<SessionEnv> {
       sessionId?: string;
       params?: { objectId?: string; contextId?: number; executionContextId?: number };
     };
-    const probeId = this.nextId++;
+    // The probe id must be UNPREDICTABLE: with a sequential id a client
+    // could send its own frame carrying the next id and an attacker-chosen
+    // "origin" value, and the reply would satisfy the pending probe, so
+    // the credential would be injected against a forged origin.
+    const probeId = randomFrameId();
     this.pendingOrigin.set(probeId, { raw, credential });
     const objectId = message.params?.objectId;
     const contextId = message.params?.contextId ?? message.params?.executionContextId;
@@ -306,6 +329,21 @@ export class WebSession extends DurableObject<SessionEnv> {
         };
     record("web_fill_probe", { credential });
     this.send(upstream, JSON.stringify(probe), teardown);
+  }
+
+  /** Does a client frame reuse an id the relay currently has in flight? */
+  private usesReservedId(data: string): boolean {
+    if (this.pendingOrigin.size === 0 && this.pendingCookieCapture.size === 0 && this.pendingStorageCapture.size === 0) {
+      return false;
+    }
+    let message: { id?: unknown };
+    try {
+      message = JSON.parse(data);
+    } catch {
+      return false;
+    }
+    const id = typeof message.id === "number" ? message.id : -1;
+    return this.pendingOrigin.has(id) || this.pendingCookieCapture.has(id) || this.pendingStorageCapture.has(id);
   }
 
   /** True when the frame was one of our origin probes (consumed here). */
@@ -342,7 +380,7 @@ export class WebSession extends DurableObject<SessionEnv> {
   }
 
   /** True when the frame answered one of our periodic cookie captures. */
-  private consumeCookieCapture(data: string, generation: number): boolean {
+  private consumeCookieCapture(data: string, generation: number, relayId: string): boolean {
     if (this.pendingCookieCapture.size === 0) return false;
     let message: { id?: number; result?: { cookies?: StoredCookie[] } };
     try {
@@ -355,13 +393,13 @@ export class WebSession extends DurableObject<SessionEnv> {
     this.pendingCookieCapture.delete(id);
     const cookies = message.result?.cookies;
     if (Array.isArray(cookies)) {
-      this.ctx.waitUntil(this.saveState(cookies, generation));
+      this.ctx.waitUntil(this.saveState(cookies, generation, relayId));
     }
     return true;
   }
 
   /** True when the frame answered one of our localStorage captures. */
-  private consumeStorageCapture(data: string, generation: number): boolean {
+  private consumeStorageCapture(data: string, generation: number, relayId: string): boolean {
     if (this.pendingStorageCapture.size === 0) return false;
     let message: { id?: number; result?: { result?: { value?: unknown } } };
     try {
@@ -377,7 +415,7 @@ export class WebSession extends DurableObject<SessionEnv> {
       try {
         const parsed = JSON.parse(raw) as { origin?: string; data?: Record<string, string> };
         if (parsed.origin && parsed.data && Object.keys(parsed.data).length > 0) {
-          this.ctx.waitUntil(this.saveLocalStorage(parsed.origin, parsed.data, generation));
+          this.ctx.waitUntil(this.saveLocalStorage(parsed.origin, parsed.data, generation, relayId));
         }
       } catch {
         /* a page can refuse localStorage access; nothing to store */
@@ -390,13 +428,14 @@ export class WebSession extends DurableObject<SessionEnv> {
   private async saveLocalStorage(
     origin: string,
     data: Record<string, string>,
-    generation: number
+    generation: number,
+    relayId: string
   ): Promise<void> {
     // Atomic for the same reason as saveState: a delete must not be
     // reversed by a write that checked the generation before it landed.
     await this.ctx.blockConcurrencyWhile(async () => {
       const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-      if (current !== generation) return;
+      if (current !== generation || this.relayId !== relayId) return;
       const previous = await this.ctx.storage.get<StoredState>("state");
       const state: StoredState = {
         cookies: previous?.cookies ?? [],
@@ -425,14 +464,14 @@ export class WebSession extends DurableObject<SessionEnv> {
 
   /** One capture round: cookies + localStorage, both best-effort. */
   private captureNow(upstream: WebSocket): void {
-    const cookieId = this.nextId++;
+    const cookieId = randomFrameId();
     this.pendingCookieCapture.add(cookieId);
     try {
       upstream.send(JSON.stringify({ id: cookieId, method: "Storage.getCookies" }));
     } catch {
       this.pendingCookieCapture.delete(cookieId);
     }
-    const storageId = this.nextId++;
+    const storageId = randomFrameId();
     this.pendingStorageCapture.add(storageId);
     try {
       upstream.send(
@@ -523,13 +562,14 @@ export class WebSession extends DurableObject<SessionEnv> {
    * the old generation and is refused, so deleted cookies cannot come
    * back under the same name.
    */
-  private async saveState(cookies: StoredCookie[], generation: number): Promise<void> {
+  private async saveState(cookies: StoredCookie[], generation: number, relayId: string): Promise<void> {
     // The generation check and the write must be ATOMIC: a delete landing
     // between them would be reversed by this write, which is exactly the
     // resurrection the operator's logout must never allow.
     await this.ctx.blockConcurrencyWhile(async () => {
       const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-      if (current !== generation) return;
+      // Refuse a write from a superseded relay as well as a deleted one.
+      if (current !== generation || this.relayId !== relayId) return;
       const previous = await this.ctx.storage.get<StoredState>("state");
       const state: StoredState = {
         cookies,
