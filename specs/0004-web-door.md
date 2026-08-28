@@ -262,7 +262,15 @@ Through the ops gateway (spec 0003 section 3), new routes:
   (`Cloudflare.getLiveView`), which is watch-and-intervene: the
   operator can see the page the agent sees and take the wheel.
 - Recordings live in the Cloudflare dashboard (Browser Run > Runs);
-  the session ledger rows carry the session id to find them.
+  the session ledger rows carry the session id to find them. A
+  recording is rrweb event JSON (DOM mutations, input events,
+  navigations), not video and not raw CDP frames; input field content
+  is masked by default. Cloudflare retains recordings for 30 DAYS
+  (2-hour cap per session), then deletes them. The ledger is therefore
+  the permanent audit trail and the recording the 30-day replay
+  window; if longer replay retention is ever wanted, the recording is
+  fetchable as JSON via API on session close and an archival hop into
+  R2 makes it ours (optional, phase 4).
 
 ## 7. Local testing without a local browser
 
