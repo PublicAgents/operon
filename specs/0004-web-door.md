@@ -58,11 +58,19 @@ Cloudflare API token that reaches Browser Run.
 
 Each `WebSession` DO:
 
-- **Opens**: dials `wss://api.cloudflare.com/.../browser-rendering/
+- **Opens, fence FIRST, fail closed**: before any credential is
+  restored or any client frame is accepted, the relay raises the
+  wake's `allowedHosts` egress fence (section 5) and confirms it
+  active; if the fence cannot be raised, the open FAILS and nothing is
+  restored. Only then does it dial
+  `wss://api.cloudflare.com/.../browser-rendering/
   devtools/browser?keep_alive=600000&recording=true` with the
-  Worker-held API token, restores the saved storage state (CDP
-  `Storage.setCookies` + an init script for localStorage), and marks
-  the session live.
+  Worker-held API token, restore the saved storage state (CDP
+  `Storage.setCookies` + an init script for localStorage), fold those
+  cookie/token values into the wake denylist, and mark the session
+  live. Ordering is the invariant: cookies never exist in a reachable
+  session before the fence that contains them, so the first-open window
+  cannot leak.
 - **Relays**: pipes CDP frames both ways between the container side and
   Browser Run. The relay is transparent to clients and is where all
   policy lives.
@@ -228,17 +236,20 @@ same pattern as the phase-2 mind-credential injection.
   an `executionContextId` (or an `objectId`) that can point at a
   cross-origin iframe: a page from a bound domain can embed an
   attacker's frame, and substituting against the top-level origin would
-  inject the real password into the attacker's document. So the relay
-  resolves the target's origin by ASKING the browser, not by guessing
-  from passive event tracking: on a placeholder fill it issues its OWN
-  CDP call against the same target (`Runtime.callFunctionOn` with
-  `returnByValue`, running `function(){ return
-  this.ownerDocument.defaultView.origin }` on the `objectId`, or
-  `document.location.origin` for an `executionContextId`) and reads the
-  origin straight from the document it is about to write to. That is
-  authoritative for objectId- and contextId-targeted fills alike and
-  needs no origin bookkeeping. Substitution is REFUSED only if that
-  round-trip fails or returns an origin off the bound domain; an
+  inject the real password into the attacker's document. So the relay binds against the origin of the CDP SESSION/TARGET the
+  fill runs on, not against any JS object it probes. Under site
+  isolation every cross-origin frame is its own out-of-process target
+  with its own session, so the session a `callFunctionOn`/`evaluate`
+  arrives on identifies the exact frame being written to, and the relay
+  tracks that session's origin from `Target.attachedToTarget` +
+  `Page.frameNavigated`. This is why a JS-object probe is the WRONG
+  mechanism: a Playwright/chrome-devtools-mcp locator fill runs
+  `callFunctionOn` on a utility-script object and passes the element as
+  an ARGUMENT, so `this.ownerDocument` is the utility context, not the
+  field's frame; the session origin has no such ambiguity. When the
+  relay needs the live value (not just the last navigation) it evaluates
+  `location.origin` in that same session. Substitution is REFUSED only
+  if the session's frame origin is unknown or off the bound domain; an
   ordinary bound-domain fill resolves and proceeds. Anywhere off a bound domain
   the placeholder goes through verbatim: a steered mind cannot be
   phished into entering the GitHub password on a lookalike domain, or
