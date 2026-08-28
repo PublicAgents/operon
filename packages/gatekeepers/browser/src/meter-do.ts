@@ -22,12 +22,31 @@ interface WakeUsage {
 
 export type Admission = { ok: true; token: string } | { ok: false; reason: string };
 
+/**
+ * How long a hold may sit without a release before another open may take
+ * it over. Comfortably past Browser Run's 10-minute idle close, so it
+ * only ever rescues a hold whose relay died without releasing.
+ */
+const STALE_HOLD_MS = 20 * 60_000;
+
 export class WebMeter extends DurableObject {
   /** Admit a session open, or refuse it against the concurrency cap. */
   async admit(name: string, wakeId: string, maxConcurrent: number): Promise<Admission> {
     const usage = await this.currentUsage(wakeId);
     const open = Object.keys(usage.openedAt);
-    if (!open.includes(name) && open.length >= maxConcurrent) {
+    const held = usage.openedAt[name];
+    if (held) {
+      // A name already held is LIVE: refuse the duplicate here rather
+      // than issuing a second token. Overwriting the holder would let the
+      // duplicate's release delete the live session's entry, erasing it
+      // from the cap and losing its minutes. A hold left behind by a dead
+      // relay ages out, so a legitimate reopen is never stuck.
+      const age = Date.now() - Date.parse(held.at);
+      if (!Number.isFinite(age) || age < STALE_HOLD_MS) {
+        return { ok: false, reason: "web_session_busy" };
+      }
+    }
+    if (!held && open.length >= maxConcurrent) {
       return { ok: false, reason: "web_concurrency_cap" };
     }
     // The token identifies THIS admission: a late release from a prior

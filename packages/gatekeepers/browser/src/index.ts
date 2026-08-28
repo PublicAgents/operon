@@ -146,7 +146,11 @@ export default {
     const admitted = await meter(env, agentId).admit(name, wakeId, maxConcurrent(env));
     if (!admitted.ok) {
       await ledger(env).append("web_session_refused", { agentId, name, reason: admitted.reason });
-      return errorResponse(429, admitted.reason, `concurrency cap is ${maxConcurrent(env)}`);
+      // Busy is a conflict (that name is already live); the cap is a rate
+      // problem. Different causes, different codes.
+      return admitted.reason === "web_session_busy"
+        ? errorResponse(409, admitted.reason, "that session name is already open")
+        : errorResponse(429, admitted.reason, `concurrency cap is ${maxConcurrent(env)}`);
     }
 
     const target = new URL(request.url);
