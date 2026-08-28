@@ -18,6 +18,7 @@ export interface SessionEnv {
 
 export class WebSession extends DurableObject<SessionEnv> {
   private upstream: WebSocket | null = null;
+  private opening = false;
 
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
@@ -26,7 +27,11 @@ export class WebSession extends DurableObject<SessionEnv> {
     const accountId = this.env.CF_ACCOUNT_ID;
     const token = this.env.BROWSER_RUN_TOKEN;
     if (!accountId || !token) return new Response("browser_run_unconfigured", { status: 503 });
-    if (this.upstream) return new Response("session_busy", { status: 409 });
+    // One relay per DO. The dial below awaits, which yields; a second
+    // concurrent connect must be refused synchronously here, before that
+    // yield, or both would observe a null upstream and open two browsers.
+    if (this.upstream || this.opening) return new Response("session_busy", { status: 409 });
+    this.opening = true;
 
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
     const url = new URL(request.url);
@@ -41,10 +46,12 @@ export class WebSession extends DurableObject<SessionEnv> {
         headers: { upgrade: "websocket", authorization: `Bearer ${token}` }
       });
     } catch (error) {
+      this.opening = false;
       return new Response(`browser_run_unreachable: ${String(error).slice(0, 200)}`, { status: 502 });
     }
     const upstream = upstreamResponse.webSocket;
     if (!upstream) {
+      this.opening = false;
       return new Response(`browser_run_refused: ${upstreamResponse.status}`, { status: 502 });
     }
 
@@ -54,15 +61,19 @@ export class WebSession extends DurableObject<SessionEnv> {
     upstream.accept();
     server.accept();
     this.upstream = upstream;
+    this.opening = false;
 
     const record = (kind: string, detail: Record<string, unknown>) => {
-      void this.reportEvent(kind, { agentId, name, ...detail });
+      // waitUntil keeps the DO alive until the ledger append lands, so a
+      // close/error/idle mid-append cannot drop an audit row.
+      this.ctx.waitUntil(this.reportEvent(kind, { agentId, name, ...detail }));
     };
     record("web_session_open", {});
 
     const teardown = (reason: string) => {
       if (this.upstream === null) return;
       this.upstream = null;
+      this.opening = false;
       record("web_session_close", { reason });
       try {
         upstream.close();
