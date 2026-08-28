@@ -340,7 +340,7 @@ async function handleDmPull(env: Env, agent: RosterAgent, ctx: ExecutionContext)
       return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
     }
     const parsed = (await me.json()) as { data?: { id?: string } };
-    if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+    if (!parsed?.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
     selfId = parsed.data.id;
     await box.setSelfId(selfId);
   }
@@ -436,7 +436,7 @@ async function handleMe(env: Env, agent: RosterAgent): Promise<Response> {
   } catch {
     return errorResponse(502, "x_rejected", "users/me answered non-JSON");
   }
-  if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+  if (!parsed?.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
   // Opportunistically cache the self id the DM path also needs;
   // best-effort, since the profile answer must not depend on storage.
   try {
