@@ -152,6 +152,8 @@ export default {
     const target = new URL(request.url);
     target.searchParams.set("name", name);
     target.searchParams.set("wake", wakeId);
+    // The admission token: only this holder may release the slot later.
+    target.searchParams.set("slot", admitted.token);
     return session(env, agentId, name).fetch(new Request(target.toString(), request));
   }
 } satisfies ExportedHandler<Env>;

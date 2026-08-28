@@ -115,6 +115,16 @@ describe("credential injection", () => {
     expect(applyFill(call, "github", "https://github.com", CREDS).ok).toBe(false);
   });
 
+  it("refuses a fill when focus is inside a subframe", () => {
+    // The top page may be on a bound origin while focus sits in a
+    // cross-origin iframe; filling there would leak the credential.
+    const outcome = applyFill(raw, "github", "operon:focus-in-subframe", CREDS);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toBe("focus_in_subframe");
+    expect(JSON.parse(outcome.response).error.message).toContain("objectId");
+  });
+
   it("refuses an unknown credential name", () => {
     const outcome = applyFill(raw, "nope", "https://github.com", CREDS);
     expect(outcome.ok).toBe(false);

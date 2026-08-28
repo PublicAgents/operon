@@ -207,6 +207,19 @@ export function applyFill(
       reason: "unknown_credential"
     };
   }
+  // The probe reports this when focus sits inside a subframe: the fill
+  // would land in a document we cannot attribute, so it is refused.
+  if (targetOrigin === "operon:focus-in-subframe") {
+    return {
+      ok: false,
+      response: cdpError(
+        message,
+        "blocked_by_operon: focus is inside a subframe, so the target document cannot be " +
+          "attributed; target the field's objectId (callFunctionOn) instead"
+      ),
+      reason: "focus_in_subframe"
+    };
+  }
   if (!targetOrigin || !originOnDomain(targetOrigin, credential.domains)) {
     return {
       ok: false,

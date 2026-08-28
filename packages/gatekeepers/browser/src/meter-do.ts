@@ -8,13 +8,19 @@ import { DurableObject } from "cloudflare:workers";
  * session names exist so the operator can list them.
  */
 
+interface Held {
+  at: string;
+  /** Which relay holds this admission; a stale release must not free it. */
+  token: string;
+}
+
 interface WakeUsage {
   wakeId: string;
-  openedAt: Record<string, string>;
+  openedAt: Record<string, Held>;
   minutes: number;
 }
 
-export type Admission = { ok: true } | { ok: false; reason: string };
+export type Admission = { ok: true; token: string } | { ok: false; reason: string };
 
 export class WebMeter extends DurableObject {
   /** Admit a session open, or refuse it against the concurrency cap. */
@@ -24,25 +30,29 @@ export class WebMeter extends DurableObject {
     if (!open.includes(name) && open.length >= maxConcurrent) {
       return { ok: false, reason: "web_concurrency_cap" };
     }
-    usage.openedAt[name] = new Date().toISOString();
+    // The token identifies THIS admission: a late release from a prior
+    // holder of the same name must not free the current one, or a live
+    // session would slip the cap and its minutes would go unaccrued.
+    const token = crypto.randomUUID();
+    usage.openedAt[name] = { at: new Date().toISOString(), token };
     await this.ctx.storage.put("usage", usage);
 
     const names = new Set((await this.ctx.storage.get<string[]>("names")) ?? []);
     names.add(name);
     await this.ctx.storage.put("names", [...names]);
-    return { ok: true };
+    return { ok: true, token };
   }
 
   /** Mark a session closed and accrue its minutes into the wake total. */
-  async release(name: string, wakeId: string): Promise<void> {
+  async release(name: string, wakeId: string, token: string): Promise<void> {
     const usage = await this.currentUsage(wakeId);
-    const openedAt = usage.openedAt[name];
-    if (openedAt) {
-      const elapsed = Date.now() - Date.parse(openedAt);
-      if (Number.isFinite(elapsed) && elapsed > 0) usage.minutes += elapsed / 60_000;
-      delete usage.openedAt[name];
-      await this.ctx.storage.put("usage", usage);
-    }
+    const held = usage.openedAt[name];
+    // Only the holder may release: a stale release is a no-op.
+    if (!held || held.token !== token) return;
+    const elapsed = Date.now() - Date.parse(held.at);
+    if (Number.isFinite(elapsed) && elapsed > 0) usage.minutes += elapsed / 60_000;
+    delete usage.openedAt[name];
+    await this.ctx.storage.put("usage", usage);
   }
 
   /** Every session name this agent has (for the operator's list). */

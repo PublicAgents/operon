@@ -43,6 +43,8 @@ interface StoredState {
   /** origin -> (key -> value) */
   localStorage: Record<string, Record<string, string>>;
   savedAt: string;
+  /** The open sequence of the relay that wrote this (write ordering). */
+  seq?: number;
 }
 
 /** A cheap CDP call on an interval keeps a quiet session from idling out. */
@@ -63,8 +65,6 @@ export class WebSession extends DurableObject<SessionEnv> {
   private upstream: WebSocket | null = null;
   private opening = false;
   private nextId = 900_000_000;
-  /** This relay's instance token: a stale relay must not write over a new one. */
-  private relayId = "";
   private pendingOrigin = new Map<number, { raw: string; credential: string }>();
   private pendingCookieCapture = new Set<number>();
   private pendingStorageCapture = new Set<number>();
@@ -135,11 +135,12 @@ export class WebSession extends DurableObject<SessionEnv> {
     const url = new URL(request.url);
     const name = url.searchParams.get("name") ?? "unnamed";
     const wakeId = url.searchParams.get("wake") ?? "unknown";
+    const slotToken = url.searchParams.get("slot") ?? "";
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
     if (this.upstream || this.opening) {
       // The caller reserved a slot for this name before reaching us; a
       // refusal must not keep it (the live session already holds one).
-      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId, slotToken));
       return new Response("session_busy", { status: 409 });
     }
     this.opening = true;
@@ -156,13 +157,13 @@ export class WebSession extends DurableObject<SessionEnv> {
       this.opening = false;
       // A failed open must hand its slot back, or a few unreachable
       // dials would exhaust the concurrency cap for the rest of the wake.
-      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId, slotToken));
       return new Response(`browser_run_unreachable: ${String(error).slice(0, 200)}`, { status: 502 });
     }
     const upstream = upstreamResponse.webSocket;
     if (!upstream) {
       this.opening = false;
-      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId, slotToken));
       return new Response(`browser_run_refused: ${upstreamResponse.status}`, { status: 502 });
     }
 
@@ -173,10 +174,13 @@ export class WebSession extends DurableObject<SessionEnv> {
     server.accept();
     this.upstream = upstream;
     this.opening = false;
-    // Each relay gets an instance token; a capture from a PRIOR relay
-    // that is still settling must not overwrite the replacement's state.
-    const relayId = crypto.randomUUID();
-    this.relayId = relayId;
+    // Each relay gets a monotonic open SEQUENCE. A write is accepted
+    // only if no NEWER relay has written since: that keeps a prior
+    // relay's still-settling final capture (which holds the freshest
+    // login) while never letting it clobber a replacement's newer state.
+    const openSeq = ((await this.ctx.storage.get<number>("openSeq")) ?? 0) + 1;
+    await this.ctx.storage.put("openSeq", openSeq);
+    const relayId = openSeq;
 
     const record = (kind: string, detail: Record<string, unknown>) => {
       this.ctx.waitUntil(this.reportEvent(kind, { agentId, name, ...detail }));
@@ -193,7 +197,7 @@ export class WebSession extends DurableObject<SessionEnv> {
       record("web_session_close", { reason });
       // Free the concurrency slot and accrue this session's minutes, or
       // a closed session would hold its slot until the cap is exhausted.
-      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId, slotToken));
       // A login inside the first interval must not be lost, so capture
       // once more and let the replies LAND before closing: firing the
       // commands and closing immediately would drop them on the floor.
@@ -306,6 +310,16 @@ export class WebSession extends DurableObject<SessionEnv> {
     this.pendingOrigin.set(probeId, { raw, credential });
     const objectId = message.params?.objectId;
     const contextId = message.params?.contextId ?? message.params?.executionContextId;
+    // An Input.* fill names no context: it goes wherever FOCUS is, which
+    // may be inside a cross-origin iframe even though the top page is on
+    // a bound origin. Probing the top frame would then authorize against
+    // the wrong document, so the probe reports the focused frame instead:
+    // if focus is delegated into a subframe we cannot resolve it safely
+    // from here, and the fill is refused (the client should target the
+    // field's objectId, which resolves exactly).
+    const focusAware =
+      "(function(){ const a = document.activeElement; " +
+      "return (a && a.tagName === 'IFRAME') ? 'operon:focus-in-subframe' : location.origin })()";
     const probe = objectId
       ? {
           id: probeId,
@@ -321,7 +335,7 @@ export class WebSession extends DurableObject<SessionEnv> {
           id: probeId,
           method: "Runtime.evaluate",
           params: {
-            expression: "location.origin",
+            expression: contextId !== undefined ? "location.origin" : focusAware,
             returnByValue: true,
             ...(contextId !== undefined ? { contextId } : {})
           },
@@ -380,7 +394,7 @@ export class WebSession extends DurableObject<SessionEnv> {
   }
 
   /** True when the frame answered one of our periodic cookie captures. */
-  private consumeCookieCapture(data: string, generation: number, relayId: string): boolean {
+  private consumeCookieCapture(data: string, generation: number, relayId: number): boolean {
     if (this.pendingCookieCapture.size === 0) return false;
     let message: { id?: number; result?: { cookies?: StoredCookie[] } };
     try {
@@ -399,7 +413,7 @@ export class WebSession extends DurableObject<SessionEnv> {
   }
 
   /** True when the frame answered one of our localStorage captures. */
-  private consumeStorageCapture(data: string, generation: number, relayId: string): boolean {
+  private consumeStorageCapture(data: string, generation: number, relayId: number): boolean {
     if (this.pendingStorageCapture.size === 0) return false;
     let message: { id?: number; result?: { result?: { value?: unknown } } };
     try {
@@ -429,18 +443,20 @@ export class WebSession extends DurableObject<SessionEnv> {
     origin: string,
     data: Record<string, string>,
     generation: number,
-    relayId: string
+    relayId: number
   ): Promise<void> {
     // Atomic for the same reason as saveState: a delete must not be
     // reversed by a write that checked the generation before it landed.
     await this.ctx.blockConcurrencyWhile(async () => {
       const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-      if (current !== generation || this.relayId !== relayId) return;
+      if (current !== generation) return;
       const previous = await this.ctx.storage.get<StoredState>("state");
+      if (previous?.seq !== undefined && previous.seq > relayId) return;
       const state: StoredState = {
         cookies: previous?.cookies ?? [],
         localStorage: { ...(previous?.localStorage ?? {}), [origin]: data },
-        savedAt: new Date().toISOString()
+        savedAt: new Date().toISOString(),
+        seq: relayId
       };
       await this.ctx.storage.put("state", state);
     });
@@ -562,19 +578,22 @@ export class WebSession extends DurableObject<SessionEnv> {
    * the old generation and is refused, so deleted cookies cannot come
    * back under the same name.
    */
-  private async saveState(cookies: StoredCookie[], generation: number, relayId: string): Promise<void> {
+  private async saveState(cookies: StoredCookie[], generation: number, relayId: number): Promise<void> {
     // The generation check and the write must be ATOMIC: a delete landing
     // between them would be reversed by this write, which is exactly the
     // resurrection the operator's logout must never allow.
     await this.ctx.blockConcurrencyWhile(async () => {
       const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-      // Refuse a write from a superseded relay as well as a deleted one.
-      if (current !== generation || this.relayId !== relayId) return;
+      if (current !== generation) return;
       const previous = await this.ctx.storage.get<StoredState>("state");
+      // Ordering, not ownership: a late write from an older relay is kept
+      // unless a NEWER relay has already saved.
+      if (previous?.seq !== undefined && previous.seq > relayId) return;
       const state: StoredState = {
         cookies,
         localStorage: previous?.localStorage ?? {},
-        savedAt: new Date().toISOString()
+        savedAt: new Date().toISOString(),
+        seq: relayId
       };
       await this.ctx.storage.put("state", state);
     });
@@ -590,14 +609,14 @@ export class WebSession extends DurableObject<SessionEnv> {
   }
 
   /** Hand the concurrency slot back to the agent's meter. */
-  private async releaseSlot(agentId: string, name: string, wakeId: string): Promise<void> {
+  private async releaseSlot(agentId: string, name: string, wakeId: string, token: string): Promise<void> {
     const namespace = this.env.WEB_METER as DurableObjectNamespace | undefined;
     if (!namespace) return;
     try {
       const meter = namespace.get(namespace.idFromName(agentId)) as unknown as {
-        release(name: string, wakeId: string): Promise<void>;
+        release(name: string, wakeId: string, token: string): Promise<void>;
       };
-      await meter.release(name, wakeId);
+      await meter.release(name, wakeId, token);
     } catch (error) {
       console.error("web meter release failed", error);
     }
