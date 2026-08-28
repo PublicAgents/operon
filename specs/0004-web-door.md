@@ -239,21 +239,21 @@ same pattern as the phase-2 mind-credential injection.
   an `executionContextId` (or an `objectId`) that can point at a
   cross-origin iframe: a page from a bound domain can embed an
   attacker's frame, and substituting against the top-level origin would
-  inject the real password into the attacker's document. So the relay binds against the origin of the CDP SESSION/TARGET the
-  fill runs on, not against any JS object it probes. Under site
-  isolation every cross-origin frame is its own out-of-process target
-  with its own session, so the session a `callFunctionOn`/`evaluate`
-  arrives on identifies the exact frame being written to, and the relay
-  tracks that session's origin from `Target.attachedToTarget` +
-  `Page.frameNavigated`. This is why a JS-object probe is the WRONG
-  mechanism: a Playwright/chrome-devtools-mcp locator fill runs
-  `callFunctionOn` on a utility-script object and passes the element as
-  an ARGUMENT, so `this.ownerDocument` is the utility context, not the
-  field's frame; the session origin has no such ambiguity. When the
-  relay needs the live value (not just the last navigation) it evaluates
-  `location.origin` in that same session. Substitution is REFUSED only
-  if the session's frame origin is unknown or off the bound domain; an
-  ordinary bound-domain fill resolves and proceeds. Anywhere off a bound domain
+  inject the real password into the attacker's document. So the relay
+  binds against the origin of the exact EXECUTION CONTEXT the fill runs
+  in, which it obtains by evaluating `location.origin` IN THAT CONTEXT:
+  for an `executionContextId` via `Runtime.evaluate({expression:
+  "location.origin", contextId})`, and for an `objectId` via
+  `Runtime.callFunctionOn({objectId, functionDeclaration: "function(){
+  return location.origin }", returnByValue:true})`, which executes in
+  the object's OWN context and so needs no assumption about `this`.
+  Neither the session/target origin nor a `this.ownerDocument` probe is
+  used: the session is too coarse (site isolation is per-SITE, so a
+  same-site cross-origin subframe shares its parent's target) and
+  `this` is wrong (a locator fill's `callFunctionOn` runs on a utility
+  object with the element as an argument). Running `location.origin` in
+  the target context is precise for both. Substitution is REFUSED
+  unless that origin is on the bound domain. Anywhere off a bound domain
   the placeholder goes through verbatim: a steered mind cannot be
   phished into entering the GitHub password on a lookalike domain, or
   a bound page's hostile subframe, because the mind does not have it.
