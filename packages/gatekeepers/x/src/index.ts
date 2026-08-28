@@ -340,7 +340,7 @@ async function handleDmPull(env: Env, agent: RosterAgent, ctx: ExecutionContext)
       return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
     }
     const parsed = (await me.json()) as { data?: { id?: string } };
-    if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+    if (!parsed?.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
     selfId = parsed.data.id;
     await box.setSelfId(selfId);
   }
@@ -406,6 +406,47 @@ async function handleDmPull(env: Env, agent: RosterAgent, ctx: ExecutionContext)
   return json({ ok: true, messages, upTo: messages.length ? maxId.toString() : null });
 }
 
+/**
+ * The agent's own profile, straight from X: identity, bio, follower
+ * counts, and pinned_tweet_id (pinning has no public API endpoint, the
+ * operator pins by hand; this is how the agent VERIFIES the pin). Also
+ * a credential self-check: a 401 here names the OAuth pair as the
+ * problem before any post is attempted. Read-only, no caps consumed.
+ */
+async function handleMe(env: Env, agent: RosterAgent): Promise<Response> {
+  const credentials = credentialsFor(env, agent);
+  if (!credentials) {
+    return errorResponse(503, "x_unconfigured", "no OAuth credentials for this agent");
+  }
+  // Every failure mode gets a NAMED error: this door is the credential
+  // diagnostic, so a timeout or garbled body must not surface as a
+  // generic porch failure.
+  let me: Response;
+  try {
+    me = await xApi(credentials, "GET", ME_ENDPOINT, {
+      "user.fields": "description,public_metrics,pinned_tweet_id,created_at,verified_type,url,location"
+    });
+  } catch (error) {
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
+  if (!me.ok) return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
+  let parsed: { data?: { id?: string } };
+  try {
+    parsed = (await me.json()) as { data?: { id?: string } };
+  } catch {
+    return errorResponse(502, "x_rejected", "users/me answered non-JSON");
+  }
+  if (!parsed?.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
+  // Opportunistically cache the self id the DM path also needs;
+  // best-effort, since the profile answer must not depend on storage.
+  try {
+    await poster(env, agent.id).setSelfId(parsed.data.id);
+  } catch (error) {
+    console.error("x me: selfId cache write failed", error);
+  }
+  return json({ ok: true, me: parsed.data });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -413,6 +454,7 @@ export default {
     const agent = agentFromBearer(request, env);
     if (!agent) return errorResponse(401, "unauthorized");
     if (url.pathname === "/gatekeeper/x/post") return handlePost(request, env, agent);
+    if (url.pathname === "/gatekeeper/x/me") return handleMe(env, agent);
     if (url.pathname === "/gatekeeper/x/posts") {
       return json({ ok: true, posts: await poster(env, agent.id).posts() });
     }
