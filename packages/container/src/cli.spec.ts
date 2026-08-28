@@ -162,6 +162,7 @@ describe("operon CLI parsing", () => {
     // Without --text the payload omits it; main() reads stdin instead.
     expect(parseArgs(["x", "post"])).toEqual({ path: "/x/post", payload: {} });
     expect(parseArgs(["x", "posts"])).toEqual({ path: "/x/posts", payload: {} });
+    expect(parseArgs(["x", "me"])).toEqual({ path: "/x/me", payload: {} });
     expect(parseArgs(["x", "dm", "@someone", "--text", "thanks for reaching out"])).toEqual({
       path: "/x/dm",
       payload: { to: "@someone", text: "thanks for reaching out" }

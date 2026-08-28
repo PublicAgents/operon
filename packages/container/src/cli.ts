@@ -75,6 +75,9 @@ shown to the operator. Low volume, value first):
                                          text on stdin and omit --text); answers
                                          with the live URL
   operon x posts                         your recent posts (cross-wake memory)
+  operon x me                            your own profile as X sees it (bio,
+                                         follower counts, pinned_tweet_id);
+                                         also a credential self-check
   operon x dm <@handle> --text <t>       DM someone who has DM'd YOU first (or
                                          pipe the text on stdin). Reply-only by
                                          construction: a cold DM is not a
@@ -281,6 +284,8 @@ function parseX(args: string[]): CliCall {
     }
     case "posts":
       return { path: "/x/posts", payload: {} };
+    case "me":
+      return { path: "/x/me", payload: {} };
     case "dm": {
       const [to] = positionals(rest);
       const text = flagValue(rest, "--text");
@@ -288,7 +293,7 @@ function parseX(args: string[]): CliCall {
       return { path: "/x/dm", payload: { to, ...(text !== undefined ? { text } : {}) } };
     }
     default:
-      throw new CliUsageError("unknown x subcommand; expected one of: post, posts, dm");
+      throw new CliUsageError("unknown x subcommand; expected one of: post, posts, dm, me");
   }
 }
 

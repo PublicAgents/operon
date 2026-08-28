@@ -180,6 +180,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/vault/delete") return await this.vaultCall("delete", body);
       if (request.method === "POST" && url.pathname === "/x/post") return await this.xPost(body);
       if (request.method === "POST" && url.pathname === "/x/posts") return await this.xCall("posts", {});
+      if (request.method === "POST" && url.pathname === "/x/me") return await this.xCall("me", {});
       if (request.method === "POST" && url.pathname === "/x/dm") return await this.xDm(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
