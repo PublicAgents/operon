@@ -429,10 +429,14 @@ interception machinery closes that gap:
   - Blocking is the container's `allowedHosts` deny-by-default
     allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
     ships in the web door MVP: outbound is allowed only to the minimal
-    wake infra (the mind endpoint, npm, GitHub, the tunnel edge), never
-    an agent-owned publish host (reached through the publish door, not
-    egress) and never a browsing target (browsing is remote). The fence
-    is a LAUNCH
+    wake infra (the mind endpoint, npm, GitHub, and, only when `operon
+    web expose` runs, Cloudflare's fixed argotunnel INGRESS edge that
+    `cloudflared` dials, never `*.trycloudflare.com`, which is the
+    remote browser's public hostname and would be an attacker-tunnel
+    sink). The argotunnel ingress is a tunnel TRANSPORT, not an HTTP
+    endpoint, so it is not itself an exfil sink. Never an agent-owned
+    publish host (reached through the publish door, not egress) and
+    never a browsing target (browsing is remote). The fence is a LAUNCH
     property of the container, owned by the `WakeContainer` supervisor
     that owns `allowedHosts`: a web-capable agent's container is started
     WITH the deny-by-default allowlist already in force, for the whole
