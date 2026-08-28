@@ -71,7 +71,10 @@ export class WebSession extends DurableObject<SessionEnv> {
     record("web_session_open", {});
 
     const teardown = (reason: string) => {
-      if (this.upstream === null) return;
+      // Identity check, not null check: a stale close/error from a
+      // PRIOR session must not clear the REPLACEMENT that reused this
+      // DO. Only this closure's own upstream may release the slot.
+      if (this.upstream !== upstream) return;
       this.upstream = null;
       this.opening = false;
       record("web_session_close", { reason });
