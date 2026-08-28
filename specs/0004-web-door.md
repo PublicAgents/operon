@@ -221,9 +221,21 @@ same pattern as the phase-2 mind-credential injection.
   chrome-devtools-mcp-style `fill` usually goes through
   `element.value = ...` in an evaluate, not synthetic keystrokes.
   Sweep-without-substitute on one path would submit the literal
-  placeholder. Anywhere off a bound domain the placeholder goes through
-  verbatim: a steered mind cannot be phished into entering the GitHub
-  password on a lookalike domain, because the mind does not have it.
+  placeholder.
+
+  The origin checked is the TARGET EXECUTION CONTEXT's origin, never
+  the top-level page's. A `Runtime.evaluate`/`callFunctionOn` carries
+  an `executionContextId` (or an `objectId`) that can point at a
+  cross-origin iframe: a page from a bound domain can embed an
+  attacker's frame, and substituting against the top-level origin would
+  inject the real password into the attacker's document. So the relay
+  resolves the target context to its frame origin (tracking
+  `Runtime.executionContextCreated` / `Page.frameNavigated`) and binds
+  against THAT; if the target context's origin cannot be resolved, the
+  substitution is REFUSED, not defaulted. Anywhere off a bound domain
+  the placeholder goes through verbatim: a steered mind cannot be
+  phished into entering the GitHub password on a lookalike domain, or
+  a bound page's hostile subframe, because the mind does not have it.
 
 ### Domain binding (auth hosts are rarely the main host)
 
