@@ -62,19 +62,13 @@ describe("prepareLaunch", () => {
     expect(prepared.umbilicalNonce).toMatch(/[0-9a-f-]{36}/);
     // The web door is opt-in: this agent is not web-capable.
     expect(prepared.env[WAKE_ENV.webUrl]).toBeUndefined();
-    expect(prepared.allowedHosts).toBeUndefined();
   });
 
-  it("wires the web door and launches FENCED for a web-capable agent", async () => {
+  it("wires the web door for a web-capable agent", async () => {
     const webAgent = { ...agent, web: true };
     const prepared = await prepareLaunch(webAgent, "cron", "wake-web", context());
     expect(prepared.env[WAKE_ENV.webUrl]).toBe("http://web.operon.internal");
     expect(prepared.env[WAKE_ENV.webToken]).toBe(prepared.umbilicalNonce);
-    // The container never runs unfenced: the allowlist is a launch
-    // property, so there is no window before the first session opens.
-    expect(prepared.allowedHosts).toBeDefined();
-    expect(prepared.allowedHosts).toContain("api.anthropic.com");
-    expect(prepared.allowedHosts).not.toContain("example.com");
   });
 
   it("fails closed with a named error when the mind credential is missing", async () => {

