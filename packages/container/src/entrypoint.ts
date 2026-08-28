@@ -126,9 +126,20 @@ async function trustEgressCa(): Promise<void> {
   try {
     await mkdir("/usr/local/share/ca-certificates", { recursive: true });
     await copyFile(CONTAINERS_CA, "/usr/local/share/ca-certificates/cloudflare-containers-ca.crt");
-    await runCapture("update-ca-certificates", [], {}).catch(() => undefined);
+    // NODE_EXTRA_CA_CERTS trusts the CA for node directly (no rebuild of a
+    // store needed); set it unconditionally so node clients are covered.
     process.env.NODE_EXTRA_CA_CERTS = CONTAINERS_CA;
-    log("egress audit: trusting the platform interception CA");
+    // The system store (curl, git) needs update-ca-certificates to
+    // succeed; only claim it is trusted for those clients if it did.
+    try {
+      await runCapture("update-ca-certificates", [], {});
+      log("egress audit: interception CA trusted (system store + node)");
+    } catch (error) {
+      log(
+        "egress audit: node trusts the interception CA, but update-ca-certificates " +
+          `failed, so curl/git may not: ${String(error).slice(0, 160)}`
+      );
+    }
   } catch (error) {
     log(`egress audit: could not trust the interception CA: ${String(error).slice(0, 200)}`);
   }

@@ -159,13 +159,25 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         exports: Record<string, (opts?: { props?: unknown }) => Fetcher>;
       }).exports;
       if (exportsBag.EgressAudit) {
-        const audit = exportsBag.EgressAudit({ props: { agentId: args.agentId, wakeId: args.wakeId } });
-        const intercept = this.ctx.container as unknown as {
-          interceptOutboundHttps(host: string, worker: Fetcher): Promise<void>;
-        };
-        // "*" catches all HTTPS egress (npm, git, api hosts, everything);
-        // the door virtual hosts are plain HTTP and stay on the umbilical.
-        await intercept.interceptOutboundHttps("*", audit);
+        // Audit is OBSERVE-ONLY and must never block a wake: a failure to
+        // register interception logs and proceeds unaudited rather than
+        // failing container start.
+        try {
+          const audit = exportsBag.EgressAudit({ props: { agentId: args.agentId, wakeId: args.wakeId } });
+          const intercept = this.ctx.container as unknown as {
+            interceptOutboundHttps(host: string, worker: Fetcher): Promise<void>;
+            interceptAllOutboundHttp(worker: Fetcher): Promise<void>;
+          };
+          // HTTPS is the bulk of egress (npm, git, api hosts); plain HTTP
+          // must be caught too or an http:// POST would slip the audit.
+          // The door virtual hosts are already claimed by the umbilical's
+          // per-host interceptOutboundHttp above, which takes precedence
+          // over this catch-all.
+          await intercept.interceptOutboundHttps("*", audit);
+          await intercept.interceptAllOutboundHttp(audit);
+        } catch (error) {
+          console.error("egress audit registration failed; proceeding unaudited", error);
+        }
       }
       await this.ctx.container.start({ env: args.env, enableInternet: true });
     } catch (error) {
