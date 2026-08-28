@@ -454,19 +454,27 @@ are the meter to watch before loosening anything.
    denylist folding, input substitution on every text path, origin
    denylist + `allowedDomainSets`), storage-state persistence,
    recording archived to R2 on close, the concurrency + minute caps,
-   `operon web open|sessions|close`, chrome-devtools-mcp staged into
-   the harness, ops routes (list + history + delete). The sweep and
-   method filter are NOT a later hardening pass: the first live account
-   must be created on a swept, filtered pipe.
+   **web-session egress enforcement** (deny-by-default outbound while a
+   session is open, section 5 layer two; this is the SESSION-SCOPED
+   slice, not the full-container audit of phase 5, and it is small
+   because the WakeContainer already intercepts by host), `operon web
+   open|sessions|close`, chrome-devtools-mcp staged into the harness,
+   ops routes (list + history + delete). The sweep, the method filter,
+   AND the egress fence are NOT a later hardening pass: the first live
+   account must be created on a swept, filtered, egress-fenced pipe.
 3. **Signup flow proven** (the proof those controls work): the agent
    creates one real account end to end (email verification via the
    email door, password minted door-side into the vault, or a passkey),
    operator watches via live view.
 4. **Polish**: live-view link in a notify action, tunnel-based local
    testing (`operon web expose`), passkey enrollment path.
-5. **Egress audit** (section 8): full-container request logging over
+5. **General egress audit** (section 8): full-container request
+   logging for ALL traffic (npm, git, ordinary API calls) over
    `interceptAllOutboundHttp`, HTTPS included once the CA-trust image
-   change (shared with mind-credential injection) lands.
+   change (shared with mind-credential injection) lands. This is the
+   broad observe-then-policy pass; the web session's own deny-by-
+   default fence already shipped in MVP, so no real account is ever
+   created before egress is fenced.
 
 ## 11. What this does NOT do
 
