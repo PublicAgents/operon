@@ -68,6 +68,7 @@ function wakePrompt(budgetMinutes: number): string {
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
     "Your doors to the world are the operon CLI: run operon --help to see which are live this wake. " +
+    "A wake is a SINGLE uninterrupted turn: you cannot sleep and resume, and there is no later continuation of THIS session. If you background a wait or a sleep intending to come back, the session simply ends while you are away and everything after it is lost. So never defer your journal entry to after a sleep or a timer: if something is not ready yet (a rate limit, a cooldown, a scheduled time), record where it stands in your journal and leave it for a FUTURE wake to pick up. ALWAYS write your JOURNAL.md entry before you stop, sleep, or wait on anything. " +
     "Act as you see fit, and when your journal entry is written, stop."
   );
 }
