@@ -398,9 +398,20 @@ interception machinery closes that gap:
   the ledger/chronicle gets per-wake aggregates (distinct hosts,
   request counts, first sight of a never-before-seen host, which is
   the interesting security signal).
-- Interception observes and logs; it does not filter. Egress POLICY
-  (allow/deny lists) stays a separate decision so the audit ships
-  without arguing about what to block.
+- Interception observes and logs by default, and the GENERAL egress
+  allow/deny policy stays a separate later decision so the audit can
+  ship without arguing about what to block for ordinary traffic (npm,
+  git, an API the agent legitimately calls).
+- The ONE exception, and it is a hard precondition of the web door, is
+  a web session's lifetime: while any web session is open, egress ENFORCES
+  deny-by-default (section 5, layer two). Outbound is allowed only to
+  the door hosts, the agent's own hosts, and the session's allowlisted
+  destinations; everything else is refused, so a cookie the mind
+  extracts via `Runtime.evaluate` has nowhere hostile to send it. This
+  is not "observe-only": the interception must be able to BLOCK, and
+  the web door does not reach production until it does. The general
+  egress policy for non-web traffic remains the separate, later
+  decision.
 
 ## 9. Costs
 
