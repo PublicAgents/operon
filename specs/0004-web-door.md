@@ -407,11 +407,17 @@ interception machinery closes that gap:
   primitives with different prerequisites:
   - Blocking is the container's `allowedHosts` deny-by-default
     allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
-    ships in the web door MVP: while a session is open, outbound is
-    allowed only to the door hosts, the agent's own hosts, wake infra
-    (npm, GitHub), and the session's navigation targets; everything
-    else is refused at connect, so an extracted cookie has nowhere
-    hostile to go. No real account is created before this exists.
+    ships in the web door MVP: outbound is allowed only to the door
+    hosts, the agent's own hosts, and wake infra (npm, GitHub), never
+    a browsing target (browsing is remote). The fence is WAKE-SCOPED
+    and MONOTONIC, not per-session: the FIRST web session to open in a
+    wake raises it, and it stays up until wake end. It is never lowered
+    on a session close, a reconnect gap, or when one of several
+    concurrent sessions ends, because once any session has run, a
+    credential may already sit in the mind's context; there is no safe
+    moment to reopen egress mid-wake. This removes the "while a session
+    is open" ambiguity: it is "from the first open to wake end." No
+    real account is created before this exists.
   - Content-logging every request (this section's JSONL/aggregates)
     over `interceptOutboundHttps` needs the CA-trust image change and
     stays phase 5. Losing the log for non-web traffic is not a
@@ -460,10 +466,10 @@ are the meter to watch before loosening anything.
    recording archived to R2 on close, the concurrency + minute caps,
    **web-session egress enforcement** (deny-by-default outbound while a
    session is open via the container's SNI-level `allowedHosts`
-   allowlist, which blocks HTTPS with no CA-trust needed, section 5
-   layer two; this is the SESSION-SCOPED block, distinct from the
-   full-container CONTENT audit of phase 5 that does need TLS
-   interception), `operon web
+   allowlist of door + infra hosts only, which blocks HTTPS with no
+   CA-trust needed, section 5 layer two; browsing is remote and never
+   on this list; distinct from the full-container CONTENT audit of
+   phase 5 that does need TLS interception), `operon web
    open|sessions|close`, chrome-devtools-mcp staged into the harness,
    ops routes (list + history + delete). The sweep, the method filter,
    AND the egress fence are NOT a later hardening pass: the first live
