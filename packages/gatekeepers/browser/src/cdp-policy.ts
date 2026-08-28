@@ -277,6 +277,21 @@ export function applyFill(
  * Every upstream frame is therefore scanned for known credential values
  * and they are redacted before the client sees them. The mind gets the
  * placeholder back, which is exactly what it typed.
+ *
+ * KNOWN LIMIT, do not mistake this for prevention: a HOSTILE mind can
+ * read the field and transform it (`btoa(v)`, reverse, per-character)
+ * so no value filter sees it. That is unfixable by filtering; it is the
+ * confused-deputy limit (spec 0004 section 5) applied to a value the
+ * page must legitimately hold. What bounds it:
+ * - the value is a password to an account the AGENT ITSELF owns, on a
+ *   session it is already logged into, so extraction grants little the
+ *   mind did not already have operationally;
+ * - it is scoped to bound domains, ledgered, and the operator can
+ *   rotate it and delete the session;
+ * - PASSKEYS avoid it entirely (the private key never enters the page),
+ *   which is why the spec prefers them wherever a site offers them.
+ * This filter's job is the honest one: stop the accidental and the
+ * casual read-back, and make the deliberate one visible in the ledger.
  */
 export function redactCredentials(frame: string, policy: RelayPolicy): { frame: string; redacted: string[] } {
   const credentials = policy.credentials;

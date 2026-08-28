@@ -119,13 +119,17 @@ export class WebSession extends DurableObject<SessionEnv> {
     // One relay per DO. The dial below awaits, which yields; a second
     // concurrent connect must be refused synchronously here, before that
     // yield, or both would observe a null upstream and open two browsers.
-    if (this.upstream || this.opening) return new Response("session_busy", { status: 409 });
-    this.opening = true;
-
-    const agentId = request.headers.get("x-operon-agent") ?? "unknown";
     const url = new URL(request.url);
     const name = url.searchParams.get("name") ?? "unnamed";
     const wakeId = url.searchParams.get("wake") ?? "unknown";
+    const agentId = request.headers.get("x-operon-agent") ?? "unknown";
+    if (this.upstream || this.opening) {
+      // The caller reserved a slot for this name before reaching us; a
+      // refusal must not keep it (the live session already holds one).
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
+      return new Response("session_busy", { status: 409 });
+    }
+    this.opening = true;
     const generation = (await this.ctx.storage.get<number>("generation")) ?? 0;
     const policy = await this.policy();
 
@@ -137,11 +141,15 @@ export class WebSession extends DurableObject<SessionEnv> {
       });
     } catch (error) {
       this.opening = false;
+      // A failed open must hand its slot back, or a few unreachable
+      // dials would exhaust the concurrency cap for the rest of the wake.
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
       return new Response(`browser_run_unreachable: ${String(error).slice(0, 200)}`, { status: 502 });
     }
     const upstream = upstreamResponse.webSocket;
     if (!upstream) {
       this.opening = false;
+      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
       return new Response(`browser_run_refused: ${upstreamResponse.status}`, { status: 502 });
     }
 
@@ -164,6 +172,10 @@ export class WebSession extends DurableObject<SessionEnv> {
       if (this.upstream !== upstream) return;
       this.upstream = null;
       this.opening = false;
+      // Capture identity BEFORE stopping the timers and closing: a login
+      // inside the first interval would otherwise be lost, and reopening
+      // the named session would come back logged out.
+      this.captureNow(upstream);
       this.stopTimers();
       record("web_session_close", { reason });
       // Free the concurrency slot and accrue this session's minutes, or
@@ -384,6 +396,34 @@ export class WebSession extends DurableObject<SessionEnv> {
     await this.ctx.storage.put("state", state);
   }
 
+  /** One capture round: cookies + localStorage, both best-effort. */
+  private captureNow(upstream: WebSocket): void {
+    const cookieId = this.nextId++;
+    this.pendingCookieCapture.add(cookieId);
+    try {
+      upstream.send(JSON.stringify({ id: cookieId, method: "Storage.getCookies" }));
+    } catch {
+      this.pendingCookieCapture.delete(cookieId);
+    }
+    const storageId = this.nextId++;
+    this.pendingStorageCapture.add(storageId);
+    try {
+      upstream.send(
+        JSON.stringify({
+          id: storageId,
+          method: "Runtime.evaluate",
+          params: {
+            expression:
+              "JSON.stringify({origin: location.origin, data: Object.fromEntries(Object.entries(localStorage))})",
+            returnByValue: true
+          }
+        })
+      );
+    } catch {
+      this.pendingStorageCapture.delete(storageId);
+    }
+  }
+
   private startTimers(upstream: WebSocket): void {
     this.stopTimers();
     // keep_alive is an IDLE window, not a lifetime: a cheap call inside
@@ -400,35 +440,12 @@ export class WebSession extends DurableObject<SessionEnv> {
     );
     // Capture identity while the session is LIVE: at teardown the socket
     // is usually already gone, so a close-time export cannot be relied on.
+    // Plenty of apps keep auth in localStorage, so cookies alone are an
+    // incomplete identity: capture both, on an interval AND at teardown.
     this.timers.push(
       setInterval(() => {
         if (this.upstream !== upstream) return;
-        const id = this.nextId++;
-        this.pendingCookieCapture.add(id);
-        try {
-          upstream.send(JSON.stringify({ id, method: "Storage.getCookies" }));
-        } catch {
-          this.pendingCookieCapture.delete(id);
-        }
-        // Plenty of apps keep auth in localStorage, so cookies alone are
-        // an incomplete identity: capture it too, per origin.
-        const storageId = this.nextId++;
-        this.pendingStorageCapture.add(storageId);
-        try {
-          upstream.send(
-            JSON.stringify({
-              id: storageId,
-              method: "Runtime.evaluate",
-              params: {
-                expression:
-                  "JSON.stringify({origin: location.origin, data: Object.fromEntries(Object.entries(localStorage))})",
-                returnByValue: true
-              }
-            })
-          );
-        } catch {
-          this.pendingStorageCapture.delete(storageId);
-        }
+        this.captureNow(upstream);
       }, SNAPSHOT_MS)
     );
   }
