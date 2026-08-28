@@ -67,9 +67,11 @@ Each `WebSession` DO:
   container never runs unfenced. So open simply dials
   `wss://api.cloudflare.com/.../browser-rendering/
   devtools/browser?keep_alive=600000&recording=true` with the
-  Worker-held API token, restores the saved storage state (CDP
-  `Storage.setCookies` + an init script for localStorage), and folds
-  those cookie/token values into the wake denylist. browser-gk can rely
+  Worker-held API token and restores the saved storage state (CDP
+  `Storage.setCookies` + an init script for localStorage). The values
+  stay in browser-gk and Browser Run and never enter the container, so
+  door-egress of an extracted value is bounded by where doors go, not
+  by a value sweep (section 5, layer two). browser-gk can rely
   on the fence because the scheduler only wires the web door (the
   BROWSER binding, the `web` option) for agents whose container is
   launched fenced; a web upgrade cannot reach browser-gk from an
@@ -164,16 +166,29 @@ carry them off. Two layers:
   authenticator, section on passkeys), exactly as the Cloudflare API
   token is; the mind never touches it. This is clean and has no false
   positives.
-- **Cookie values in the denylist (layer two)**: `Runtime.evaluate`
+- **Door egress of an extracted value (layer two)**: `Runtime.evaluate`
   and `Runtime.callFunctionOn` are dual-use (chrome-devtools-mcp needs
-  them), so they cannot be dropped, and `document.cookie` /
-  localStorage are reachable through them. On session open the relay
-  folds the restored cookie AND localStorage-token values into the
-  wake's secret denylist (the vault doctrine), so a value pulled via
-  `evaluate` still cannot leave through publish, PR, email, or notify.
-  What the denylist cannot see (a token minted fresh mid-session and
-  never restored) is the residual; the session recording and the
-  navigation ledger bound it, and delete-session is the containment.
+  them), so they cannot be dropped, and `document.cookie` / localStorage
+  are reachable through them. The wake denylist is NOT the answer here:
+  it is a container-local array and browser-gk is a remote Worker with
+  no path to it, and the only way to make one would be to ship the
+  cookie VALUES into the container, which is the leak. So the container
+  never learns the cookie value, and the containment for the value the
+  mind DID extract is where the doors GO, not a value sweep:
+  - Direct egress is closed by the launch fence (this section, the
+    egress bullet). This is the primary boundary.
+  - `notify` lands in front of the OPERATOR; `email` is held and
+    swept; `PR` targets an allowlisted repo under operator review; so a
+    credential shoved through one of those reaches the operator or a
+    reviewed surface, not an attacker.
+  - `publish` is the one door with a public destination (the agent's
+    own host), so published bytes keep their existing gitleaks +
+    denylist sweep, which catches token-SHAPED secrets. A session
+    cookie that matches no pattern is the residual, bounded by the
+    session recording, the navigation ledger, and the agent's own site
+    being monitored. If that residual is judged too sharp for a tenant,
+    the deployment can gate `publish` closed while a web session is
+    open; that is a policy knob, not a default.
 
 - **Session lifetime and concurrency.** A session may live for the
   WHOLE wake: some work needs a browser open end to end, and the wake
