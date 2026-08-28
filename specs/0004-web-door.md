@@ -151,12 +151,41 @@ same pattern as the phase-2 mind-credential injection.
   only a placeholder token. The mind never sees the value, not even at
   signup, so it cannot leak what it does not hold.
 - **Fill**: the mind types the placeholder
-  (`{{vault:web/<origin>}}`) into the field. The RELAY substitutes the
-  real value into the `Input.insertText` frame, but only when the
-  page's top-frame origin matches the vault key's origin. On any other
-  origin the placeholder goes through verbatim: a steered mind cannot
-  be phished into entering the GitHub password on a lookalike domain,
-  because the mind does not have it.
+  (`{{vault:web/<name>}}`) into the field. The RELAY substitutes the
+  real value into the `Input.insertText` frame, but only on a domain
+  the credential is BOUND to. Anywhere else the placeholder goes
+  through verbatim: a steered mind cannot be phished into entering the
+  GitHub password on a lookalike domain, because the mind does not
+  have it.
+
+### Domain binding (auth hosts are rarely the main host)
+
+Real sign-up and sign-in flows hop hosts: `accounts.google.com` for a
+Google product, an Auth0/Okta tenant domain, `id.atlassian.com`, a
+`signup.` host distinct from the login host, SSO redirect chains. So
+binding is not exact-origin:
+
+- **Registrable domain (eTLD+1) matching**, via the public suffix
+  list: `signup.example.com`, `auth.example.com` and `example.com` are
+  one binding.
+- **Bound by observation, not declaration**: a credential's domain set
+  is SEEDED by where the relay actually performed the substitution
+  during signup. The relay is present for the whole flow, so a
+  password form living on `auth.vendor-idp.com` while the app is
+  `app.example.com` binds both, automatically and correctly, with the
+  navigation chain ledgered.
+- **Automatic seeding is safe because passwords are unique per
+  credential**: if the mind is steered into "signing up" on a phishing
+  site, the attacker captures a fresh random password to an account
+  that exists nowhere else. The dangerous case is an EXISTING
+  credential on a NEW domain, and that is exactly what seeding never
+  allows.
+- **Extending a binding is a held decision**: an existing credential
+  filled on an unbound domain (a site migrating auth hosts, or an
+  actual phish) is refused at the relay and surfaced to the operator
+  through the same notify-with-buttons machinery as email and spend
+  holds; approval adds the domain, audited. Rare by construction, so
+  the friction lands only where the risk is.
 - This keeps the input sweep absolute: there is never a legitimate
   reason for a real secret value in a keystroke. In practice the
   persisted session cookie does most logins and passwords are rare.
