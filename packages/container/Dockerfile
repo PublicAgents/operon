@@ -11,7 +11,7 @@ RUN npm install typescript@6 @types/node@24 && npx tsc
 
 FROM node:24-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates curl \
+  && apt-get install -y --no-install-recommends git ca-certificates curl python3 \
   && rm -rf /var/lib/apt/lists/*
 # gitleaks: pinned version + checksum. Its config is baked into the image
 # (never read from the scanned repo, which is agent-writable).
