@@ -69,8 +69,9 @@ Each `WebSession` DO:
 - **Snapshots**: on close, wake end, or relay disconnect, exports
   storage state into DO storage under the session name. Open after
   close resumes the same identity.
-- **Enforces** (section 5): the per-wake browser-minute cap, the origin
-  denylist, and the CDP input sweep.
+- **Enforces** (section 5): the per-wake concurrency cap, the optional
+  aggregate browser-minute cap when enabled, the origin denylist, and
+  the CDP input sweep.
 
 ### Session naming
 
