@@ -280,6 +280,20 @@ same pattern as the phase-2 mind-credential injection.
   Sweep-without-substitute on one path would submit the literal
   placeholder.
 
+  The credential is always injected as DATA, never spliced into
+  JavaScript SOURCE. A password holds `'`, `"`, `\`, `${`, newlines;
+  concatenating it into an expression string would both corrupt an
+  ordinary fill and open a code-injection path. So: on the keystroke
+  paths (`insertText`, `dispatchKeyEvent`) the value is already data.
+  On `Runtime.callFunctionOn` the relay substitutes an ARGUMENT value
+  (a data param in the `arguments` array), never the `functionDeclaration`
+  body. A placeholder found INSIDE a raw `Runtime.evaluate` expression
+  string is REFUSED, since there is no safe splice of arbitrary data
+  into code; the relay's error tells the client to pass the field's
+  value through an argument-carrying path (`callFunctionOn` arguments or
+  a bound-function fill) instead. The placeholder token itself is chosen
+  from a syntax-inert alphabet so it never needs escaping to detect.
+
   The origin checked is the TARGET EXECUTION CONTEXT's origin, never
   the top-level page's. A `Runtime.evaluate`/`callFunctionOn` carries
   an `executionContextId` (or an `objectId`) that can point at a
