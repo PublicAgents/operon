@@ -9,6 +9,10 @@ interface DoorRoute {
   /** Shared bearer env name, or the per-agent bearer prefix. */
   bearerEnv?: string;
   perAgentPrefix?: string;
+  /** Binding-only door: no bearer exists or is attached; the private
+   * service binding IS the auth (the target worker has no public
+   * surface) and identity rides x-operon-agent. */
+  bearerless?: boolean;
 }
 
 /** virtual host label -> Gatekeeper binding + which bearer to attach. */
@@ -22,7 +26,10 @@ export const DOOR_ROUTES: Record<string, DoorRoute> = {
   till: { binding: "TILL", perAgentPrefix: "TILL_TOKEN" },
   spend: { binding: "SPEND", perAgentPrefix: "SPEND_TOKEN" },
   vault: { binding: "VAULT", perAgentPrefix: "VAULT_TOKEN" },
-  x: { binding: "X", perAgentPrefix: "X_TOKEN" }
+  x: { binding: "X", perAgentPrefix: "X_TOKEN" },
+  // The web door (spec 0004): browser-gk has no public surface, so the
+  // binding is the auth and no bearer rides at all.
+  web: { binding: "BROWSER", bearerless: true }
 };
 
 export const INTERNAL_SUFFIX = ".operon.internal";
@@ -47,11 +54,12 @@ export function resolveDoor(
   hostname: string,
   env: Record<string, unknown>,
   agentId: string
-): { binding: string; bearer: string } | { error: string } {
+): { binding: string; bearer?: string } | { error: string } {
   if (!hostname.endsWith(INTERNAL_SUFFIX)) return { error: "not_internal" };
   const door = hostname.slice(0, -INTERNAL_SUFFIX.length);
   const route = DOOR_ROUTES[door];
   if (!route) return { error: "unknown_door" };
+  if (route.bearerless) return { binding: route.binding };
   const bearer = route.perAgentPrefix
     ? env[perAgentVar(route.perAgentPrefix, agentId)]
     : env[route.bearerEnv as string];

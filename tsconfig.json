@@ -50,6 +50,9 @@
     },
     {
       "path": "./packages/gatekeepers/ops"
+    },
+    {
+      "path": "./packages/gatekeepers/browser"
     }
   ]
 }

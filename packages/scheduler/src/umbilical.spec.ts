@@ -38,8 +38,16 @@ describe("umbilical door resolution", () => {
   it("every door route names a binding and exactly one bearer source", () => {
     for (const [door, route] of Object.entries(DOOR_ROUTES)) {
       expect(route.binding, door).toBeTruthy();
-      expect(Boolean(route.bearerEnv) !== Boolean(route.perAgentPrefix), door).toBe(true);
+      if (route.bearerless) {
+        expect(Boolean(route.bearerEnv) || Boolean(route.perAgentPrefix), door).toBe(false);
+      } else {
+        expect(Boolean(route.bearerEnv) !== Boolean(route.perAgentPrefix), door).toBe(true);
+      }
     }
+  });
+
+  it("a bearerless door resolves with no bearer at all", () => {
+    expect(resolveDoor("web.operon.internal", {}, "promoter")).toEqual({ binding: "BROWSER" });
   });
 
   it("builds the virtual host for a door", () => {

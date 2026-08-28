@@ -41,6 +41,7 @@ interface Env {
   DEPLOY?: Fetcher;
   GITHUB?: Fetcher;
   PR?: Fetcher;
+  BROWSER?: Fetcher;
   TELEGRAM?: Fetcher;
   SCHEDULER?: Fetcher;
   [name: string]: unknown;

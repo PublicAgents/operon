@@ -110,7 +110,9 @@ export async function prepareLaunch(
     tillUrl: "http://" + doorHost("till"),
     spendUrl: "http://" + doorHost("spend"),
     vaultUrl: "http://" + doorHost("vault"),
-    xUrl: "http://" + doorHost("x")
+    xUrl: "http://" + doorHost("x"),
+    webUrl: "http://" + doorHost("web"),
+    webToken: umbilicalNonce
   };
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is

@@ -38,9 +38,17 @@ export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
     const binding = this.env[resolved.binding] as Fetcher | undefined;
     if (!binding) return new Response(`binding_unwired:${resolved.binding}`, { status: 502 });
     const headers = new Headers(request.headers);
-    headers.set("authorization", `Bearer ${resolved.bearer}`);
+    if (resolved.bearer) headers.set("authorization", `Bearer ${resolved.bearer}`);
+    else headers.delete("authorization");
     headers.set("x-operon-agent", agentId);
-    return binding.fetch(`https://internal${url.pathname}${url.search}`, {
+    const target = `https://internal${url.pathname}${url.search}`;
+    // A WebSocket upgrade (the web door's CDP relay) must pass through
+    // as an upgrade: build the forward from the ORIGINAL request so the
+    // runtime carries the 101 + socket back, and never touch the body.
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      return binding.fetch(new Request(target, new Request(request, { headers })));
+    }
+    return binding.fetch(target, {
       method: request.method,
       headers,
       body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body

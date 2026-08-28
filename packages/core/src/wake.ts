@@ -63,6 +63,9 @@ export interface WakeOptions {
   chronicleToken?: string;
   /** X Gatekeeper endpoint + this agent's OWN posting bearer (per-agent). */
   xUrl?: string;
+  /** Web door (spec 0004): the browser relay endpoint + bearer. */
+  webUrl?: string;
+  webToken?: string;
   xToken?: string;
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
@@ -108,6 +111,8 @@ export const WAKE_ENV = {
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
+  webUrl: "OPERON_WEB_URL",
+  webToken: "OPERON_WEB_TOKEN",
   xToken: "OPERON_X_TOKEN"
 } as const;
 
@@ -151,6 +156,8 @@ export function wakeEnv(
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
   if (options.xUrl) env[WAKE_ENV.xUrl] = options.xUrl;
+  if (options.webUrl) env[WAKE_ENV.webUrl] = options.webUrl;
+  if (options.webToken) env[WAKE_ENV.webToken] = options.webToken;
   if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
