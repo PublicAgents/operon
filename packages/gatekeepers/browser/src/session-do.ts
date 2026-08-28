@@ -135,15 +135,25 @@ export class WebSession extends DurableObject<SessionEnv> {
     const url = new URL(request.url);
     const name = url.searchParams.get("name") ?? "unnamed";
     const wakeId = url.searchParams.get("wake") ?? "unknown";
-    const slotToken = url.searchParams.get("slot") ?? "";
+    const cap = Number(url.searchParams.get("cap")) || 3;
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
+    // This DO IS the source of truth for liveness (it holds the socket),
+    // so the duplicate check happens BEFORE the meter is ever asked: a
+    // live name is refused here and the meter is never touched, which is
+    // why a stale takeover can never unmeter a running session.
     if (this.upstream || this.opening) {
-      // Do NOT release here: the live relay owns this name's hold, and
-      // the meter refuses duplicates anyway. Releasing would risk
-      // unmetering the session that is actually running.
       return new Response("session_busy", { status: 409 });
     }
     this.opening = true;
+    // Only now, with liveness confirmed absent, ask the meter for a slot.
+    const admitted = await this.admitSlot(agentId, name, wakeId, cap);
+    if (!admitted.ok) {
+      this.opening = false;
+      return new Response(admitted.reason, {
+        status: admitted.reason === "web_concurrency_cap" ? 429 : 409
+      });
+    }
+    const slotToken = admitted.token;
     const generation = (await this.ctx.storage.get<number>("generation")) ?? 0;
     const policy = await this.policy();
 
@@ -621,6 +631,21 @@ export class WebSession extends DurableObject<SessionEnv> {
       .filter(host => host.length > 0);
     const credentials = await this.ctx.storage.get<RelayPolicy["credentials"]>("credentials");
     return { originDenylist: denylist, ...(credentials ? { credentials } : {}) };
+  }
+
+  /** Claim a concurrency slot; the DO calls this only when not live. */
+  private async admitSlot(
+    agentId: string,
+    name: string,
+    wakeId: string,
+    cap: number
+  ): Promise<{ ok: true; token: string } | { ok: false; reason: string }> {
+    const namespace = this.env.WEB_METER as DurableObjectNamespace | undefined;
+    if (!namespace) return { ok: true, token: "" };
+    const meter = namespace.get(namespace.idFromName(agentId)) as unknown as {
+      admit(name: string, wakeId: string, cap: number): Promise<{ ok: true; token: string } | { ok: false; reason: string }>;
+    };
+    return meter.admit(name, wakeId, cap);
   }
 
   /** Tell the meter this relay is still breathing. */

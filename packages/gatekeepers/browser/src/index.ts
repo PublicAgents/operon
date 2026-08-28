@@ -140,24 +140,15 @@ export default {
       return errorResponse(426, "websocket_required");
     }
 
-    // The concurrency cap is per AGENT and aggregate: N sessions never
-    // means N budgets (spec 0004 section 5).
+    // Admission happens INSIDE the DO, after its own live-check: only the
+    // DO knows whether this name is actually live (it holds the socket),
+    // so only it can ask the meter to admit without risking a takeover of
+    // a live session. The cap rides as a param.
     const wakeId = request.headers.get("x-operon-wake") ?? "unknown";
-    const admitted = await meter(env, agentId).admit(name, wakeId, maxConcurrent(env));
-    if (!admitted.ok) {
-      await ledger(env).append("web_session_refused", { agentId, name, reason: admitted.reason });
-      // Busy is a conflict (that name is already live); the cap is a rate
-      // problem. Different causes, different codes.
-      return admitted.reason === "web_session_busy"
-        ? errorResponse(409, admitted.reason, "that session name is already open")
-        : errorResponse(429, admitted.reason, `concurrency cap is ${maxConcurrent(env)}`);
-    }
-
     const target = new URL(request.url);
     target.searchParams.set("name", name);
     target.searchParams.set("wake", wakeId);
-    // The admission token: only this holder may release the slot later.
-    target.searchParams.set("slot", admitted.token);
+    target.searchParams.set("cap", String(maxConcurrent(env)));
     return session(env, agentId, name).fetch(new Request(target.toString(), request));
   }
 } satisfies ExportedHandler<Env>;
