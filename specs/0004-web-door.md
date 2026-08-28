@@ -229,10 +229,17 @@ same pattern as the phase-2 mind-credential injection.
   cross-origin iframe: a page from a bound domain can embed an
   attacker's frame, and substituting against the top-level origin would
   inject the real password into the attacker's document. So the relay
-  resolves the target context to its frame origin (tracking
-  `Runtime.executionContextCreated` / `Page.frameNavigated`) and binds
-  against THAT; if the target context's origin cannot be resolved, the
-  substitution is REFUSED, not defaulted. Anywhere off a bound domain
+  resolves the target's origin by ASKING the browser, not by guessing
+  from passive event tracking: on a placeholder fill it issues its OWN
+  CDP call against the same target (`Runtime.callFunctionOn` with
+  `returnByValue`, running `function(){ return
+  this.ownerDocument.defaultView.origin }` on the `objectId`, or
+  `document.location.origin` for an `executionContextId`) and reads the
+  origin straight from the document it is about to write to. That is
+  authoritative for objectId- and contextId-targeted fills alike and
+  needs no origin bookkeeping. Substitution is REFUSED only if that
+  round-trip fails or returns an origin off the bound domain; an
+  ordinary bound-domain fill resolves and proceeds. Anywhere off a bound domain
   the placeholder goes through verbatim: a steered mind cannot be
   phished into entering the GitHub password on a lookalike domain, or
   a bound page's hostile subframe, because the mind does not have it.
