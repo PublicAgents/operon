@@ -418,11 +418,24 @@ async function handleMe(env: Env, agent: RosterAgent): Promise<Response> {
   if (!credentials) {
     return errorResponse(503, "x_unconfigured", "no OAuth credentials for this agent");
   }
-  const me = await xApi(credentials, "GET", ME_ENDPOINT, {
-    "user.fields": "description,public_metrics,pinned_tweet_id,created_at,verified_type,url,location"
-  });
+  // Every failure mode gets a NAMED error: this door is the credential
+  // diagnostic, so a timeout or garbled body must not surface as a
+  // generic porch failure.
+  let me: Response;
+  try {
+    me = await xApi(credentials, "GET", ME_ENDPOINT, {
+      "user.fields": "description,public_metrics,pinned_tweet_id,created_at,verified_type,url,location"
+    });
+  } catch (error) {
+    return errorResponse(502, "x_unreachable", String(error).slice(0, 200));
+  }
   if (!me.ok) return errorResponse(502, "x_rejected", `users/me answered ${me.status}`);
-  const parsed = (await me.json()) as { data?: { id?: string } };
+  let parsed: { data?: { id?: string } };
+  try {
+    parsed = (await me.json()) as { data?: { id?: string } };
+  } catch {
+    return errorResponse(502, "x_rejected", "users/me answered non-JSON");
+  }
   if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
   // Opportunistically cache the self id the DM path also needs.
   await poster(env, agent.id).setSelfId(parsed.data.id);
