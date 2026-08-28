@@ -138,9 +138,9 @@ export class WebSession extends DurableObject<SessionEnv> {
     const slotToken = url.searchParams.get("slot") ?? "";
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
     if (this.upstream || this.opening) {
-      // The caller reserved a slot for this name before reaching us; a
-      // refusal must not keep it (the live session already holds one).
-      this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId, slotToken));
+      // Do NOT release here: the live relay owns this name's hold, and
+      // the meter refuses duplicates anyway. Releasing would risk
+      // unmetering the session that is actually running.
       return new Response("session_busy", { status: 409 });
     }
     this.opening = true;
@@ -251,7 +251,13 @@ export class WebSession extends DurableObject<SessionEnv> {
         if (this.consumeCookieCapture(event.data, generation, relayId)) return;
         if (this.consumeStorageCapture(event.data, generation, relayId)) return;
         const audit = auditEvent(event.data);
-        if (audit) record(`web_${audit.kind}`, { url: audit.url });
+        if (audit) {
+          record(`web_${audit.kind}`, { url: audit.url });
+          // A login ends in a navigation, so capture identity HERE, while
+          // the socket is certainly alive. Teardown-time capture cannot be
+          // relied on: an upstream close fires after the socket is gone.
+          if (audit.kind === "navigation") this.captureNow(upstream);
+        }
         // A fill puts the real password INTO the page, so an ordinary
         // read-back (input.value via evaluate) would hand it to the mind.
         // Redact every known credential value on the way out; the mind
@@ -271,7 +277,7 @@ export class WebSession extends DurableObject<SessionEnv> {
     upstream.addEventListener("error", () => teardown("upstream_error"));
 
     await this.restore(upstream);
-    this.startTimers(upstream);
+    this.startTimers(upstream, agentId, name, wakeId, slotToken);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -506,7 +512,13 @@ export class WebSession extends DurableObject<SessionEnv> {
     }
   }
 
-  private startTimers(upstream: WebSocket): void {
+  private startTimers(
+    upstream: WebSocket,
+    agentIdForTimers: string,
+    name: string,
+    wakeId: string,
+    slotToken: string
+  ): void {
     this.stopTimers();
     // keep_alive is an IDLE window, not a lifetime: a cheap call inside
     // it keeps a quiet session alive for the length of the wake.
@@ -514,10 +526,13 @@ export class WebSession extends DurableObject<SessionEnv> {
       setInterval(() => {
         if (this.upstream !== upstream) return;
         try {
-          upstream.send(JSON.stringify({ id: this.nextId++, method: "Browser.getVersion" }));
+          upstream.send(JSON.stringify({ id: randomFrameId(), method: "Browser.getVersion" }));
         } catch {
           /* teardown handles it */
         }
+        // The meter learns this relay is alive, so a long HEALTHY session
+        // is never mistaken for an abandoned hold and taken over.
+        this.ctx.waitUntil(this.renewSlot(agentIdForTimers, name, wakeId, slotToken));
       }, HEARTBEAT_MS)
     );
     // Capture identity while the session is LIVE: at teardown the socket
@@ -606,6 +621,20 @@ export class WebSession extends DurableObject<SessionEnv> {
       .filter(host => host.length > 0);
     const credentials = await this.ctx.storage.get<RelayPolicy["credentials"]>("credentials");
     return { originDenylist: denylist, ...(credentials ? { credentials } : {}) };
+  }
+
+  /** Tell the meter this relay is still breathing. */
+  private async renewSlot(agentId: string, name: string, wakeId: string, token: string): Promise<void> {
+    const namespace = this.env.WEB_METER as DurableObjectNamespace | undefined;
+    if (!namespace || !token) return;
+    try {
+      const meter = namespace.get(namespace.idFromName(agentId)) as unknown as {
+        renew(name: string, wakeId: string, token: string): Promise<void>;
+      };
+      await meter.renew(name, wakeId, token);
+    } catch (error) {
+      console.error("web meter renew failed", error);
+    }
   }
 
   /** Hand the concurrency slot back to the agent's meter. */

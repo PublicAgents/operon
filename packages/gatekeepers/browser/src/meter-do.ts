@@ -10,6 +10,8 @@ import { DurableObject } from "cloudflare:workers";
 
 interface Held {
   at: string;
+  /** Last heartbeat from the holding relay: liveness, not age. */
+  renewedAt?: string;
   /** Which relay holds this admission; a stale release must not free it. */
   token: string;
 }
@@ -23,11 +25,12 @@ interface WakeUsage {
 export type Admission = { ok: true; token: string } | { ok: false; reason: string };
 
 /**
- * How long a hold may sit without a release before another open may take
- * it over. Comfortably past Browser Run's 10-minute idle close, so it
- * only ever rescues a hold whose relay died without releasing.
+ * How long a hold may go UNRENEWED before another open may take it over.
+ * A live relay renews on its heartbeat (every few minutes), so this only
+ * ever rescues a hold whose relay died without releasing; a healthy
+ * long-running session is never taken over, however long it runs.
  */
-const STALE_HOLD_MS = 20 * 60_000;
+const STALE_HOLD_MS = 15 * 60_000;
 
 export class WebMeter extends DurableObject {
   /** Admit a session open, or refuse it against the concurrency cap. */
@@ -41,7 +44,7 @@ export class WebMeter extends DurableObject {
       // duplicate's release delete the live session's entry, erasing it
       // from the cap and losing its minutes. A hold left behind by a dead
       // relay ages out, so a legitimate reopen is never stuck.
-      const age = Date.now() - Date.parse(held.at);
+      const age = Date.now() - Date.parse(held.renewedAt ?? held.at);
       if (!Number.isFinite(age) || age < STALE_HOLD_MS) {
         return { ok: false, reason: "web_session_busy" };
       }
@@ -71,6 +74,18 @@ export class WebMeter extends DurableObject {
     const elapsed = Date.now() - Date.parse(held.at);
     if (Number.isFinite(elapsed) && elapsed > 0) usage.minutes += elapsed / 60_000;
     delete usage.openedAt[name];
+    await this.ctx.storage.put("usage", usage);
+  }
+
+  /**
+   * A live relay renews its hold on every heartbeat, so "stale" means
+   * "the relay stopped breathing", not "this session has run a while".
+   */
+  async renew(name: string, wakeId: string, token: string): Promise<void> {
+    const usage = await this.currentUsage(wakeId);
+    const held = usage.openedAt[name];
+    if (!held || held.token !== token) return;
+    held.renewedAt = new Date().toISOString();
     await this.ctx.storage.put("usage", usage);
   }
 
