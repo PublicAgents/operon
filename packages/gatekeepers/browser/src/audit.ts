@@ -45,10 +45,15 @@ export function auditEvent(frame: string): AuditEvent | null {
   return null;
 }
 
+/** A session name: lowercase, digits, dashes; the DO key half. */
+export const SESSION_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 /** "/web/session/research" -> "research"; null for anything else. */
 export function sessionNameFromPath(pathname: string): string | null {
-  const match = /^\/web\/session\/([a-z0-9][a-z0-9-]{0,63})$/.exec(pathname);
-  return match ? match[1] : null;
+  const prefix = "/web/session/";
+  if (!pathname.startsWith(prefix)) return null;
+  const name = pathname.slice(prefix.length);
+  return SESSION_NAME.test(name) ? name : null;
 }
 
 /** The upstream Browser Run CDP endpoint for an account. */

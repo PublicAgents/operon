@@ -21,6 +21,8 @@ const SESSION_PATH = /^\/web\/session\/[a-z0-9][a-z0-9-]{0,63}$/;
 export interface WebRelayConfig {
   webUrl?: string;
   webToken?: string;
+  /** This wake's id: the meter buckets concurrency and minutes by it. */
+  wakeId?: string;
 }
 
 function refuse(socket: Duplex, status: number, reason: string): void {
@@ -64,6 +66,9 @@ export function handleWebUpgrade(
       // The nonce is this door's bearer; the umbilical validates it and
       // swaps in binding-only auth. Root holds it, never the session.
       authorization: `Bearer ${config.webToken}`,
+      // The meter buckets per wake; without this every wake would share
+      // one "unknown" bucket and closed sessions would exhaust the cap.
+      ...(config.wakeId ? { "x-operon-wake": config.wakeId } : {}),
       connection: "Upgrade",
       upgrade: "websocket"
     }

@@ -28,6 +28,15 @@ export interface RosterAgent {
   maxWakeMinutes?: number;
   /** Zone hosts this agent may publish to: "@" for the apex, otherwise subdomain labels. */
   hosts: string[];
+  /**
+   * The web door (spec 0004): a real browser, opt-in per agent. It is
+   * opt-in because it changes the container's shape: a web-capable
+   * agent launches with the deny-by-default `allowedHosts` egress fence
+   * in force for the whole wake, so an extracted browser credential has
+   * no direct path out. Default false: non-web agents launch exactly as
+   * before.
+   */
+  web?: boolean;
   enabled: boolean;
 }
 
@@ -108,6 +117,10 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     fail(`${path}.enabled`, "must be a boolean");
   }
 
+  if (raw.web !== undefined && typeof raw.web !== "boolean") {
+    fail(`${path}.web`, "must be a boolean when present");
+  }
+
   return {
     id,
     stateRepo,
@@ -117,6 +130,7 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     fallbackModel,
     maxWakeMinutes,
     hosts,
+    ...(raw.web === true ? { web: true } : {}),
     enabled: raw.enabled
   };
 }

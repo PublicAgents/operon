@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { webMcpConfigJson } from "./web-mcp.js";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
@@ -499,6 +500,20 @@ async function runSession(
   // when the mind ran long. OPERON_PORCH is a loopback address, not a
   // credential: the session's env still contains only its own mind
   // credential; every other token stays behind the porch.
+  // The web door (spec 0004): when it is wired, the harness gets the
+  // standard browser MCP server pointed at the porch relay, so the mind
+  // browses with its own ecosystem's tools and every frame still passes
+  // the relay's policy. No credential is written: the endpoint is
+  // loopback and the nonce stays with the porch.
+  if (config.webUrl && config.webToken) {
+    try {
+      await writeFile(join(STATE_DIR, ".mcp.json"), webMcpConfigJson(porchUrl), "utf8");
+      log("web door: browser MCP staged (.mcp.json)");
+    } catch (error) {
+      log(`web door: could not stage browser MCP: ${String(error).slice(0, 200)}`);
+    }
+  }
+
   const ids = mindSpawnIds();
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");

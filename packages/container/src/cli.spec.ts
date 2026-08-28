@@ -164,8 +164,22 @@ describe("operon CLI parsing", () => {
     expect(parseArgs(["x", "posts"])).toEqual({ path: "/x/posts", payload: {} });
     expect(parseArgs(["x", "me"])).toEqual({ path: "/x/me", payload: {} });
     expect(parseArgs(["web"])).toEqual({ path: "/web/session/default", payload: { local: true } });
-    expect(parseArgs(["web", "research"])).toEqual({ path: "/web/session/research", payload: { local: true } });
-    expect(() => parseArgs(["web", "BAD"])).toThrow(CliUsageError);
+    expect(parseArgs(["web", "open", "research"])).toEqual({
+      path: "/web/session/research",
+      payload: { local: true }
+    });
+    expect(parseArgs(["web", "sessions"])).toEqual({ path: "/web/sessions", payload: {} });
+    expect(parseArgs(["web", "close", "research"])).toEqual({
+      path: "/web/close",
+      payload: { name: "research" }
+    });
+    expect(parseArgs(["web", "password", "github", "--domains", "github.com,gist.github.com"])).toEqual({
+      path: "/web/password",
+      payload: { name: "github", domains: ["github.com", "gist.github.com"] }
+    });
+    expect(() => parseArgs(["web", "open", "BAD"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["web", "password", "github"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["web", "dance"])).toThrow(CliUsageError);
     expect(parseArgs(["x", "dm", "@someone", "--text", "thanks for reaching out"])).toEqual({
       path: "/x/dm",
       payload: { to: "@someone", text: "thanks for reaching out" }

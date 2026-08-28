@@ -45,6 +45,10 @@ export const OPS_ROUTES: OpsRoute[] = [
   { method: "GET", path: "/ledger/github", binding: "GITHUB", downstreamMethod: "GET", downstreamPath: "/gatekeeper/github/ledger" },
   { method: "GET", path: "/ledger/pr", binding: "PR", downstreamMethod: "GET", downstreamPath: "/gatekeeper/pr/ledger" },
   { method: "GET", path: "/ledger/web", binding: "BROWSER", downstreamMethod: "GET", downstreamPath: "/gatekeeper/web/ledger" },
+
+  // ---- the web door: sessions and the remote logout ------------------
+  { method: "GET", path: "/web/sessions", binding: "BROWSER", downstreamMethod: "GET", downstreamPath: "/gatekeeper/web/sessions" },
+  { method: "POST", path: "/web/delete", binding: "BROWSER", downstreamMethod: "POST", downstreamPath: "/gatekeeper/web/delete", decision: true },
   { method: "GET", path: "/ledger/telegram", binding: "TELEGRAM", downstreamMethod: "GET", downstreamPath: "/ledger" },
 
   // ---- reads: money detail ------------------------------------------

@@ -78,10 +78,18 @@ shown to the operator. Low volume, value first):
   operon x me                            your own profile as X sees it (bio,
                                          follower counts, pinned_tweet_id);
                                          also a credential self-check
-  operon web [name]                      print the CDP WebSocket endpoint for a
-                                         named browser session (persists across
-                                         wakes); point a browser MCP client or a
-                                         connectOverCDP script at it
+  operon web open [name]                 print the CDP endpoint for a named
+                                         browser session (state persists across
+                                         wakes); the browser MCP server is
+                                         already pointed at "default"
+  operon web sessions                    your sessions and where they are
+                                         logged in (domains, never values)
+  operon web close <name>                end the live session (state is kept)
+  operon web password <name> --domains <a.com,b.com>
+                                         mint a password DOOR-SIDE for those
+                                         domains; you get a placeholder to type,
+                                         never the value, and the relay swaps it
+                                         in only on a bound origin
   operon x dm <@handle> --text <t>       DM someone who has DM'd YOU first (or
                                          pipe the text on stdin). Reply-only by
                                          construction: a cold DM is not a
@@ -199,15 +207,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseVault(rest);
     case "x":
       return parseX(rest);
-    case "web": {
-      const name = positionals(rest)[0] ?? "default";
-      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
-        throw new CliUsageError("usage: operon web [session-name] (lowercase, digits, dashes)");
-      }
-      // A LOCAL command: it prints the CDP endpoint the browser MCP
-      // client (or a connectOverCDP script) dials; it does not POST.
-      return { path: `/web/session/${name}`, payload: { local: true } };
-    }
+    case "web":
+      return parseWeb(rest);
     case "channel": {
       const [sub, idRaw] = positionals(rest);
       const id = Number(idRaw);
@@ -284,6 +285,42 @@ function parseVault(args: string[]): CliCall {
       return { path: "/vault/delete", payload: { label } };
     default:
       throw new CliUsageError("unknown vault subcommand; expected one of: set, get, list, delete");
+  }
+}
+
+function parseWeb(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  switch (sub) {
+    case undefined:
+    case "open": {
+      const name = positionals(rest)[0] ?? "default";
+      if (!NAME.test(name)) throw new CliUsageError("usage: operon web open [name]");
+      // LOCAL: prints the CDP endpoint a browser client dials; no POST.
+      return { path: `/web/session/${name}`, payload: { local: true } };
+    }
+    case "sessions":
+      return { path: "/web/sessions", payload: {} };
+    case "close": {
+      const name = positionals(rest)[0];
+      if (!name || !NAME.test(name)) throw new CliUsageError("usage: operon web close <name>");
+      return { path: "/web/close", payload: { name } };
+    }
+    case "password": {
+      const [name] = positionals(rest);
+      const domains = flagValue(rest, "--domains");
+      if (!name || !NAME.test(name) || !domains) {
+        throw new CliUsageError(
+          "usage: operon web password <name> --domains <a.com,b.com> (the value is minted door-side; you get a placeholder)"
+        );
+      }
+      return {
+        path: "/web/password",
+        payload: { name, domains: domains.split(",").map(d => d.trim()).filter(Boolean) }
+      };
+    }
+    default:
+      throw new CliUsageError("unknown web subcommand; expected one of: open, sessions, close, password");
   }
 }
 
