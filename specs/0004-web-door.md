@@ -193,6 +193,49 @@ binding is not exact-origin:
 The browser session cookie AND the vaulted password together are the
 account; deleting both is account abandonment.
 
+### Passkeys first (WebAuthn at the relay)
+
+Passkeys are the PREFERRED credential wherever a site offers them, and
+the fit is exact: CDP has a native WebAuthn domain, so the relay
+installs a VIRTUAL AUTHENTICATOR into every session
+(`WebAuthn.addVirtualAuthenticator`, CTAP2/internal,
+automatic presence + user-verified).
+
+- **Registration**: the site prompts for a passkey, the virtual
+  authenticator answers, and the relay exports the resulting
+  credential (`WebAuthn.getCredentials`) into the session's DO storage
+  keyed by rpId, beside the cookies it already keeps. On the next
+  session open the relay restores it (`WebAuthn.addCredential`).
+- **Sign-in is a click.** No secret is typed, no placeholder, no
+  sweep interaction, no OTP dance.
+- **Origin binding is cryptographic**, enforced by the protocol
+  itself: an assertion is scoped to the rpId, so a lookalike domain
+  cannot use the credential at all. Everything the password machinery
+  above approximates with domain binding and held decisions, WebAuthn
+  provides natively; none of it is needed on the passkey path.
+- The mind never holds any part of the credential at any point,
+  including enrollment. Doctrine: when a signup or account-settings
+  page offers a passkey, take it; passwords are the fallback for sites
+  without one.
+
+### OTPs
+
+- **Email codes and magic links** work TODAY: the agent's inbox is the
+  email door (`operon email pull`). Codes are short-lived and
+  single-use, so reading one from the inbox and typing it is safe; the
+  sweep does not apply to ephemeral values.
+- **TOTP** (authenticator-app codes): the seed is vaulted at
+  enrollment (`operon vault set web-totp/<name>`, through the porch,
+  never keystrokes) and codes are minted door-side: `operon web otp
+  <name>` returns the current 6-digit code, which is safe to type for
+  the same reason email codes are. The seed does transit the session
+  once at enrollment (the site displays it); the sweep denylists it
+  from that moment, and relay-side DOM extraction is a later
+  tightening if that window matters.
+- **SMS**: the agent has no phone number. Out of scope for this spec;
+  a number-renting door would be its own decision with its own abuse
+  surface.
+
 ## 6. Operator surface
 
 Through the ops gateway (spec 0003 section 3), new routes:
