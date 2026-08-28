@@ -503,9 +503,10 @@ are the meter to watch before loosening anything.
    unfiltered CDP pipe.
 2. **MVP, with the controls, not after them**: browser-gk with
    `WebSession` (open/relay/ledger/snapshot + reconnect/heartbeat), the
-   relay POLICY POINT (credential-export method drop, cookie-value
-   denylist folding, input substitution on every text path, origin
-   denylist + `allowedDomainSets`), storage-state persistence,
+   relay POLICY POINT (credential-export method drop, input
+   substitution on every text path bound to the target execution
+   context's origin, origin denylist + `allowedDomainSets`),
+   storage-state persistence,
    recording archived to R2 on close, the concurrency + minute caps,
    **web-session egress enforcement** (deny-by-default outbound while a
    session is open via the container's SNI-level `allowedHosts`
