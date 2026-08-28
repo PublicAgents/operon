@@ -1,5 +1,4 @@
 import { doorHost } from "./umbilical-routes.js";
-import { fenceAllowedHosts, parseExtraHosts } from "./egress-fence.js";
 import {
   wakeEnv,
   type RosterAgent,
@@ -70,12 +69,6 @@ export interface PreparedLaunch {
    * forwards over a binding, so no door credential enters the container.
    */
   umbilicalNonce: string;
-  /**
-   * The deny-by-default egress allowlist for a web-capable agent
-   * (spec 0004 section 5). Undefined for a non-web agent, whose
-   * container launches with open internet exactly as before.
-   */
-  allowedHosts?: string[];
 }
 
 export async function prepareLaunch(
@@ -145,9 +138,6 @@ export async function prepareLaunch(
       secrets,
       { ...context.options, ...doorOptions, ...perAgent }
     ),
-    umbilicalNonce,
-    ...(agent.web
-      ? { allowedHosts: fenceAllowedHosts(parseExtraHosts(context.getSecret("WEB_EXTRA_HOSTS"))) }
-      : {})
+    umbilicalNonce
   };
 }

@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile, copyFile } from "node:fs/promises";
 import { webMcpConfigJson } from "./web-mcp.js";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
@@ -101,7 +102,36 @@ function sessionBaseEnv(): Record<string, string> {
     const value = process.env[name];
     if (value) env[name] = value;
   }
+  // Node uses its own CA bundle, not the system store, so the egress
+  // audit's TLS interception (spec 0004 section 8) is only trusted by the
+  // mind's node processes when this points at the platform CA. Set only
+  // when the CA is actually present (below); harmless otherwise.
+  if (process.env.NODE_EXTRA_CA_CERTS) env.NODE_EXTRA_CA_CERTS = process.env.NODE_EXTRA_CA_CERTS;
   return env;
+}
+
+/** The CA the container platform uses to intercept (and audit) egress. */
+const CONTAINERS_CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
+
+/**
+ * Trust the platform's egress-interception CA so HTTPS keeps working while
+ * every request is audited (spec 0004 section 8). The cert is placed by
+ * the platform at container start, so this runs at startup, not build:
+ * added to the system store for curl/git, and exposed via
+ * NODE_EXTRA_CA_CERTS for node. Best-effort: if the CA is absent (no
+ * interception configured) the container runs exactly as before.
+ */
+async function trustEgressCa(): Promise<void> {
+  if (!existsSync(CONTAINERS_CA)) return;
+  try {
+    await mkdir("/usr/local/share/ca-certificates", { recursive: true });
+    await copyFile(CONTAINERS_CA, "/usr/local/share/ca-certificates/cloudflare-containers-ca.crt");
+    await runCapture("update-ca-certificates", [], {}).catch(() => undefined);
+    process.env.NODE_EXTRA_CA_CERTS = CONTAINERS_CA;
+    log("egress audit: trusting the platform interception CA");
+  } catch (error) {
+    log(`egress audit: could not trust the interception CA: ${String(error).slice(0, 200)}`);
+  }
 }
 
 function mindHome(): string {
@@ -587,6 +617,9 @@ async function notify(config: WakeConfig, text: string): Promise<void> {
 async function main(): Promise<number> {
   const config = readWakeConfig(process.env);
   const label = `[${config.agentId}] wake ${config.wakeId} (${config.trigger})`;
+  // Before any network use, trust the egress-audit interception CA so the
+  // clone, npm, and the mind's own requests keep working under audit.
+  await trustEgressCa();
   const adapter = getAdapter(config.harness);
   assertEnvClean(adapter, process.env);
 

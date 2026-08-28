@@ -38,11 +38,6 @@ export interface LaunchArgs {
    * porch (not the mind, not a browser page) can reach the doors.
    */
   umbilicalNonce?: string;
-  /**
-   * Deny-by-default egress allowlist (spec 0004): present for a
-   * web-capable agent, whose container must never run unfenced.
-   */
-  allowedHosts?: string[];
 }
 
 export type LaunchResult =
@@ -153,15 +148,26 @@ export class WakeContainer extends DurableObject<WakeEnv> {
           await intercept.interceptOutboundHttp(host, router);
         }
       }
-      // A web-capable container launches FENCED: deny-by-default egress
-      // (SNI-level, so HTTPS is covered without TLS interception) for the
-      // whole wake, so a browser credential the mind extracts has no
-      // direct path out. Non-web agents keep open internet as before.
-      await this.ctx.container.start({
-        env: args.env,
-        enableInternet: true,
-        ...(args.allowedHosts?.length ? { allowedHosts: args.allowedHosts } : {})
-      } as { env: Record<string, string>; enableInternet: boolean });
+      // Egress AUDIT, not a fence: every real outbound request the
+      // container makes is intercepted, logged, and forwarded (spec
+      // 0004 section 8). We deliberately do NOT block: a hijacked mind
+      // can exfiltrate through the remote browser regardless (the
+      // irreducible residual), so a fence is burden without benefit; the
+      // value is a durable record to analyse later. Fail-open: if the
+      // audit worker errors, the request still goes through.
+      const exportsBag = (this.ctx as unknown as {
+        exports: Record<string, (opts?: { props?: unknown }) => Fetcher>;
+      }).exports;
+      if (exportsBag.EgressAudit) {
+        const audit = exportsBag.EgressAudit({ props: { agentId: args.agentId, wakeId: args.wakeId } });
+        const intercept = this.ctx.container as unknown as {
+          interceptOutboundHttps(host: string, worker: Fetcher): Promise<void>;
+        };
+        // "*" catches all HTTPS egress (npm, git, api hosts, everything);
+        // the door virtual hosts are plain HTTP and stay on the umbilical.
+        await intercept.interceptOutboundHttps("*", audit);
+      }
+      await this.ctx.container.start({ env: args.env, enableInternet: true });
     } catch (error) {
       await this.finish(record, "failed", String(error));
       return { status: "error", error: `container_start_failed: ${String(error)}` };
