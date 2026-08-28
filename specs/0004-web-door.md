@@ -325,10 +325,17 @@ interception machinery closes that gap:
 
 Browser Run on Workers Paid: 10 browser-hours/month and 10 averaged
 concurrent browsers included, then $0.09/browser-hour and $2 per
-additional concurrent browser. At the default 30 min/wake cap and 3
-wakes/day the theoretical ceiling is ~45 h/month (~$3.15 beyond the
-included 10 h); in practice sessions idle out at 10 minutes and real
-usage lands well under. The per-wake cap is also the budget knob.
+additional concurrent browser. Under the concurrency model the
+theoretical ceiling is concurrency cap x wake wall x wakes/day: at
+the defaults (3 concurrent, 2 h wall, 3 wakes/day) that is 18
+browser-hours/day, ~$47/month if every wake ran three browsers flat
+out. In practice a session dies after 10 idle minutes, so browser
+hours track actual activity, and one session at a time is the
+doctrine; real usage lands near the included 10 h. The budget levers,
+tightest first: the optional aggregate browser-minutes knob (ON it is
+a hard money bound), the concurrency cap, and the wake wall. The
+WebMeter's per-wake minute totals in the ledger are the meter to
+watch before tightening anything.
 
 ## 10. Phasing
 
