@@ -402,16 +402,20 @@ interception machinery closes that gap:
   allow/deny policy stays a separate later decision so the audit can
   ship without arguing about what to block for ordinary traffic (npm,
   git, an API the agent legitimately calls).
-- The ONE exception, and it is a hard precondition of the web door, is
-  a web session's lifetime: while any web session is open, egress ENFORCES
-  deny-by-default (section 5, layer two). Outbound is allowed only to
-  the door hosts, the agent's own hosts, and the session's allowlisted
-  destinations; everything else is refused, so a cookie the mind
-  extracts via `Runtime.evaluate` has nowhere hostile to send it. This
-  is not "observe-only": the interception must be able to BLOCK, and
-  the web door does not reach production until it does. The general
-  egress policy for non-web traffic remains the separate, later
-  decision.
+- The ONE exception, a hard precondition of the web door, is a web
+  session's lifetime. BLOCKING and CONTENT-LOGGING are different
+  primitives with different prerequisites:
+  - Blocking is the container's `allowedHosts` deny-by-default
+    allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
+    ships in the web door MVP: while a session is open, outbound is
+    allowed only to the door hosts, the agent's own hosts, wake infra
+    (npm, GitHub), and the session's navigation targets; everything
+    else is refused at connect, so an extracted cookie has nowhere
+    hostile to go. No real account is created before this exists.
+  - Content-logging every request (this section's JSONL/aggregates)
+    over `interceptOutboundHttps` needs the CA-trust image change and
+    stays phase 5. Losing the log for non-web traffic is not a
+    credential leak; the block already stands.
 
 ## 9. Costs
 
@@ -455,9 +459,11 @@ are the meter to watch before loosening anything.
    denylist + `allowedDomainSets`), storage-state persistence,
    recording archived to R2 on close, the concurrency + minute caps,
    **web-session egress enforcement** (deny-by-default outbound while a
-   session is open, section 5 layer two; this is the SESSION-SCOPED
-   slice, not the full-container audit of phase 5, and it is small
-   because the WakeContainer already intercepts by host), `operon web
+   session is open via the container's SNI-level `allowedHosts`
+   allowlist, which blocks HTTPS with no CA-trust needed, section 5
+   layer two; this is the SESSION-SCOPED block, distinct from the
+   full-container CONTENT audit of phase 5 that does need TLS
+   interception), `operon web
    open|sessions|close`, chrome-devtools-mcp staged into the harness,
    ops routes (list + history + delete). The sweep, the method filter,
    AND the egress fence are NOT a later hardening pass: the first live
