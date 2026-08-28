@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { auditEvent, upstreamEndpoint } from "./audit.js";
+import { cdpDecision } from "./cdp-policy.js";
 
 /**
  * One live browser relay per (agent, session name): the spike scope of
@@ -76,6 +77,20 @@ export class WebSession extends DurableObject<SessionEnv> {
     };
 
     server.addEventListener("message", event => {
+      // The relay is a policy point: credential-export CDP methods are
+      // refused here (an error back to the client) and never forwarded.
+      if (typeof event.data === "string") {
+        const decision = cdpDecision(event.data);
+        if (decision.action === "block") {
+          record("web_blocked", { method: decision.method });
+          try {
+            server.send(decision.response);
+          } catch {
+            teardown("client_send_failed");
+          }
+          return;
+        }
+      }
       try {
         upstream.send(event.data);
       } catch {
