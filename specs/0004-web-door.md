@@ -116,16 +116,20 @@ assumed steerable by content it reads, and a browser feeds it
 attacker-controlled content while holding the agent's logged-in
 sessions. The door defends itself:
 
-- **Per-wake browser minutes** (default: 30, env knob beside the other
-  caps), an AGGREGATE across every session the wake opens, named or
-  unnamed; N sessions never means N budgets. One `WebMeter` DO per
-  agent owns the count: each live relay draws short leases (one minute
-  at a time) from the meter keyed by wakeId, and when the wake's
-  budget is gone the meter stops granting, every relay for that wake
-  pauses, and further opens are refused. A hijacked wake cannot burn a
-  day inside a browser (or a parallel fleet of them); the next wake
-  starts with a clean context. Also the cost bound (Browser Run bills
-  browser-hours, and concurrent sessions bill concurrently).
+- **Session lifetime and concurrency.** A session may live for the
+  WHOLE wake: some work needs a browser open end to end, and the wake
+  hard wall is the natural time bound (every session closes and
+  snapshots at wake end regardless). The cap that matters is
+  CONCURRENCY: at most 3 sessions open at once per wake (env knob;
+  one open session is the norm and the doctrine). One `WebMeter` DO
+  per agent enforces it, aggregated across named and unnamed sessions
+  via short leases keyed by wakeId, so N sessions never dodge the
+  limit; it also totals browser-minutes per wake into the ledger for
+  observability and cost tracking. An optional aggregate
+  browser-minutes knob exists for deployments that want a tighter
+  bound than wake length; default off. The wake wall keeps the
+  hijack and cost ceiling: 3 concurrent for one wake is the worst
+  case, and the next wake starts with a clean context.
 - **Origin denylist** (env, default empty): destinations the relay
   refuses to navigate to regardless of what the mind wants. The list is
   deployment policy, like every cap. An allowlist is deliberately NOT
@@ -296,7 +300,28 @@ agent's own about-to-be-published site, and the wake-scoped teardown
 bounds it. If that posture tightens later, a named tunnel on the
 operator's account with Access in front is the upgrade path.
 
-## 8. Costs
+## 8. Egress audit: every request the container makes
+
+Today only DOOR traffic passes through the supervisor; npm, git, curl
+and WebFetch leave the container directly and unobserved. The same
+interception machinery closes that gap:
+
+- `interceptAllOutboundHttp` routes EVERY outbound HTTP request
+  through a chassis handler; `interceptOutboundHttps("*")` does the
+  same for TLS once the image trusts the Cloudflare containers CA,
+  which is the identical CA-trust step the phase-2 mind-credential
+  injection already requires. One piece of machinery, two consumers.
+- Volume demands tiers: a single npm install is thousands of
+  requests. Per-request rows go to R2 as batched JSONL (permanent,
+  greppable offline: method, host, path, status, bytes, timestamp);
+  the ledger/chronicle gets per-wake aggregates (distinct hosts,
+  request counts, first sight of a never-before-seen host, which is
+  the interesting security signal).
+- Interception observes and logs; it does not filter. Egress POLICY
+  (allow/deny lists) stays a separate decision so the audit ships
+  without arguing about what to block.
+
+## 9. Costs
 
 Browser Run on Workers Paid: 10 browser-hours/month and 10 averaged
 concurrent browsers included, then $0.09/browser-hour and $2 per
@@ -305,7 +330,7 @@ wakes/day the theoretical ceiling is ~45 h/month (~$3.15 beyond the
 included 10 h); in practice sessions idle out at 10 minutes and real
 usage lands well under. The per-wake cap is also the budget knob.
 
-## 9. Phasing
+## 10. Phasing
 
 1. **Spike**: a ws CDP relay porch -> umbilical -> Worker -> Browser
    Run, driving one page load end to end. Proves the one undocumented
@@ -313,15 +338,18 @@ usage lands well under. The per-wake cap is also the budget knob.
 2. **MVP**: browser-gk with `WebSession` (open/relay/ledger/snapshot),
    `operon web open|sessions|close`, chrome-devtools-mcp staged into
    the harness config, ops routes (list + history + delete), recording
-   on, per-wake minute cap.
+   on and ARCHIVED to R2 on close, the concurrency cap.
 3. **Signup flow proven**: the agent creates one real account end to
    end (email verification via the email door, password into the
    vault), operator watches via live view.
 4. **Hardening**: CDP input sweep, origin denylist knob, live-view
    link in a notify action, tunnel-based local testing
    (`operon web expose`).
+5. **Egress audit** (section 8): full-container request logging over
+   `interceptAllOutboundHttp`, HTTPS included once the CA-trust image
+   change (shared with mind-credential injection) lands.
 
-## 10. What this does NOT do
+## 11. What this does NOT do
 
 - No local browser in the container (decision, section 2). Playwright
   as a LIBRARY may still be installed for connectOverCDP scripting;
