@@ -428,9 +428,11 @@ interception machinery closes that gap:
   primitives with different prerequisites:
   - Blocking is the container's `allowedHosts` deny-by-default
     allowlist (SNI-level, so HTTPS is covered with no CA-trust). This
-    ships in the web door MVP: outbound is allowed only to the door
-    hosts, the agent's own hosts, and wake infra (npm, GitHub), never
-    a browsing target (browsing is remote). The fence is a LAUNCH
+    ships in the web door MVP: outbound is allowed only to the minimal
+    wake infra (the mind endpoint, npm, GitHub, the tunnel edge), never
+    an agent-owned publish host (reached through the publish door, not
+    egress) and never a browsing target (browsing is remote). The fence
+    is a LAUNCH
     property of the container, owned by the `WakeContainer` supervisor
     that owns `allowedHosts`: a web-capable agent's container is started
     WITH the deny-by-default allowlist already in force, for the whole
