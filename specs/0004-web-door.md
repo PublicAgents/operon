@@ -117,10 +117,15 @@ attacker-controlled content while holding the agent's logged-in
 sessions. The door defends itself:
 
 - **Per-wake browser minutes** (default: 30, env knob beside the other
-  caps). A hijacked wake cannot burn a day inside a browser; the next
-  wake starts with a clean context. Enforced at the relay by wall
-  clock on live sessions; also the cost bound (Browser Run bills
-  browser-hours).
+  caps), an AGGREGATE across every session the wake opens, named or
+  unnamed; N sessions never means N budgets. One `WebMeter` DO per
+  agent owns the count: each live relay draws short leases (one minute
+  at a time) from the meter keyed by wakeId, and when the wake's
+  budget is gone the meter stops granting, every relay for that wake
+  pauses, and further opens are refused. A hijacked wake cannot burn a
+  day inside a browser (or a parallel fleet of them); the next wake
+  starts with a clean context. Also the cost bound (Browser Run bills
+  browser-hours, and concurrent sessions bill concurrently).
 - **Origin denylist** (env, default empty): destinations the relay
   refuses to navigate to regardless of what the mind wants. The list is
   deployment policy, like every cap. An allowlist is deliberately NOT
@@ -245,8 +250,14 @@ Through the ops gateway (spec 0003 section 3), new routes:
   live or saved, minutes used this wake.
 - `GET /web/sessions/:name/history`: the navigation ledger for one
   session.
-- `POST /web/sessions/:name/delete` (decision, audited): drop the saved
-  state. The remote logout button.
+- `POST /web/sessions/:name/delete` (decision, audited): the remote
+  logout button. Deletion is three steps in one action, in order:
+  terminate any LIVE Browser Run session under the name (close the
+  upstream, drop the relay), bump the session's GENERATION counter,
+  then drop the saved state. Every snapshot write carries the
+  generation it started from and the DO refuses stale ones, so an
+  in-flight snapshot-on-close from the killed session cannot write
+  the deleted cookies back under the same name. Delete means gone.
 - Live sessions: the response includes the Browser Run live-view URL
   (`Cloudflare.getLiveView`), which is watch-and-intervene: the
   operator can see the page the agent sees and take the wheel.
