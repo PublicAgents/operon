@@ -49,6 +49,8 @@ interface StoredState {
 const HEARTBEAT_MS = 4 * 60_000;
 /** How often to capture identity from a live session. */
 const SNAPSHOT_MS = 60_000;
+/** How long a closing session waits for its last capture to land. */
+const FINAL_CAPTURE_MS = 3_000;
 
 export class WebSession extends DurableObject<SessionEnv> {
   private upstream: WebSocket | null = null;
@@ -61,8 +63,11 @@ export class WebSession extends DurableObject<SessionEnv> {
 
   /** Drop any live relay, then forget the saved identity (remote logout). */
   async destroySession(): Promise<{ deleted: boolean }> {
-    const generation = ((await this.ctx.storage.get<number>("generation")) ?? 0) + 1;
-    await this.ctx.storage.put("generation", generation);
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const generation = ((await this.ctx.storage.get<number>("generation")) ?? 0) + 1;
+      await this.ctx.storage.put("generation", generation);
+      await this.ctx.storage.delete("state");
+    });
     if (this.upstream) {
       try {
         this.upstream.close(1000, "deleted_by_operator");
@@ -72,7 +77,6 @@ export class WebSession extends DurableObject<SessionEnv> {
       this.upstream = null;
     }
     this.stopTimers();
-    await this.ctx.storage.delete("state");
     return { deleted: true };
   }
 
@@ -172,20 +176,23 @@ export class WebSession extends DurableObject<SessionEnv> {
       if (this.upstream !== upstream) return;
       this.upstream = null;
       this.opening = false;
-      // Capture identity BEFORE stopping the timers and closing: a login
-      // inside the first interval would otherwise be lost, and reopening
-      // the named session would come back logged out.
-      this.captureNow(upstream);
       this.stopTimers();
       record("web_session_close", { reason });
       // Free the concurrency slot and accrue this session's minutes, or
       // a closed session would hold its slot until the cap is exhausted.
       this.ctx.waitUntil(this.releaseSlot(agentId, name, wakeId));
-      try {
-        upstream.close();
-      } catch {
-        /* already closed */
-      }
+      // A login inside the first interval must not be lost, so capture
+      // once more and let the replies LAND before closing: firing the
+      // commands and closing immediately would drop them on the floor.
+      this.ctx.waitUntil(
+        this.finalCapture(upstream).finally(() => {
+          try {
+            upstream.close();
+          } catch {
+            /* already closed */
+          }
+        })
+      );
       try {
         server.close();
       } catch {
@@ -385,15 +392,35 @@ export class WebSession extends DurableObject<SessionEnv> {
     data: Record<string, string>,
     generation: number
   ): Promise<void> {
-    const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-    if (current !== generation) return;
-    const previous = await this.ctx.storage.get<StoredState>("state");
-    const state: StoredState = {
-      cookies: previous?.cookies ?? [],
-      localStorage: { ...(previous?.localStorage ?? {}), [origin]: data },
-      savedAt: new Date().toISOString()
-    };
-    await this.ctx.storage.put("state", state);
+    // Atomic for the same reason as saveState: a delete must not be
+    // reversed by a write that checked the generation before it landed.
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
+      if (current !== generation) return;
+      const previous = await this.ctx.storage.get<StoredState>("state");
+      const state: StoredState = {
+        cookies: previous?.cookies ?? [],
+        localStorage: { ...(previous?.localStorage ?? {}), [origin]: data },
+        savedAt: new Date().toISOString()
+      };
+      await this.ctx.storage.put("state", state);
+    });
+  }
+
+  /**
+   * A last capture whose replies are awaited (briefly) before the socket
+   * closes. Without the wait the commands are sent into a closing socket
+   * and the session loses whatever it learned since the last interval.
+   */
+  private async finalCapture(upstream: WebSocket): Promise<void> {
+    this.captureNow(upstream);
+    const deadline = Date.now() + FINAL_CAPTURE_MS;
+    while (
+      (this.pendingCookieCapture.size > 0 || this.pendingStorageCapture.size > 0) &&
+      Date.now() < deadline
+    ) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
   }
 
   /** One capture round: cookies + localStorage, both best-effort. */
@@ -497,15 +524,20 @@ export class WebSession extends DurableObject<SessionEnv> {
    * back under the same name.
    */
   private async saveState(cookies: StoredCookie[], generation: number): Promise<void> {
-    const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
-    if (current !== generation) return;
-    const previous = await this.ctx.storage.get<StoredState>("state");
-    const state: StoredState = {
-      cookies,
-      localStorage: previous?.localStorage ?? {},
-      savedAt: new Date().toISOString()
-    };
-    await this.ctx.storage.put("state", state);
+    // The generation check and the write must be ATOMIC: a delete landing
+    // between them would be reversed by this write, which is exactly the
+    // resurrection the operator's logout must never allow.
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const current = (await this.ctx.storage.get<number>("generation")) ?? 0;
+      if (current !== generation) return;
+      const previous = await this.ctx.storage.get<StoredState>("state");
+      const state: StoredState = {
+        cookies,
+        localStorage: previous?.localStorage ?? {},
+        savedAt: new Date().toISOString()
+      };
+      await this.ctx.storage.put("state", state);
+    });
   }
 
   private async policy(): Promise<RelayPolicy> {
