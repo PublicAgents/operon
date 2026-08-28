@@ -139,12 +139,30 @@ sessions. The door defends itself:
   and the umbilical asserts the agent id; agent A cannot open agent
   B's sessions.
 
-Passwords for accounts the agent creates go in the vault under
-`web/<origin>`, minted by the mind, never echoed into the transcript
-(the vault door already refuses to read secrets back into the session
-once written; verify this holds for the signup flow). The browser
-session cookie AND the vaulted password together are the account;
-deleting both is account abandonment.
+### Passwords: placeholder in, injection at the relay
+
+The sweep above forbids typing secret VALUES, which raises the obvious
+question: how does the agent enter the password for an account it
+created? Answer: it never has the password, in either direction, the
+same pattern as the phase-2 mind-credential injection.
+
+- **Mint**: `operon web password <origin>` generates a strong password
+  DOOR-SIDE, stores it in the vault under `web/<origin>`, and returns
+  only a placeholder token. The mind never sees the value, not even at
+  signup, so it cannot leak what it does not hold.
+- **Fill**: the mind types the placeholder
+  (`{{vault:web/<origin>}}`) into the field. The RELAY substitutes the
+  real value into the `Input.insertText` frame, but only when the
+  page's top-frame origin matches the vault key's origin. On any other
+  origin the placeholder goes through verbatim: a steered mind cannot
+  be phished into entering the GitHub password on a lookalike domain,
+  because the mind does not have it.
+- This keeps the input sweep absolute: there is never a legitimate
+  reason for a real secret value in a keystroke. In practice the
+  persisted session cookie does most logins and passwords are rare.
+
+The browser session cookie AND the vaulted password together are the
+account; deleting both is account abandonment.
 
 ## 6. Operator surface
 
