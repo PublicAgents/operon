@@ -437,8 +437,13 @@ async function handleMe(env: Env, agent: RosterAgent): Promise<Response> {
     return errorResponse(502, "x_rejected", "users/me answered non-JSON");
   }
   if (!parsed.data?.id) return errorResponse(502, "x_rejected", "users/me had no id");
-  // Opportunistically cache the self id the DM path also needs.
-  await poster(env, agent.id).setSelfId(parsed.data.id);
+  // Opportunistically cache the self id the DM path also needs;
+  // best-effort, since the profile answer must not depend on storage.
+  try {
+    await poster(env, agent.id).setSelfId(parsed.data.id);
+  } catch (error) {
+    console.error("x me: selfId cache write failed", error);
+  }
   return json({ ok: true, me: parsed.data });
 }
 
