@@ -1,4 +1,5 @@
 import { doorHost } from "./umbilical-routes.js";
+import { fenceAllowedHosts, parseExtraHosts } from "./egress-fence.js";
 import {
   wakeEnv,
   type RosterAgent,
@@ -69,6 +70,12 @@ export interface PreparedLaunch {
    * forwards over a binding, so no door credential enters the container.
    */
   umbilicalNonce: string;
+  /**
+   * The deny-by-default egress allowlist for a web-capable agent
+   * (spec 0004 section 5). Undefined for a non-web agent, whose
+   * container launches with open internet exactly as before.
+   */
+  allowedHosts?: string[];
 }
 
 export async function prepareLaunch(
@@ -111,8 +118,12 @@ export async function prepareLaunch(
     spendUrl: "http://" + doorHost("spend"),
     vaultUrl: "http://" + doorHost("vault"),
     xUrl: "http://" + doorHost("x"),
-    webUrl: "http://" + doorHost("web"),
-    webToken: umbilicalNonce
+    // The web door is opt-in per agent (spec 0004): only a web-capable
+    // agent gets it, and only such a container launches fenced, so a
+    // web upgrade can never arrive from an unfenced container.
+    ...(agent.web
+      ? { webUrl: "http://" + doorHost("web"), webToken: umbilicalNonce }
+      : {})
   };
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is
@@ -134,6 +145,9 @@ export async function prepareLaunch(
       secrets,
       { ...context.options, ...doorOptions, ...perAgent }
     ),
-    umbilicalNonce
+    umbilicalNonce,
+    ...(agent.web
+      ? { allowedHosts: fenceAllowedHosts(parseExtraHosts(context.getSecret("WEB_EXTRA_HOSTS"))) }
+      : {})
   };
 }

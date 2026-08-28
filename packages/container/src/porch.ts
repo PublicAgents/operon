@@ -196,6 +196,9 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/x/post") return await this.xPost(body);
       if (request.method === "POST" && url.pathname === "/x/posts") return await this.xCall("posts", {});
       if (request.method === "POST" && url.pathname === "/x/me") return await this.xCall("me", {});
+      if (request.method === "POST" && url.pathname === "/web/sessions") return await this.webSessions();
+      if (request.method === "POST" && url.pathname === "/web/close") return await this.webClose(body);
+      if (request.method === "POST" && url.pathname === "/web/password") return await this.webPassword(body);
       if (request.method === "POST" && url.pathname === "/x/dm") return await this.xDm(body);
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
@@ -686,6 +689,52 @@ export class Porch {
       return fail(502, "channel_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
     }
     return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /**
+   * The web door's request-shaped operations (the CDP relay itself is a
+   * WebSocket, handled by web-relay.ts). Same umbilical hop as every
+   * other door: the porch holds the nonce, the mind never sees it.
+   */
+  private async webCall(path: string, payload: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.webUrl || !config.webToken) return fail(503, "web_not_wired");
+    const response = await fetch(`${config.webUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.webToken}` },
+      body: JSON.stringify(payload)
+    });
+    const text = (await response.text()).slice(0, 10000);
+    if (!response.ok) return fail(502, "web_rejected", `${response.status}: ${text.slice(0, 300)}`);
+    try {
+      return ok({ gatekeeper: JSON.parse(text) });
+    } catch {
+      return fail(502, "web_rejected", "non-JSON answer");
+    }
+  }
+
+  /** The agent's own sessions: names, domains, live/saved. Never values. */
+  private async webSessions(): Promise<JsonResult> {
+    return this.webCall("/gatekeeper/web/sessions/list", {});
+  }
+
+  /** End a live session; the saved identity is kept for the next wake. */
+  private async webClose(body: Record<string, unknown>): Promise<JsonResult> {
+    const name = typeof body.name === "string" ? body.name : "";
+    if (!name) return fail(400, "name_required");
+    return this.webCall("/gatekeeper/web/close", { name });
+  }
+
+  /**
+   * Mint a password DOOR-SIDE. The value is generated in the Gatekeeper
+   * and stored there; the mind receives only a placeholder to type, and
+   * the relay substitutes the real value on a bound origin.
+   */
+  private async webPassword(body: Record<string, unknown>): Promise<JsonResult> {
+    const name = typeof body.name === "string" ? body.name : "";
+    const domains = Array.isArray(body.domains) ? body.domains.filter(d => typeof d === "string") : [];
+    if (!name || domains.length === 0) return fail(400, "name_and_domains_required");
+    return this.webCall("/gatekeeper/web/credential", { name, domains });
   }
 
   /** POST a payload to the X Gatekeeper with this agent's OWN bearer. */

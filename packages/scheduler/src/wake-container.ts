@@ -38,6 +38,11 @@ export interface LaunchArgs {
    * porch (not the mind, not a browser page) can reach the doors.
    */
   umbilicalNonce?: string;
+  /**
+   * Deny-by-default egress allowlist (spec 0004): present for a
+   * web-capable agent, whose container must never run unfenced.
+   */
+  allowedHosts?: string[];
 }
 
 export type LaunchResult =
@@ -148,7 +153,15 @@ export class WakeContainer extends DurableObject<WakeEnv> {
           await intercept.interceptOutboundHttp(host, router);
         }
       }
-      await this.ctx.container.start({ env: args.env, enableInternet: true });
+      // A web-capable container launches FENCED: deny-by-default egress
+      // (SNI-level, so HTTPS is covered without TLS interception) for the
+      // whole wake, so a browser credential the mind extracts has no
+      // direct path out. Non-web agents keep open internet as before.
+      await this.ctx.container.start({
+        env: args.env,
+        enableInternet: true,
+        ...(args.allowedHosts?.length ? { allowedHosts: args.allowedHosts } : {})
+      } as { env: Record<string, string>; enableInternet: boolean });
     } catch (error) {
       await this.finish(record, "failed", String(error));
       return { status: "error", error: `container_start_failed: ${String(error)}` };

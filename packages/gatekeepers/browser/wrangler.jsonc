@@ -7,12 +7,13 @@
   "durable_objects": {
     "bindings": [
       { "name": "WEB_SESSION", "class_name": "WebSession" },
+      { "name": "WEB_METER", "class_name": "WebMeter" },
       { "name": "LEDGER", "class_name": "Ledger" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebSession", "Ledger"] }]
-  // No routes and no workers_dev: the scheduler's service binding is the
-  // only way in (binding-only auth; identity is x-operon-agent from the
-  // umbilical). Vars: CF_ACCOUNT_ID.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebSession", "WebMeter", "Ledger"] }]
+  // No routes and no workers_dev: a service binding is the only way in
+  // (binding-only auth; identity is x-operon-agent from the umbilical).
+  // Vars: CF_ACCOUNT_ID, WEB_ORIGIN_DENYLIST, WEB_MAX_CONCURRENT.
   // Secrets: BROWSER_RUN_TOKEN (Cloudflare API token, Browser Run perm).
 }
