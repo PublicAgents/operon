@@ -40,7 +40,9 @@ export const ENV = {
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
-  xToken: "OPERON_X_TOKEN"
+  xToken: "OPERON_X_TOKEN",
+  webUrl: "OPERON_WEB_URL",
+  webToken: "OPERON_WEB_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -92,6 +94,9 @@ export interface WakeConfig {
   /** X Gatekeeper endpoint + this agent's own posting bearer. */
   xUrl?: string;
   xToken?: string;
+  /** Web door (spec 0004): the browser relay endpoint + per-wake nonce. */
+  webUrl?: string;
+  webToken?: string;
 }
 
 export class ConfigError extends Error {
@@ -169,7 +174,9 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     chronicleUrl: env[ENV.chronicleUrl],
     chronicleToken: env[ENV.chronicleToken],
     xUrl: env[ENV.xUrl],
-    xToken: env[ENV.xToken]
+    xToken: env[ENV.xToken],
+    webUrl: env[ENV.webUrl],
+    webToken: env[ENV.webToken]
   };
 }
 

@@ -163,6 +163,9 @@ describe("operon CLI parsing", () => {
     expect(parseArgs(["x", "post"])).toEqual({ path: "/x/post", payload: {} });
     expect(parseArgs(["x", "posts"])).toEqual({ path: "/x/posts", payload: {} });
     expect(parseArgs(["x", "me"])).toEqual({ path: "/x/me", payload: {} });
+    expect(parseArgs(["web"])).toEqual({ path: "/web/session/default", payload: { local: true } });
+    expect(parseArgs(["web", "research"])).toEqual({ path: "/web/session/research", payload: { local: true } });
+    expect(() => parseArgs(["web", "BAD"])).toThrow(CliUsageError);
     expect(parseArgs(["x", "dm", "@someone", "--text", "thanks for reaching out"])).toEqual({
       path: "/x/dm",
       payload: { to: "@someone", text: "thanks for reaching out" }

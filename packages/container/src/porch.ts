@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { Duplex } from "node:stream";
+import { handleWebUpgrade } from "./web-relay.js";
 import { mkdir as mkdirFs, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
@@ -91,6 +93,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     pay: Boolean(config.spendUrl && config.spendToken),
     vault: Boolean(config.vaultUrl && config.vaultToken),
     x: Boolean(config.xUrl && config.xToken),
+    web: Boolean(config.webUrl && config.webToken),
     hosts: config.hosts,
     prRepos: config.prRepos
   };
@@ -126,6 +129,18 @@ export class Porch {
         response.writeHead(result.status, { "content-type": "application/json" });
         response.end(JSON.stringify(result.body));
       });
+    });
+    // The web door is a long-lived CDP WebSocket, not a request; relay
+    // it over the umbilical the same way, splicing the sockets.
+    this.server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const took = handleWebUpgrade(request, socket, head, {
+        webUrl: this.context.config.webUrl,
+        webToken: this.context.config.webToken
+      });
+      if (!took) {
+        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+      }
     });
     await new Promise<void>((resolve, reject) => {
       this.server?.once("error", reject);

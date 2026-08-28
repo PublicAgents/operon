@@ -44,6 +44,7 @@ export const OPS_ROUTES: OpsRoute[] = [
   { method: "GET", path: "/ledger/deploy", binding: "DEPLOY", downstreamMethod: "GET", downstreamPath: "/gatekeeper/deploy/ledger" },
   { method: "GET", path: "/ledger/github", binding: "GITHUB", downstreamMethod: "GET", downstreamPath: "/gatekeeper/github/ledger" },
   { method: "GET", path: "/ledger/pr", binding: "PR", downstreamMethod: "GET", downstreamPath: "/gatekeeper/pr/ledger" },
+  { method: "GET", path: "/ledger/web", binding: "BROWSER", downstreamMethod: "GET", downstreamPath: "/gatekeeper/web/ledger" },
   { method: "GET", path: "/ledger/telegram", binding: "TELEGRAM", downstreamMethod: "GET", downstreamPath: "/ledger" },
 
   // ---- reads: money detail ------------------------------------------

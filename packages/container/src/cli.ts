@@ -78,6 +78,10 @@ shown to the operator. Low volume, value first):
   operon x me                            your own profile as X sees it (bio,
                                          follower counts, pinned_tweet_id);
                                          also a credential self-check
+  operon web [name]                      print the CDP WebSocket endpoint for a
+                                         named browser session (persists across
+                                         wakes); point a browser MCP client or a
+                                         connectOverCDP script at it
   operon x dm <@handle> --text <t>       DM someone who has DM'd YOU first (or
                                          pipe the text on stdin). Reply-only by
                                          construction: a cold DM is not a
@@ -195,6 +199,15 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseVault(rest);
     case "x":
       return parseX(rest);
+    case "web": {
+      const name = positionals(rest)[0] ?? "default";
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+        throw new CliUsageError("usage: operon web [session-name] (lowercase, digits, dashes)");
+      }
+      // A LOCAL command: it prints the CDP endpoint the browser MCP
+      // client (or a connectOverCDP script) dials; it does not POST.
+      return { path: `/web/session/${name}`, payload: { local: true } };
+    }
     case "channel": {
       const [sub, idRaw] = positionals(rest);
       const id = Number(idRaw);
@@ -462,6 +475,25 @@ async function main(): Promise<number> {
       return 2;
     }
     call.payload[stdinField.name] = value;
+  }
+
+  // The web door is a WebSocket the mind's browser client dials, not a
+  // porch POST: print the endpoint + the CSRF header and return.
+  if (call.payload.local === true && call.path.startsWith("/web/session/")) {
+    const ws = porch.replace(/^http/, "ws") + call.path;
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          cdpEndpoint: ws,
+          wsHeaders: { "x-operon-porch": "1" },
+          note: "point chrome-devtools-mcp --wsEndpoint here (with --wsHeaders), or connectOverCDP in a script"
+        },
+        null,
+        2
+      )
+    );
+    return 0;
   }
 
   const isGet = call.path === "/capabilities";
