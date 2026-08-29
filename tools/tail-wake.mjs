@@ -64,19 +64,23 @@ try {
   process.exit(2);
 }
 
-async function api(path) {
-  let response = await fetch(`${GK}${path}`, {
-    headers: { "cf-access-jwt-assertion": token }
-  });
+/** One registry tool call (spec 0005 §2: the same tools every surface uses). */
+async function tool(name, input) {
+  const path = `/api/v1/${name.replace(/_/g, "-")}`;
+  const post = () =>
+    fetch(`${GK}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-jwt-assertion": token },
+      body: JSON.stringify(input ?? {})
+    });
+  let response = await post();
   // A live tail can outlast the short-lived JWT: on an auth failure,
   // refresh it once (cloudflared refreshes silently) and retry.
   if (response.status === 401 || response.status === 403) {
     token = accessToken();
-    response = await fetch(`${GK}${path}`, {
-      headers: { "cf-access-jwt-assertion": token }
-    });
+    response = await post();
   }
-  if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+  if (!response.ok) throw new Error(`${name} answered ${response.status}`);
   return response.json();
 }
 
@@ -131,7 +135,7 @@ function render(line) {
 const wakeId =
   wakeArg ??
   (await (async () => {
-    const { wakes } = await api("/chronicle/wakes?limit=1");
+    const { wakes } = await tool("chronicle_wakes", { limit: 1 });
     return wakes[0]?.wakeId;
   })());
 if (!wakeId) {
@@ -231,7 +235,7 @@ for (;;) {
   // (~2 min) gives up.
   let result;
   try {
-    result = await api(`/chronicle/wake-log/${wakeId}?after=${after}`);
+    result = await tool("wake_log", { wakeId, after });
     pollFailures = 0;
   } catch (error) {
     pollFailures += 1;

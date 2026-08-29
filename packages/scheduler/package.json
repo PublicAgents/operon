@@ -32,6 +32,7 @@
     }
   },
   "dependencies": {
+    "@operon/chronicle": "0.0.0",
     "@operon/core": "0.0.0",
     "@operon/worker-kit": "0.0.0"
   },

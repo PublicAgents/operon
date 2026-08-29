@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { recordEvent } from "@operon/chronicle";
 import { allDoorHosts } from "./umbilical-routes.js";
 import type { WakeRecord, WakeTrigger } from "@operon/core";
 import {
@@ -49,6 +50,11 @@ export type LaunchResult =
 interface WakeEnv {
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** Wake outcomes mirror here (kind wake_finished) so history and exit
+   * codes are queryable beyond this DO's own storage. CHRONICLE_DB, not
+   * CHRONICLE: that name is already the chronicle GATEKEEPER's service
+   * binding on this worker. */
+  CHRONICLE_DB?: D1Database;
   /** The umbilical router reads the real door bearers and Gatekeeper
    * service bindings from this (the scheduler worker) env. */
   [name: string]: unknown;
@@ -346,6 +352,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       reason
     };
     await this.ctx.storage.put(rowKey(record), record);
+    this.mirrorOutcome(record);
   }
 
   async wakes(limit = 50): Promise<WakeRecord[]> {
@@ -398,6 +405,26 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       this.finishedWakeIds.delete(record.wakeId);
       throw error;
     }
+    this.mirrorOutcome(finished);
+  }
+
+  /**
+   * Wake outcomes were only readable from this DO's storage; mirroring
+   * them to the chronicle (best-effort, the DO stays the source of
+   * truth) makes wake history with exit status queryable in the events
+   * explorer alongside everything else.
+   */
+  private mirrorOutcome(record: WakeRecord & { reason?: string }): void {
+    if (!this.env.CHRONICLE_DB) return;
+    this.ctx.waitUntil(
+      recordEvent(this.env.CHRONICLE_DB, {
+        at: record.endedAt ?? record.startedAt,
+        gatekeeper: "scheduler",
+        kind: "wake_finished",
+        agentId: record.agentId,
+        detail: { ...record }
+      })
+    );
   }
 
   /** Best-effort operator alert through the telegram Gatekeeper; never throws. */
