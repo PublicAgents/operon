@@ -125,6 +125,15 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["email", "original", "short"])).toThrow(CliUsageError);
   });
 
+  it("email: --body - and an omitted --body defer the body to stdin", () => {
+    const piped = parseArgs(["email", "--to", "a@b.com", "--subject", "s", "--body", "-"]);
+    expect(piped.payload).toEqual({ to: "a@b.com", subject: "s" });
+    const omitted = parseArgs(["email", "--to", "a@b.com", "--subject", "s"]);
+    expect(omitted.payload).toEqual({ to: "a@b.com", subject: "s" });
+    const inline = parseArgs(["email", "--to", "a@b.com", "--subject", "s", "--body", "hello"]);
+    expect(inline.payload).toEqual({ to: "a@b.com", subject: "s", text: "hello" });
+  });
+
   it("parses the vault doors, with and without an inline value", () => {
     expect(parseArgs(["vault", "set", "lv-stats", "--value", "s3cr3t-value"])).toEqual({
       path: "/vault/set",
