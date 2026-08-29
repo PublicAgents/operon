@@ -428,10 +428,17 @@ describe("the living help and the mid-wake pull", () => {
     };
     // Single-shot sharing in the test: clearing on completion would let
     // the second request arrive after the first finished and legitimately
-    // start a new run, which is not what this pins.
+    // start a new run, which is not what this pins. The claim-once rule
+    // (initiator gets the counts, sharers get zeros) matches the
+    // entrypoint's closure.
+    let claimed = false;
     const { url } = await startPorch(config(), [], () => {
       if (!shared) shared = refresher();
-      return shared;
+      if (!claimed) {
+        claimed = true;
+        return shared;
+      }
+      return shared.then(() => ({ mail: 0, dms: 0, channel: false }));
     });
     const request = () =>
       fetch(`${url}/pull`, {
@@ -443,7 +450,10 @@ describe("the living help and the mid-wake pull", () => {
     release();
     const bodies = await Promise.all([first, second]);
     expect(calls).toBe(1);
-    for (const body of bodies) expect(body).toMatchObject({ ok: true, mail: 1 });
+    // Exactly one caller claims the freshness; the sharer hears nothing
+    // new, so a single delivery is never announced twice.
+    const mails = bodies.map(body => body.mail).sort();
+    expect(mails).toEqual([0, 1]);
   });
 
   it("runs the entrypoint's refresher and reports what landed", async () => {

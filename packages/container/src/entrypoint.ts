@@ -747,16 +747,19 @@ async function main(): Promise<number> {
     // ack bookkeeping as wake start. Unacked messages re-deliver (the
     // door forgets nothing until the post-persist ack), so re-writing an
     // inbox file is idempotent and only genuinely NEW ids count.
-    // Concurrent pulls SHARE one run: two overlapping calls ask the same
-    // question, and interleaved snapshots of the shared ack state would
-    // otherwise count one delivery twice.
+    // Concurrent pulls SHARE one run, and its freshness is CLAIMED by
+    // the initiator alone: a sharer rides the same fetch but reports
+    // nothing new, so one delivery is never announced twice (once by a
+    // manual pull and again by the hook, say). The files land on disk
+    // for everyone either way.
     pullFresh() {
       if (!inFlightPull) {
         inFlightPull = doPullFresh().finally(() => {
           inFlightPull = null;
         });
+        return inFlightPull;
       }
-      return inFlightPull;
+      return inFlightPull.then(() => ({ mail: 0, dms: 0, channel: false }));
     }
   });
   let inFlightPull: Promise<{ mail: number; dms: number; channel: boolean }> | null = null;
