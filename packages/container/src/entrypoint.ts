@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, copyFile, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { mkdir, writeFile, copyFile } from "node:fs/promises";
 import { webMcpConfigJson } from "./web-mcp.js";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
@@ -567,18 +566,13 @@ async function runSession(
   // hook is the old behavior, not a failure.
   if (adapter.id === "claude-code") {
     try {
-      // The journal guard's baseline: a sha256 of JOURNAL.md as the
-      // session begins, so the Stop hook can tell "byte-identical" from
-      // "appended" (wake 23 stopped cleanly with its journal unwritten;
-      // a content hash also catches touches and same-length rewrites
-      // that a stat comparison would wave through).
+      // The journal guard's baseline: JOURNAL.md as the session begins,
+      // so the Stop hook can tell an appended entry (wake-start content
+      // preserved, new bytes around it) from an untouched journal or a
+      // rewrite masquerading as one (wake 23 stopped cleanly with its
+      // journal unwritten).
       try {
-        const journal = await readFile(join(STATE_DIR, "JOURNAL.md"));
-        await writeFile(
-          "/tmp/operon-journal-baseline.json",
-          JSON.stringify({ sha256: createHash("sha256").update(journal).digest("hex") }),
-          "utf8"
-        );
+        await copyFile(join(STATE_DIR, "JOURNAL.md"), "/tmp/operon-journal-baseline.md");
       } catch {
         // No journal file yet (a brand-new agent): the guard yields on
         // a missing baseline, and presleep still judges the wake.

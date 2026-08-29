@@ -1,11 +1,20 @@
 /**
  * The journal guard: a Claude Code Stop hook that refuses the mind's
- * first attempt to stop while JOURNAL.md is untouched. The wake prompt
- * already pleads "ALWAYS write your JOURNAL.md entry before you stop";
- * wake 23 proved a plea is not a mechanism (six minutes of excellent
- * negotiation, session exit 0, journal_untouched). Blocking the stop
- * once, with the reason in front of the model, converts the doctrine
- * into a gate the mind cannot absent-mindedly walk past.
+ * first attempt to stop while JOURNAL.md carries no appended entry for
+ * this wake. The wake prompt already pleads "ALWAYS write your
+ * JOURNAL.md entry before you stop"; wake 23 proved a plea is not a
+ * mechanism (six minutes of excellent negotiation, session exit 0,
+ * journal_untouched). Blocking the stop once, with the reason in front
+ * of the model, converts the doctrine into a gate the mind cannot
+ * absent-mindedly walk past.
+ *
+ * "Appended" is checked structurally, not by parsing entries: the
+ * journal is append-only doctrine (spec 0001), so a journaled wake
+ * means the wake-start content is still present verbatim and new bytes
+ * exist around it. Untouched journals block; so do rewrites and
+ * truncations that discard the wake-start content, because bytes
+ * merely moving is not an entry. A mind that edited history while also
+ * appending gets one false reminder and its second stop stands.
  *
  * Loop safety: a Stop hook that always blocked would trap the session,
  * so the guard yields when stop_hook_active says it already blocked
@@ -15,60 +24,54 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 
-export const BASELINE_FILE = "/tmp/operon-journal-baseline.json";
+export const BASELINE_FILE = "/tmp/operon-journal-baseline.md";
 export const JOURNAL_PATH = "/tmp/operon-wake/state/JOURNAL.md";
 
-export interface JournalBaseline {
-  sha256: string;
-}
-
-export function journalDigest(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 /**
- * Pure decision: block exactly once, and only when the journal is
- * provably byte-identical to its wake-start content (sha256, so a
- * metadata touch or a same-length rewrite cannot masquerade as an
- * entry; presleep still judges the CONTENT of whatever was written).
- * Missing information (no baseline recorded, journal unreadable) never
- * blocks: a guard that can fail closed here would trap sessions on
- * chassis bugs, and presleep remains the real enforcement.
+ * Pure decision over wake-start and current journal content. Blocks
+ * exactly once, and only when no appended entry can exist: the journal
+ * is byte-identical to wake start, or the wake-start content is gone
+ * (rewritten or truncated instead of appended to). Missing information
+ * (no baseline recorded, journal unreadable) never blocks: a guard
+ * that can fail closed there would trap sessions on chassis bugs, and
+ * presleep remains the real enforcement.
  */
 export function journalGuardDecision(
-  baseline: JournalBaseline | null,
-  nowSha256: string | null,
+  baseline: string | null,
+  now: string | null,
   stopHookActive: boolean
 ): { block: boolean; reason?: string } {
   if (stopHookActive) return { block: false };
-  if (baseline === null || nowSha256 === null) return { block: false };
-  if (nowSha256 !== baseline.sha256) return { block: false };
-  return {
-    block: true,
-    reason:
-      "Your JOURNAL.md has not been touched this wake. An unjournaled wake " +
-      "did not happen as far as your memory is concerned: append this wake's " +
-      "entry to JOURNAL.md now (what you did, what is pending, what the next " +
-      "wake must know), then stop. If you truly already recorded everything " +
-      "somewhere durable and mean to stop without a journal entry, stop again " +
-      "and this guard will yield."
-  };
-}
-
-async function readBaseline(): Promise<JournalBaseline | null> {
-  try {
-    const parsed = JSON.parse(await readFile(BASELINE_FILE, "utf8")) as JournalBaseline;
-    return typeof parsed.sha256 === "string" ? parsed : null;
-  } catch {
-    return null;
+  if (baseline === null || now === null) return { block: false };
+  if (now === baseline) {
+    return {
+      block: true,
+      reason:
+        "Your JOURNAL.md has not been touched this wake. An unjournaled wake " +
+        "did not happen as far as your memory is concerned: append this wake's " +
+        "entry to JOURNAL.md now (what you did, what is pending, what the next " +
+        "wake must know), then stop. If you truly mean to stop without a " +
+        "journal entry, stop again and this guard will yield."
+    };
   }
+  if (!now.includes(baseline)) {
+    return {
+      block: true,
+      reason:
+        "JOURNAL.md changed this wake, but its wake-start content is no longer " +
+        "present: the journal is append-only, and a rewrite or truncation is " +
+        "not a wake entry. Restore the prior entries and APPEND this wake's " +
+        "entry, then stop. If you already appended your entry and deliberately " +
+        "edited earlier text too, stop again and this guard will yield."
+    };
+  }
+  return { block: false };
 }
 
-async function hashJournal(): Promise<string | null> {
+async function readOrNull(path: string): Promise<string | null> {
   try {
-    return journalDigest(await readFile(JOURNAL_PATH));
+    return await readFile(path, "utf8");
   } catch {
     return null;
   }
@@ -86,7 +89,11 @@ async function main(): Promise<void> {
   } catch {
     /* no input is fine; treat as a first stop */
   }
-  const decision = journalGuardDecision(await readBaseline(), await hashJournal(), stopHookActive);
+  const decision = journalGuardDecision(
+    await readOrNull(BASELINE_FILE),
+    await readOrNull(JOURNAL_PATH),
+    stopHookActive
+  );
   if (decision.block) {
     console.log(JSON.stringify({ decision: "block", reason: decision.reason }));
   }

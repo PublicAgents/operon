@@ -1,35 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { journalDigest, journalGuardDecision } from "./journal-guard.js";
+import { journalGuardDecision } from "./journal-guard.js";
 
-const START = journalDigest("# Journal\n\n## Wake 22\nDid things.\n");
-const BASE = { sha256: START };
+const START = "# Journal\n\n## Wake 22\nDid things.\n";
 
 describe("journalGuardDecision", () => {
   it("blocks the first stop while the journal is byte-identical, with the reason", () => {
-    const decision = journalGuardDecision(BASE, START, false);
+    const decision = journalGuardDecision(START, START, false);
     expect(decision.block).toBe(true);
     expect(decision.reason).toContain("JOURNAL.md");
     expect(decision.reason).toContain("did not happen");
   });
 
-  it("yields once the journal content changed", () => {
-    const appended = journalDigest("# Journal\n\n## Wake 23\nNew entry.\n\n## Wake 22\nDid things.\n");
-    expect(journalGuardDecision(BASE, appended, false).block).toBe(false);
+  it("yields when an entry was appended (newest first or at the end)", () => {
+    const prepended = "# Journal\n\n## Wake 23\nNew entry.\n" + START;
+    expect(journalGuardDecision(START, "## Wake 23\nNew entry.\n\n" + START, false).block).toBe(false);
+    expect(journalGuardDecision(START, prepended, false).block).toBe(false);
+    expect(journalGuardDecision(START, START + "\n## Wake 23\nNew entry.\n", false).block).toBe(false);
   });
 
-  it("catches a same-length rewrite and a metadata-only touch (content hash, not stat)", () => {
-    const sameLength = journalDigest("# Journal\n\n## Wake 22\nDid thangs.\n");
-    expect(sameLength).not.toBe(START);
-    expect(journalGuardDecision(BASE, sameLength, false).block).toBe(false);
-    expect(journalGuardDecision(BASE, START, false).block).toBe(true);
+  it("blocks a rewrite or truncation that discards the wake-start content", () => {
+    const rewritten = journalGuardDecision(START, "# Journal\n\ntotally reformatted\n", false);
+    expect(rewritten.block).toBe(true);
+    expect(rewritten.reason).toContain("append-only");
+    expect(journalGuardDecision(START, "", false).block).toBe(true);
+    const sameLength = journalGuardDecision(START, START.replace("things", "thangs"), false);
+    expect(sameLength.block).toBe(true);
   });
 
   it("yields on the second stop attempt (loop safety)", () => {
-    expect(journalGuardDecision(BASE, START, true).block).toBe(false);
+    expect(journalGuardDecision(START, START, true).block).toBe(false);
+    expect(journalGuardDecision(START, "rewritten", true).block).toBe(false);
   });
 
   it("never blocks on missing information (baseline or journal unreadable)", () => {
     expect(journalGuardDecision(null, START, false).block).toBe(false);
-    expect(journalGuardDecision(BASE, null, false).block).toBe(false);
+    expect(journalGuardDecision(START, null, false).block).toBe(false);
+  });
+
+  it("an empty wake-start journal accepts any appended content", () => {
+    expect(journalGuardDecision("", "## Wake 1\nFirst entry.\n", false).block).toBe(false);
+    expect(journalGuardDecision("", "", false).block).toBe(true);
   });
 });
