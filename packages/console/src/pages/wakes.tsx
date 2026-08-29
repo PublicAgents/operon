@@ -42,8 +42,8 @@ export function WakesPage() {
         <AgentPicker selected={agentId} />
         {agentId ? <button onClick={wakes.refresh}>refresh</button> : null}
       </header>
-      {!agentId && !agents.loading ? <Empty>no agents in the roster</Empty> : null}
-      <ErrorNote error={wakes.error} />
+      {!agentId && !agents.loading && !agents.error ? <Empty>no agents in the roster</Empty> : null}
+      <ErrorNote error={agents.error ?? wakes.error} />
       {agentId && (wakes.data ?? []).length === 0 && !wakes.loading ? (
         <Empty>no wakes recorded for {agentId}</Empty>
       ) : null}

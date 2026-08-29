@@ -28,6 +28,14 @@ describe("parseCommand", () => {
     expect(parseCommand("/tell promoter")).toMatchObject({ kind: "invalid" });
   });
 
+  it("does not corrupt the message for an agent whose id echoes the command", () => {
+    expect(parseCommand("/tell tell check the deploy")).toEqual({
+      kind: "tell",
+      agentId: "tell",
+      text: "check the deploy"
+    });
+  });
+
   it("parses held decisions", () => {
     expect(parseCommand("/approve promoter abc-123")).toEqual({
       kind: "approve",

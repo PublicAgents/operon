@@ -92,7 +92,11 @@ export function parseCommand(raw: string): ParsedCommand {
     case "tell": {
       const agentId = rest[0] ?? "";
       if (!AGENT_ID.test(agentId)) return bad("an agent id is required");
-      const message = text.slice(text.indexOf(agentId) + agentId.length).trim();
+      // Everything after the agent id, verbatim. Matched positionally
+      // (never by searching for the id, which for an agent named "tell"
+      // would find the command itself and corrupt the message).
+      const match = /^\/\S+\s+\S+\s+([\s\S]+)$/.exec(text);
+      const message = match ? match[1].trim() : "";
       if (!message) return bad("a message is required");
       return { kind: "tell", agentId, text: message };
     }
