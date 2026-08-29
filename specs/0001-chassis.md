@@ -219,7 +219,11 @@ contract (section 4.1). Entrypoint sequence:
    a mind is awake to use them.
 5. **Presleep verifier** (blocking): journal entry for this wake exists and
    is well-formed; append-only files kept their headers and boundaries; no
-   denylisted secret appears in the staged change set. The sweep scans
+   denylisted secret appears in the staged change set. The change set is
+   the diff against the WAKE-START commit, not HEAD: a mind that commits
+   its work locally mid-wake changes nothing about what is scanned or
+   persisted (a HEAD diff would let a self-commit empty the staged set
+   and silently discard the wake). The sweep scans
    exactly what git stages, in full (an unscannable file blocks the push),
    covers whitespace-split, cross-file-split, base64/base64url/hex forms of
    each literal, and auto-includes every secret the container itself holds

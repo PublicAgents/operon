@@ -19,6 +19,8 @@ const HELP = `operon: the doors out of this wake
                                          dir defaults to "site". Swept for secrets
                                          before anything leaves the container.
   operon email --to <addr> --subject <s> --body <b>
+                                         (or pipe the body on stdin and omit
+                                         --body; --body - also reads stdin)
                                          send an email (disclosed as an AI agent,
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
@@ -202,10 +204,14 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       const to = flagValue(rest, "--to");
       const subject = flagValue(rest, "--subject");
       const body = flagValue(rest, "--body");
-      if (!to || !to.includes("@") || !subject || !body) {
-        throw new CliUsageError("usage: operon email --to <addr> --subject <s> --body <b>");
+      if (!to || !to.includes("@") || !subject) {
+        throw new CliUsageError(
+          "usage: operon email --to <addr> --subject <s> --body <b> (or pipe the body on stdin)"
+        );
       }
-      return { path: "/email", payload: { to, subject, text: body } };
+      // --body omitted (or the conventional "-"): main() reads the body
+      // from stdin. A literal one-character dash is never a real email.
+      return { path: "/email", payload: { to, subject, ...(body && body !== "-" ? { text: body } : {}) } };
     }
     case "github":
       return parseGithub(rest);
@@ -524,7 +530,9 @@ async function main(): Promise<number> {
         ? { name: "text", usage: "x post: pass --text <t> or pipe the text on stdin", trim: false }
         : call.path === "/x/dm" && call.payload.text === undefined
           ? { name: "text", usage: "x dm: pass --text <t> or pipe the text on stdin", trim: false }
-          : null;
+          : call.path === "/email" && call.payload.text === undefined
+            ? { name: "text", usage: "email: pass --body <b> or pipe the body on stdin", trim: false }
+            : null;
   if (stdinField) {
     if (process.stdin.isTTY) {
       console.error(stdinField.usage);

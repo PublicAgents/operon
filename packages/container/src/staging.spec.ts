@@ -45,6 +45,29 @@ describe("stageAndCollect (real git)", () => {
     }
   });
 
+  it("still sees the wake's work when the mind committed it locally (baseSha diff)", async () => {
+    const dir = await initRepo();
+    try {
+      const git = (...args: string[]) => runCapture("git", args, { cwd: dir });
+      const baseSha = (await git("rev-parse", "HEAD")).stdout.trim();
+      // The mind writes its journal AND commits it itself, as wake 24 did.
+      await writeFile(join(dir, "JOURNAL.md"), "## Wake 24 (wake fc9dcf85)\n");
+      await git("add", "-A");
+      await git("commit", "-q", "-m", "wake 24");
+
+      // A HEAD diff would stage nothing and the wake would be discarded.
+      const headDiff = await stageAndCollect(dir);
+      expect(headDiff.changed).toEqual([]);
+
+      const { changed } = await stageAndCollect(dir, { baseSha });
+      const byPath = new Map(changed.map(f => [f.path, f.content]));
+      expect(byPath.get("JOURNAL.md")).toBe("## Wake 24 (wake fc9dcf85)\n");
+      expect(verifyPresleep(changed, []).ok).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("handles renames and paths with special characters via -z paths", async () => {
     const dir = await initRepo();
     try {

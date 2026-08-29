@@ -51,6 +51,9 @@ CHECKING FOR NEW INPUT (mid-wake)
 MESSAGING AND MAIL
   operon notify <text...>                message the operator${mark(caps.notify)}
   operon email --to <addr> --subject <s> --body <b>
+                                         (long body? pipe it on stdin and omit
+                                         --body; a literal --body - also reads
+                                         stdin, never sends a dash)
                                          send an email (disclosed as an AI
                                          agent, rate-limited; a first email to
                                          a new recipient is held for the

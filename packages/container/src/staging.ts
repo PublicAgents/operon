@@ -28,6 +28,14 @@ export interface StageOptions {
   env?: Record<string, string>;
   uid?: number;
   gid?: number;
+  /**
+   * The commit the wake STARTED from. Diffing the staged index against
+   * this, not HEAD, keeps a mind's own local `git commit` from hiding
+   * its work: with a HEAD diff a self-committed wake stages nothing,
+   * presleep sees an untouched journal, and "nothing to persist"
+   * silently discards the wake (wakes 23 and 24 died exactly there).
+   */
+  baseSha?: string;
 }
 
 function splitZ(output: string): string[] {
@@ -43,9 +51,10 @@ export async function stageAndCollect(
   const git = async (args: string[]) => (await run(args)).stdout;
 
   await git(["add", "-A"]);
-  const staged = splitZ(await git(["diff", "--cached", "--name-only", "-z"]));
+  const base = options.baseSha ?? "HEAD";
+  const staged = splitZ(await git(["diff", "--cached", "--name-only", "-z", base]));
   const deleted = new Set(
-    splitZ(await git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z"]))
+    splitZ(await git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z", base]))
   );
 
   const changed: ChangedFile[] = [];
