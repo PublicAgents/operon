@@ -63,10 +63,20 @@ function sessionBudgetMinutes(maxWakeMinutes: number): number {
   return Math.max(MIN_SESSION_MINUTES, maxWakeMinutes - WRAP_UP_MARGIN_MINUTES);
 }
 
-function wakePrompt(budgetMinutes: number): string {
+/**
+ * The stamp a journal entry must carry to count as THIS wake's entry:
+ * the journal guard checks for it verbatim, so the prompt and the
+ * guard must agree on the exact string.
+ */
+export function wakeStamp(wakeId: string): string {
+  return `wake ${wakeId.slice(0, 8)}`;
+}
+
+function wakePrompt(budgetMinutes: number, stamp: string): string {
   return (
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
+    `Include the exact text "${stamp}" in that entry's heading: it is this wake's stamp, and the chassis verifies it before letting the session end. ` +
     "Your doors to the world are the operon CLI: run operon --help FIRST, every wake, because the guide is rendered live by the chassis and changes as your doors do; what it says supersedes anything your notes remember about the CLI. " +
     "New input does not only arrive at wake start: operon pull fetches email, DMs, and operator messages that arrive MID-WAKE (a verification link or an operator answer is one pull away, not one wake away). " +
     "A wake is a SINGLE uninterrupted turn: you cannot sleep and resume, and there is no later continuation of THIS session. If you background a wait or a sleep intending to come back, the session simply ends while you are away and everything after it is lost. So never defer your journal entry to after a sleep or a timer: if something is not ready yet (a rate limit, a cooldown, a scheduled time), record where it stands in your journal and leave it for a FUTURE wake to pick up. ALWAYS write your JOURNAL.md entry before you stop, sleep, or wait on anything. " +
@@ -530,7 +540,7 @@ async function runSession(
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
-    wakePrompt(budgetMinutes),
+    wakePrompt(budgetMinutes, wakeStamp(config.wakeId)),
     model,
     config.mindCredential,
     // When already running on the fallback there is nothing further to
@@ -571,6 +581,7 @@ async function runSession(
       // preserved, new bytes around it) from an untouched journal or a
       // rewrite masquerading as one (wake 23 stopped cleanly with its
       // journal unwritten).
+      await writeFile("/tmp/operon-journal-stamp", wakeStamp(config.wakeId), "utf8");
       try {
         await copyFile(join(STATE_DIR, "JOURNAL.md"), "/tmp/operon-journal-baseline.md");
       } catch {

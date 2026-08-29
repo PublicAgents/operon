@@ -8,13 +8,16 @@
  * of the model, converts the doctrine into a gate the mind cannot
  * absent-mindedly walk past.
  *
- * "Appended" is checked structurally, not by parsing entries: the
- * journal is append-only doctrine (spec 0001), so a journaled wake
- * means the wake-start content is still present verbatim and new bytes
- * exist around it. Untouched journals block; so do rewrites and
- * truncations that discard the wake-start content, because bytes
- * merely moving is not an entry. A mind that edited history while also
- * appending gets one false reminder and its second stop stands.
+ * "This wake's entry" is a checkable contract, not a guess: the wake
+ * prompt instructs the mind to put the wake stamp (wakeStamp in the
+ * entrypoint, staged to STAMP_FILE) in the entry's heading, and the
+ * guard requires the journal to contain it. On top of that the
+ * append-only doctrine (spec 0001) is checked structurally: the
+ * wake-start content must still be present verbatim with new bytes
+ * around it. Untouched journals block; rewrites and truncations that
+ * discard the wake-start content block; added bytes without the stamp
+ * block. A mind with a legitimate exception gets one false reminder
+ * and its second stop stands.
  *
  * Loop safety: a Stop hook that always blocked would trap the session,
  * so the guard yields when stop_hook_active says it already blocked
@@ -26,6 +29,7 @@
 import { readFile } from "node:fs/promises";
 
 export const BASELINE_FILE = "/tmp/operon-journal-baseline.md";
+export const STAMP_FILE = "/tmp/operon-journal-stamp";
 export const JOURNAL_PATH = "/tmp/operon-wake/state/JOURNAL.md";
 
 /**
@@ -40,6 +44,7 @@ export const JOURNAL_PATH = "/tmp/operon-wake/state/JOURNAL.md";
 export function journalGuardDecision(
   baseline: string | null,
   now: string | null,
+  stamp: string | null,
   stopHookActive: boolean
 ): { block: boolean; reason?: string } {
   if (stopHookActive) return { block: false };
@@ -51,8 +56,9 @@ export function journalGuardDecision(
         "Your JOURNAL.md has not been touched this wake. An unjournaled wake " +
         "did not happen as far as your memory is concerned: append this wake's " +
         "entry to JOURNAL.md now (what you did, what is pending, what the next " +
-        "wake must know), then stop. If you truly mean to stop without a " +
-        "journal entry, stop again and this guard will yield."
+        `wake must know)${stamp ? `, with "${stamp}" in its heading,` : ""} ` +
+        "then stop. If you truly mean to stop without a journal entry, stop " +
+        "again and this guard will yield."
     };
   }
   if (!now.includes(baseline)) {
@@ -62,8 +68,19 @@ export function journalGuardDecision(
         "JOURNAL.md changed this wake, but its wake-start content is no longer " +
         "present: the journal is append-only, and a rewrite or truncation is " +
         "not a wake entry. Restore the prior entries and APPEND this wake's " +
-        "entry, then stop. If you already appended your entry and deliberately " +
-        "edited earlier text too, stop again and this guard will yield."
+        `entry${stamp ? ` (heading containing "${stamp}")` : ""}, then stop. ` +
+        "If you already appended your entry and deliberately edited earlier " +
+        "text too, stop again and this guard will yield."
+    };
+  }
+  if (stamp !== null && !now.includes(stamp)) {
+    return {
+      block: true,
+      reason:
+        "JOURNAL.md grew this wake but no entry carries this wake's stamp " +
+        `"${stamp}". Make sure the entry you are leaving is for THIS wake and ` +
+        `put "${stamp}" in its heading, then stop. If the stamp truly does ` +
+        "not belong there, stop again and this guard will yield."
     };
   }
   return { block: false };
@@ -92,6 +109,7 @@ async function main(): Promise<void> {
   const decision = journalGuardDecision(
     await readOrNull(BASELINE_FILE),
     await readOrNull(JOURNAL_PATH),
+    await readOrNull(STAMP_FILE),
     stopHookActive
   );
   if (decision.block) {
