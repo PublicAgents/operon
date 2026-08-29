@@ -12,14 +12,15 @@
  * credential, Telegram bot token, machine PATs, MPP/Tempo keys,
  * SECRET_DENYLIST) are deliberately NOT touched here.
  *
- * The PREFERRED path is the ops gateway's secret_rotate_group tool
+ * The NORMAL path is the ops gateway's secret_rotate_group tool
  * (spec 0005 §6): rotations there are serialized per group through a
  * Durable Object and keep durable resume state, so a CLI rotation can
- * never interleave with a console/MCP rotation of the same group. The
- * direct wrangler path remains for gateways without CLOUDFLARE_API_TOKEN
- * (and --direct); it writes values over stdin (never argv, never
- * printed) but is NOT serialized against the gateway: do not run it
- * while a console rotation might be in flight.
+ * never interleave with a console/MCP rotation of the same group.
+ * Direct wrangler writes (values over stdin, never argv, never
+ * printed) happen automatically ONLY when they provably cannot race a
+ * gateway rotation: the colony has no gateway config, or the gateway's
+ * secrets tools are unconfigured. Every other gateway failure aborts;
+ * --direct overrides for the operator who knows nothing is in flight.
  *
  * There is a seconds-wide window while a group's puts land in sequence
  * where a call between two members 401s once; rotate while agents are
@@ -59,30 +60,54 @@ if (unknown.length > 0) {
   process.exit(2);
 }
 
-/** The ops gateway URL, exactly as tail-wake discovers it. */
+/**
+ * The ops gateway URL, exactly as tail-wake discovers it. Distinguishes
+ * "this colony has no gateway" (its config does not exist: direct
+ * writes cannot race anything) from every other case, where a gateway
+ * that might rotate concurrently must be assumed to exist.
+ */
 function opsUrl() {
-  if (process.env.OPERON_OPS_URL) return process.env.OPERON_OPS_URL;
+  if (process.env.OPERON_OPS_URL) return { kind: "url", url: process.env.OPERON_OPS_URL };
   const configPath = join(ROOT, "workers", "gatekeeper-ops", "wrangler.jsonc");
-  if (!existsSync(configPath)) return undefined;
+  if (!existsSync(configPath)) return { kind: "none" };
   const pattern = JSON.parse(stripJsonc(readFileSync(configPath, "utf8"))).routes?.[0]?.pattern;
-  return pattern ? `https://${pattern}` : undefined;
+  return pattern ? { kind: "url", url: `https://${pattern}` } : { kind: "unknown" };
 }
 
 /**
  * Rotate through the gateway (serialized, durable resume). Returns true
- * when the gateway handled it; false means fall back to direct writes.
+ * when the gateway handled it; false ONLY when direct writes provably
+ * cannot race a gateway rotation (no gateway config, or the gateway's
+ * secrets tools are unconfigured). Every other failure ABORTS: a
+ * bypassed serialization can split a group, and --direct exists for
+ * the operator who knows nothing is in flight.
  */
 async function rotateViaGateway(groups) {
-  const ops = opsUrl();
-  if (!ops) return false;
+  const discovered = opsUrl();
+  if (discovered.kind === "none") {
+    console.log("this colony has no ops gateway config; writing directly");
+    return false;
+  }
+  if (discovered.kind === "unknown") {
+    console.error(
+      "✗ workers/gatekeeper-ops/wrangler.jsonc exists but has no route pattern; " +
+        "set OPERON_OPS_URL, or pass --direct only if no console/MCP rotation can be in flight"
+    );
+    process.exit(1);
+  }
+  const ops = discovered.url;
   let token;
   try {
     token = execFileSync("cloudflared", ["access", "token", "--app", ops], {
       encoding: "utf8"
     }).trim();
   } catch {
-    console.log(`no Access session for ${ops}; falling back to direct wrangler writes`);
-    return false;
+    console.error(
+      `✗ no Access session for ${ops} (run: cloudflared access login ${ops}).\n` +
+        "not falling back: the gateway may be rotating concurrently and a direct write " +
+        "could interleave with it; pass --direct only if no console/MCP rotation can be in flight"
+    );
+    process.exit(1);
   }
   for (const name of groups) {
     const response = await fetch(`${ops}/api/v1/secret-rotate-group`, {
