@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { type AgentRow, type WakeRecordRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { Empty, ErrorNote, TimeStamp } from "../ui.js";
@@ -23,11 +23,18 @@ function AgentPicker({ selected }: { selected?: string }) {
 
 export function WakesPage() {
   const { agentId } = useParams<{ agentId: string }>();
+  const agents = useTool<{ agents: AgentRow[] }>("agents_list", {}, { enabled: !agentId });
   const wakes = useTool<WakeRecordRow[]>(
     "wakes_list",
     { agentId },
     { pollMs: 10_000, enabled: Boolean(agentId) }
   );
+  // No agent in the URL: pick the first one instead of asking (a
+  // one-agent colony should land on its wakes directly).
+  const firstAgent = agents.data?.agents[0]?.id;
+  if (!agentId && firstAgent) {
+    return <Navigate to={`/wakes/${firstAgent}`} replace />;
+  }
   return (
     <section>
       <header className="page-head">
@@ -35,8 +42,8 @@ export function WakesPage() {
         <AgentPicker selected={agentId} />
         {agentId ? <button onClick={wakes.refresh}>refresh</button> : null}
       </header>
-      {!agentId ? <Empty>pick an agent</Empty> : null}
-      <ErrorNote error={wakes.error} />
+      {!agentId && !agents.loading && !agents.error ? <Empty>no agents in the roster</Empty> : null}
+      <ErrorNote error={agents.error ?? wakes.error} />
       {agentId && (wakes.data ?? []).length === 0 && !wakes.loading ? (
         <Empty>no wakes recorded for {agentId}</Empty>
       ) : null}
