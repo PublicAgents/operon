@@ -47,8 +47,11 @@ function SpendApprovals() {
     <div className="approval-block">
       <h2>Spend</h2>
       <ErrorNote error={held.error ?? outbox.error} />
-      <LoadingGate loading={held.loading} hasData={held.data !== undefined}>
-      {heldRows.length === 0 && unknown.length === 0 && !held.loading ? (
+      <LoadingGate
+        loading={held.loading || outbox.loading}
+        hasData={held.data !== undefined && outbox.data !== undefined}
+      >
+      {heldRows.length === 0 && unknown.length === 0 && !held.loading && !outbox.loading ? (
         <Empty>nothing held</Empty>
       ) : null}
       {heldRows.map(row => (

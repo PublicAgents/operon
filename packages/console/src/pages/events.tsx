@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { type EventRow } from "../api.js";
 import { useTool } from "../hooks.js";
@@ -16,6 +16,16 @@ export function EventsPage() {
   const [kind, setKind] = useState(params.get("kind") ?? "");
   const [agent, setAgent] = useState(params.get("agent") ?? "");
   const [until, setUntil] = useState("");
+  // A same-route navigation (a new deep link, browser history) changes
+  // the params without remounting: re-seed so the controls and results
+  // never disagree with the current URL. Typing in the filters does not
+  // touch the params, so operator edits are never clobbered.
+  useEffect(() => {
+    setGatekeeper(params.get("gatekeeper") ?? "");
+    setKind(params.get("kind") ?? "");
+    setAgent(params.get("agent") ?? "");
+    setUntil("");
+  }, [params]);
   const state = useTool<{ events: EventRow[] }>("chronicle_events", {
     ...(gatekeeper ? { gatekeeper } : {}),
     ...(kind ? { kind } : {}),
