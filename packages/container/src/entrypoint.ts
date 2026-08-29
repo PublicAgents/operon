@@ -396,7 +396,7 @@ async function ackChannel(config: WakeConfig, upTo: number | null): Promise<void
   }).catch(() => undefined);
 }
 
-async function cloneState(config: WakeConfig): Promise<void> {
+async function cloneState(config: WakeConfig): Promise<string> {
   await mkdir(WORKDIR, { recursive: true });
   // The ONE authenticated git op: a clone into an empty directory, run as
   // ROOT with a SHORT-LIVED READ-ONLY token in the git child's env (never
@@ -420,6 +420,12 @@ async function cloneState(config: WakeConfig): Promise<void> {
     { cwd: STATE_DIR }
   );
   await chownToMind(WORKDIR);
+  // The wake-start commit: presleep staging diffs against THIS, not HEAD,
+  // so a mind that commits locally cannot hide its work from persistence.
+  const { stdout } = await runCapture("git", [...hardenedGitFlags(), "rev-parse", "HEAD"], {
+    cwd: STATE_DIR
+  });
+  return stdout.trim();
 }
 
 interface VerifiedModel {
@@ -708,7 +714,7 @@ async function main(): Promise<number> {
   assertEnvClean(adapter, process.env);
 
   log(`${label}: cloning ${config.stateRepo}`);
-  await cloneState(config);
+  const baseSha = await cloneState(config);
   // Files the CHASSIS writes into the tree this wake, by path and exact
   // content: the presleep gitleaks pass excludes any staged file still
   // byte-identical to what the chassis wrote (operon#24), so delivered
@@ -842,7 +848,8 @@ async function main(): Promise<number> {
   // unprivileged, so this needs no root and no clean mirror.
   const changes = await stageAndCollect(STATE_DIR, {
     env: { ...sessionBaseEnv(), HOME: mindHome() },
-    ...mindSpawnIds()
+    ...mindSpawnIds(),
+    baseSha
   });
   const verification = verifyPresleep(changes.changed, denylist);
 
