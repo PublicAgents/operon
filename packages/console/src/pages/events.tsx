@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { type EventRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { UntrustedText } from "../untrusted.js";
 
 const GATEKEEPERS = [
@@ -9,9 +10,11 @@ const GATEKEEPERS = [
 ];
 
 export function EventsPage() {
-  const [gatekeeper, setGatekeeper] = useState("");
-  const [kind, setKind] = useState("");
-  const [agent, setAgent] = useState("");
+  // Deep links (e.g. a browser session's history) seed the filters.
+  const [params] = useSearchParams();
+  const [gatekeeper, setGatekeeper] = useState(params.get("gatekeeper") ?? "");
+  const [kind, setKind] = useState(params.get("kind") ?? "");
+  const [agent, setAgent] = useState(params.get("agent") ?? "");
   const [until, setUntil] = useState("");
   const state = useTool<{ events: EventRow[] }>("chronicle_events", {
     ...(gatekeeper ? { gatekeeper } : {}),
@@ -44,6 +47,7 @@ export function EventsPage() {
         {until ? <button onClick={() => setUntil("")}>newest</button> : null}
       </header>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       {events.length === 0 && !state.loading ? <Empty>no events match</Empty> : null}
       <table className="events">
         <tbody>
@@ -66,6 +70,7 @@ export function EventsPage() {
           ))}
         </tbody>
       </table>
+      </LoadingGate>
     </section>
   );
 }

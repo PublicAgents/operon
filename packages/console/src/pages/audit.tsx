@@ -1,6 +1,6 @@
 import { type LedgerRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 
 /**
  * The gateway's own audit ledger: every operator read and decision,
@@ -17,6 +17,7 @@ export function AuditPage() {
         <button onClick={state.refresh}>refresh</button>
       </header>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       {rows.length === 0 && !state.loading ? <Empty>no operator actions yet</Empty> : null}
       <table className="events">
         <tbody>
@@ -40,6 +41,7 @@ export function AuditPage() {
           ))}
         </tbody>
       </table>
+      </LoadingGate>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 import { type MessageRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { UntrustedText } from "../untrusted.js";
 
 /**
@@ -22,6 +22,7 @@ export function NotificationsPage() {
         <button onClick={state.refresh}>refresh</button>
       </header>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       {rows.length === 0 && !state.loading ? <Empty>no notifications recorded</Empty> : null}
       {rows.map(row => (
         <div key={row.id} className="message-card" data-provenance="agent">
@@ -33,6 +34,7 @@ export function NotificationsPage() {
           <UntrustedText text={row.body} className="message-body" />
         </div>
       ))}
+      </LoadingGate>
     </section>
   );
 }
