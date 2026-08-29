@@ -121,6 +121,17 @@ whole:
   the wake's real configuration (container skills.ts), task-first,
   with unwired doors marked, so the mind's tool knowledge refreshes
   every wake instead of fossilizing in its notes.
+- For a Claude Code mind, the entrypoint stages harness hooks in the
+  mind's settings before the session starts. A PostToolUse notifier
+  (throttled) surfaces counts of unseen input and the remaining time
+  budget as context the model actually receives (hook output must use
+  the additionalContext envelope; plain stdout does not reach it). A
+  Stop-hook JOURNAL GUARD blocks the session's first stop attempt
+  while JOURNAL.md is byte-identical to its wake-start baseline,
+  stating why; it yields on the second attempt (loop safety) and
+  never blocks on missing information (no baseline, unreadable
+  journal). The guard is a reminder with teeth, not the enforcement:
+  presleep still records an unjournaled wake as failed.
 
 ## 6. Secrets from the operator plane
 

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, copyFile } from "node:fs/promises";
+import { mkdir, writeFile, copyFile, stat } from "node:fs/promises";
 import { webMcpConfigJson } from "./web-mcp.js";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
@@ -566,6 +566,20 @@ async function runSession(
   // hook is the old behavior, not a failure.
   if (adapter.id === "claude-code") {
     try {
+      // The journal guard's baseline: what JOURNAL.md looked like when
+      // the session began, so the Stop hook can tell "untouched" from
+      // "appended" (wake 23 stopped cleanly with its journal unwritten).
+      try {
+        const s = await stat(join(STATE_DIR, "JOURNAL.md"));
+        await writeFile(
+          "/tmp/operon-journal-baseline.json",
+          JSON.stringify({ mtimeMs: s.mtimeMs, size: s.size }),
+          "utf8"
+        );
+      } catch {
+        // No journal file yet (a brand-new agent): the guard yields on
+        // a missing baseline, and presleep still judges the wake.
+      }
       const settingsDir = join(mindHome(), ".claude");
       await mkdir(settingsDir, { recursive: true });
       await writeFile(
@@ -580,6 +594,13 @@ async function runSession(
                     { type: "command", command: "node /opt/operon/pull-hook.js", timeout: 15 }
                   ]
                 }
+              ],
+              Stop: [
+                {
+                  hooks: [
+                    { type: "command", command: "node /opt/operon/journal-guard.js", timeout: 10 }
+                  ]
+                }
               ]
             }
           },
@@ -589,7 +610,7 @@ async function runSession(
         "utf8"
       );
       await chownToMind(settingsDir);
-      log("mid-wake input notifier staged (PostToolUse hook)");
+      log("mid-wake input notifier staged (PostToolUse hook); journal guard staged (Stop hook)");
     } catch (error) {
       log(`could not stage the input notifier hook: ${String(error).slice(0, 200)}`);
     }
