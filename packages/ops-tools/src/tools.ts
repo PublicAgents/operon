@@ -509,12 +509,30 @@ export const TOOLS: readonly ToolDefinition[] = [
         );
       }
       const value = freshBearer();
-      // Write every member or report exactly which failed: a half-rotated
-      // group is a broken bearer, so the failure names the remainder.
+      // A half-rotated group is a broken bearer, so a failure must name
+      // exactly what was written and what was not: every member is
+      // attempted (one refusal must not strand the rest on the old
+      // value), and any failure reports both lists so the operator
+      // re-runs the rotation (idempotent: a fresh value again) until
+      // the group converges.
       const written: string[] = [];
+      const failed: string[] = [];
       for (const [dir, name] of pairs) {
-        await secrets.put(dir, name, value);
-        written.push(`${dir}/${name}`);
+        try {
+          await secrets.put(dir, name, value);
+          written.push(`${dir}/${name}`);
+        } catch (error) {
+          failed.push(`${dir}/${name} (${error instanceof Error ? error.message : String(error)})`);
+        }
+      }
+      if (failed.length > 0) {
+        throw new ToolInputError(
+          `rotation of ${group} is INCOMPLETE: the group now holds mixed values. ` +
+            `written: ${written.join(", ") || "none"}; failed: ${failed.join("; ")}. ` +
+            `Re-run secret_rotate_group ${group} until every member succeeds.`,
+          502,
+          { error: "rotation_incomplete", group, written, failed }
+        );
       }
       return { ok: true, group, written };
     }

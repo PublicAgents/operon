@@ -140,6 +140,31 @@ describe("handlers", () => {
     expect(JSON.stringify(result)).not.toContain(written[0].value);
   });
 
+  it("attempts every member and reports both lists on a partial failure", async () => {
+    const written: string[] = [];
+    const { context } = fakeContext({
+      secrets: {
+        async list() { return []; },
+        async put(worker, name) {
+          if (worker === "gatekeeper-till") throw new Error("cloudflare api 502");
+          written.push(`${worker}/${name}`);
+        }
+      },
+      async scheduler() { return { agents: [{ id: "promoter" }] }; }
+    });
+    const failure = await toolByName("secret_rotate_group")!
+      .handler({ group: "till-promoter" }, context)
+      .then(() => null, (error: unknown) => error as ToolInputError);
+    expect(failure).toBeInstanceOf(ToolInputError);
+    expect(failure!.message).toMatch(/INCOMPLETE/);
+    expect(failure!.payload).toMatchObject({
+      error: "rotation_incomplete",
+      written: ["scheduler/TILL_TOKEN_PROMOTER"],
+      failed: [expect.stringContaining("gatekeeper-till/TILL_TOKEN_PROMOTER")]
+    });
+    expect(written).toEqual(["scheduler/TILL_TOKEN_PROMOTER"]);
+  });
+
   it("names the known groups when the group is unknown", async () => {
     const { context } = fakeContext({
       secrets: {
