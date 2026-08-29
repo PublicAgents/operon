@@ -54,27 +54,41 @@ export interface TargetInfo {
 export function pickPageTarget(
   infos: readonly TargetInfo[],
   match?: string
-): { chosen?: TargetInfo; pages: TargetInfo[] } {
+): { chosen?: TargetInfo; pages: TargetInfo[]; contenders: TargetInfo[] } {
   const pages = infos.filter(info => info.type === "page" && info.targetId);
   if (match) {
     const wanted = pages.filter(info => (info.url ?? "").includes(match));
-    // Among URL matches, the same heuristic breaks remaining ties.
-    if (wanted.length > 0) return { chosen: heuristic(wanted), pages };
-    return { chosen: undefined, pages };
+    // An explicit match is the operator's word: ties inside it still get
+    // the visibility probe (contenders), but nothing outside competes.
+    if (wanted.length > 0) return { chosen: heuristic(wanted), pages, contenders: topTier(wanted) };
+    return { chosen: undefined, pages, contenders: [] };
   }
-  if (pages.length === 0) return { chosen: infos.find(info => info.targetId), pages };
-  return { chosen: heuristic(pages), pages };
+  if (pages.length === 0) {
+    const fallback = infos.find(info => info.targetId);
+    return { chosen: fallback, pages, contenders: fallback ? [fallback] : [] };
+  }
+  return { chosen: heuristic(pages), pages, contenders: topTier(pages) };
+}
+
+function pageScore(info: TargetInfo): number {
+  const blank = !info.url || info.url === "about:blank" || info.url.startsWith("devtools://");
+  return (info.attached ? 2 : 0) + (blank ? 0 : 1);
+}
+
+/** Every page sharing the top score: when more than one, enumeration
+ * order proves nothing about the foreground and the caller must probe
+ * visibility instead of guessing. */
+function topTier(pages: readonly TargetInfo[]): TargetInfo[] {
+  const best = Math.max(...pages.map(pageScore));
+  return pages.filter(info => pageScore(info) === best);
 }
 
 function heuristic(pages: readonly TargetInfo[]): TargetInfo {
-  const isBlank = (info: TargetInfo) =>
-    !info.url || info.url === "about:blank" || info.url.startsWith("devtools://");
-  const score = (info: TargetInfo) => (info.attached ? 2 : 0) + (isBlank(info) ? 0 : 1);
   let best = pages[0];
-  let bestScore = score(best);
+  let bestScore = pageScore(best);
   for (const candidate of pages.slice(1)) {
-    const candidateScore = score(candidate);
-    // >= so later (newer) targets win ties.
+    const candidateScore = pageScore(candidate);
+    // >= so later (newer) targets win ties, pending the visibility probe.
     if (candidateScore >= bestScore) {
       best = candidate;
       bestScore = candidateScore;

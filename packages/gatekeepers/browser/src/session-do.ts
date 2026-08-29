@@ -472,12 +472,50 @@ export class WebSession extends DurableObject<SessionEnv> {
     const targets = await this.controlCommand("Target.getTargets", {});
     if (targets.error) return { pages: [], error: targets.error };
     const infos = (targets.result?.targetInfos ?? []) as TargetInfo[];
-    const { chosen, pages } = pickPageTarget(infos, match);
+    const { chosen, pages, contenders } = pickPageTarget(infos, match);
     const pageUrls = pages.map(page => page.url ?? "");
     if (!chosen?.targetId) {
       return { pages: pageUrls, error: match ? "no_page_matches" : "no_page_target" };
     }
-    return { targetId: chosen.targetId, pageUrl: chosen.url, pages: pageUrls };
+    // Enumeration order proves nothing about the foreground: when the
+    // heuristic leaves a genuine tie, ask the browser which document is
+    // actually VISIBLE (the driven tab in a headless session). A page
+    // lying about its own visibilityState can at worst point the
+    // operator at itself, the same page whose pixels are already marked
+    // untrusted; the candidate list in the response keeps the final say
+    // with the operator either way.
+    let picked = chosen;
+    if (contenders.length > 1) {
+      const visible = await this.probeVisible(contenders.slice(0, 4));
+      if (visible) picked = visible;
+    }
+    return { targetId: picked.targetId, pageUrl: picked.url, pages: pageUrls };
+  }
+
+  /** The first candidate whose document reports itself visible. */
+  private async probeVisible(candidates: TargetInfo[]): Promise<TargetInfo | undefined> {
+    for (const candidate of candidates) {
+      if (!candidate.targetId) continue;
+      const attach = await this.controlCommand("Target.attachToTarget", {
+        targetId: candidate.targetId,
+        flatten: true
+      });
+      const sessionId =
+        typeof attach.result?.sessionId === "string" ? attach.result.sessionId : undefined;
+      if (!sessionId) continue;
+      try {
+        const evaluated = await this.controlCommand(
+          "Runtime.evaluate",
+          { expression: "document.visibilityState === 'visible'", returnByValue: true },
+          sessionId
+        );
+        const inner = evaluated.result?.result as { value?: unknown } | undefined;
+        if (inner?.value === true) return candidate;
+      } finally {
+        void this.controlCommand("Target.detachFromTarget", { sessionId });
+      }
+    }
+    return undefined;
   }
 
   /**
