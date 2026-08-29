@@ -35,4 +35,10 @@ export class TillCatalog extends DurableObject {
     const all = await this.ctx.storage.list<Offer>({ prefix: "offer:" });
     return [...all.values()].filter(offer => offer.agentId === agentId);
   }
+
+  /** Every live offer across agents (the operator's till view). */
+  async listAll(): Promise<Offer[]> {
+    const all = await this.ctx.storage.list<Offer>({ prefix: "offer:" });
+    return [...all.values()];
+  }
 }
