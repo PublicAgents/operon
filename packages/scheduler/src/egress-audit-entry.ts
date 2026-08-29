@@ -30,13 +30,18 @@ interface Env {
 }
 
 const tallies = new Map<string, EgressTally>();
+/** Wakes with a quiet-flush timer armed in this isolate. */
+const armedFlush = new Set<string>();
+/** Inside waitUntil's extension budget, so the timer actually runs. */
+const QUIET_FLUSH_MS = 25_000;
 
 /**
- * The WakeContainer pokes this host at wake finish so a quiet tail
- * (fewer than the request threshold, no further requests to trip the
- * time window) still lands its summary. A container could reach this
- * host itself through the catch-all interception; that only flushes
- * its own tally early, which changes no count, so it needs no gate.
+ * The WakeContainer pokes this host at wake finish as an ACCELERATOR:
+ * the same-isolate tail flushes immediately instead of waiting out the
+ * quiet timer (which remains the guarantee, isolate-local). A container
+ * could reach this host itself through the catch-all interception; that
+ * only flushes its own tally early, which changes no count, so it needs
+ * no gate.
  */
 export const EGRESS_FLUSH_HOST = "operon-egress-flush.internal";
 
@@ -65,10 +70,33 @@ export class EgressAudit extends WorkerEntrypoint<Env> {
     try {
       console.log(JSON.stringify(log));
       const tally = tallyLine(tallies, log, Date.now());
-      if (dueForFlush(tally, Date.now())) this.flush(log.wakeId);
+      if (dueForFlush(tally, Date.now())) {
+        this.flush(log.wakeId);
+      } else {
+        // The isolate that HOLDS a tally flushes it: a quiet tail (under
+        // the thresholds, then silence) lands within QUIET_FLUSH_MS with
+        // no cross-isolate reach required. The only loss left is an
+        // isolate killed inside that window, the irreducible residual of
+        // any in-memory batching.
+        this.armQuietFlush(log.wakeId);
+      }
     } catch {
       /* logging must never block egress */
     }
+  }
+
+  private armQuietFlush(wakeId: string): void {
+    if (armedFlush.has(wakeId)) return;
+    armedFlush.add(wakeId);
+    this.ctx.waitUntil(
+      new Promise<void>(resolve => setTimeout(() => resolve(), QUIET_FLUSH_MS)).then(() => {
+        armedFlush.delete(wakeId);
+        // A threshold flush may have cleared the tally already; flushing
+        // is a no-op then. Traffic after this flush re-tallies and
+        // re-arms.
+        this.flush(wakeId);
+      })
+    );
   }
 
   /** Write one wake's tally (if any) to the chronicle and drop it. */

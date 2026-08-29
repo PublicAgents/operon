@@ -76,10 +76,12 @@ export function withError(log: EgressLog, error: unknown): EgressLog {
 //
 // Raw lines stay in console/observability (volume: an npm install is
 // thousands). What the chronicle gets is per-wake HOST HISTOGRAMS,
-// flushed every SUMMARY_FLUSH_REQUESTS requests or SUMMARY_FLUSH_MS,
-// whichever first. Tallies are per ISOLATE, so one wake can produce
-// several summary events; counts are additive and the events explorer
-// shows them in wake order. Pure logic here; the entrypoint wires it.
+// flushed on the request threshold, the time window, or the isolate's
+// own quiet timer (so a tail under the thresholds still lands, with no
+// cross-isolate reach). Tallies are per ISOLATE, so one wake can
+// produce several summary events; counts are additive and the events
+// explorer shows them in wake order. Pure logic here; the entrypoint
+// wires it.
 
 export interface EgressTally {
   agentId: string;

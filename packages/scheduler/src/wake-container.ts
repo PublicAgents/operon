@@ -426,11 +426,9 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         })
       );
     }
-    // A quiet egress tail (under the flush thresholds, then silence)
-    // would otherwise never land its summary: poke the audit's flush
-    // sentinel for this wake. Best-effort like every mirror; a tally
-    // held by a different (or recycled) isolate is out of reach, which
-    // bounds the loss at one partial batch.
+    // The audit guarantees its own tail (each isolate quiet-flushes what
+    // it holds); this poke merely accelerates the same-isolate case so
+    // the summary lands with the wake instead of a timer later.
     try {
       const exportsBag = (this.ctx as unknown as {
         exports?: Record<string, (opts?: { props?: unknown }) => Fetcher>;
