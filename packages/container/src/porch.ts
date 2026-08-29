@@ -71,9 +71,12 @@ export interface PorchContext {
   /**
    * Mid-wake input refresh (operon pull): the entrypoint's closure over
    * the same pull + ack bookkeeping the wake start uses, so nothing is
-   * lost or double-acked. Absent in tests that wire no doors.
+   * lost or double-acked. Freshness lands in the entrypoint's
+   * unannounced buffer; drainAnnouncements hands it to exactly one
+   * still-connected caller. Absent in tests that wire no doors.
    */
-  pullFresh?(): Promise<{ mail: number; dms: number; channel: boolean }>;
+  pullFresh?(): Promise<void>;
+  drainAnnouncements?(): { mail: number; dms: number; channel: boolean };
 }
 
 interface JsonResult {
@@ -187,8 +190,16 @@ export class Porch {
         return ok({ help: renderSkills(this.context.config, capabilities(this.context.config)) });
       }
       if (request.method === "POST" && url.pathname === "/pull") {
-        if (!this.context.pullFresh) return fail(503, "pull_not_wired");
-        const pulled = await this.context.pullFresh();
+        if (!this.context.pullFresh || !this.context.drainAnnouncements) {
+          return fail(503, "pull_not_wired");
+        }
+        await this.context.pullFresh();
+        // Drain only for a caller that can still hear the answer: a
+        // client that aborted (the hook past its timeout, say) must not
+        // consume the announcement, or the delivery would land silently;
+        // the buffer then waits for the next pull.
+        if (request.destroyed) return fail(499, "caller_gone");
+        const pulled = this.context.drainAnnouncements();
         return ok({
           ...pulled,
           note:

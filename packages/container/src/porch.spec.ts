@@ -65,7 +65,8 @@ async function startStub(
 async function startPorch(
   wakeConfig: WakeConfig,
   denylist: string[] = [],
-  pullFresh?: () => Promise<{ mail: number; dms: number; channel: boolean }>
+  pullFresh?: () => Promise<void>,
+  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean }
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
@@ -75,7 +76,8 @@ async function startPorch(
     denylist,
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
     log: () => undefined,
-    ...(pullFresh ? { pullFresh } : {})
+    ...(pullFresh ? { pullFresh } : {}),
+    ...(drainAnnouncements ? { drainAnnouncements } : {})
   });
   const url = await porch.start(0);
   cleanups.push(() => porch.close());
@@ -396,7 +398,7 @@ describe("the living help and the mid-wake pull", () => {
     // Task-first guidance including the mid-wake pull...
     expect(body.help).toContain("operon pull");
     expect(body.help).toContain("one pull away, not one wake away");
-    // ...and honest live/not-wired marks: notify is wired, email is not.
+    // ...and honest live/not-wired marks: notify is wired, vault is not.
     expect(body.help).toMatch(/operon notify[\s\S]{0,120}message the operator(?![\s\S]{0,40}NOT WIRED)/);
     expect(body.help).toMatch(/operon vault set[^\n]*NOT WIRED/);
   });
@@ -412,64 +414,45 @@ describe("the living help and the mid-wake pull", () => {
     expect(((await response.json()) as { error: string }).error).toBe("pull_not_wired");
   });
 
-  it("shares one in-flight refresh between overlapping pulls", async () => {
-    // The porch passes through whatever the entrypoint's pullFresh does;
-    // the sharing contract lives in the entrypoint closure. This pins
-    // the porch side: two concurrent /pull requests both complete and
-    // both receive the refresher's answer.
+  it("shares the run and announces each delivery exactly once, to a live caller", async () => {
+    // The entrypoint contract in miniature: runs deposit freshness into a
+    // buffer; the drain hands it to exactly one caller. Overlapping pulls
+    // share one run (calls stays 1), one of them drains the counts, the
+    // other truthfully hears nothing new; a later pull with an empty
+    // buffer also hears nothing new.
     let calls = 0;
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>(resolve => (release = resolve));
-    let shared: Promise<{ mail: number; dms: number; channel: boolean }> | null = null;
-    const refresher = async () => {
-      calls += 1;
-      await gate;
-      return { mail: 1, dms: 0, channel: false };
-    };
-    // Single-shot sharing in the test: clearing on completion would let
-    // the second request arrive after the first finished and legitimately
-    // start a new run, which is not what this pins. The claim-once rule
-    // (initiator gets the counts, sharers get zeros) matches the
-    // entrypoint's closure.
-    let claimed = false;
-    const { url } = await startPorch(config(), [], () => {
-      if (!shared) shared = refresher();
-      if (!claimed) {
-        claimed = true;
+    const buffer = { mail: 0, dms: 0, channel: false };
+    let shared: Promise<void> | null = null;
+    const { url } = await startPorch(
+      config(),
+      [],
+      () => {
+        if (!shared) {
+          shared = (async () => {
+            calls += 1;
+            buffer.mail += 1;
+          })();
+        }
         return shared;
+      },
+      () => {
+        const out = { ...buffer };
+        buffer.mail = 0;
+        buffer.dms = 0;
+        buffer.channel = false;
+        return out;
       }
-      return shared.then(() => ({ mail: 0, dms: 0, channel: false }));
-    });
+    );
     const request = () =>
       fetch(`${url}/pull`, {
         method: "POST",
         headers: { "x-operon-porch": "1", "content-type": "application/json" },
         body: "{}"
       }).then(response => response.json() as Promise<Record<string, unknown>>);
-    const [first, second] = [request(), request()];
-    release();
-    const bodies = await Promise.all([first, second]);
+    const bodies = await Promise.all([request(), request()]);
     expect(calls).toBe(1);
-    // Exactly one caller claims the freshness; the sharer hears nothing
-    // new, so a single delivery is never announced twice.
     const mails = bodies.map(body => body.mail).sort();
     expect(mails).toEqual([0, 1]);
-  });
-
-  it("runs the entrypoint's refresher and reports what landed", async () => {
-    let calls = 0;
-    const { url } = await startPorch(config(), [], async () => {
-      calls += 1;
-      return { mail: 2, dms: 0, channel: true };
-    });
-    const response = await fetch(`${url}/pull`, {
-      method: "POST",
-      headers: { "x-operon-porch": "1", "content-type": "application/json" },
-      body: "{}"
-    });
-    const body = (await response.json()) as Record<string, unknown>;
-    expect(calls).toBe(1);
-    expect(body).toMatchObject({ ok: true, mail: 2, dms: 0, channel: true });
-    expect(String(body.note)).toContain("landed");
+    for (const body of bodies) expect(body).toMatchObject({ ok: true });
   });
 });

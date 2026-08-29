@@ -111,7 +111,7 @@ async function main(): Promise<void> {
       method: "POST",
       headers: { "x-operon-porch": "1", "content-type": "application/json" },
       body: "{}",
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(25_000)
     });
     if (!response.ok) return;
     const counts = (await response.json()) as PullCounts & { ok?: boolean };

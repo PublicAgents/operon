@@ -747,37 +747,50 @@ async function main(): Promise<number> {
     // ack bookkeeping as wake start. Unacked messages re-deliver (the
     // door forgets nothing until the post-persist ack), so re-writing an
     // inbox file is idempotent and only genuinely NEW ids count.
-    // Concurrent pulls SHARE one run, and its freshness is CLAIMED by
-    // the initiator alone: a sharer rides the same fetch but reports
-    // nothing new, so one delivery is never announced twice (once by a
-    // manual pull and again by the hook, say). The files land on disk
-    // for everyone either way.
+    // Concurrent pulls SHARE one run; its freshness lands in the
+    // unannounced buffer and is DRAINED at response time by the porch,
+    // only for a caller that is still connected. One delivery is
+    // announced exactly once, to whoever can actually hear it: not
+    // twice to overlapping callers, and not into the void when the
+    // initiator (say, the hook hitting its timeout) aborted.
     pullFresh() {
       if (!inFlightPull) {
         inFlightPull = doPullFresh().finally(() => {
           inFlightPull = null;
         });
-        return inFlightPull;
       }
-      return inFlightPull.then(() => ({ mail: 0, dms: 0, channel: false }));
+      return inFlightPull;
+    },
+    drainAnnouncements() {
+      const out = { ...unannounced };
+      unannounced.mail = 0;
+      unannounced.dms = 0;
+      unannounced.channel = false;
+      return out;
     }
   });
-  let inFlightPull: Promise<{ mail: number; dms: number; channel: boolean }> | null = null;
-  async function doPullFresh(): Promise<{ mail: number; dms: number; channel: boolean }> {
+  let inFlightPull: Promise<void> | null = null;
+  const unannounced = { mail: 0, dms: 0, channel: false };
+  async function doPullFresh(): Promise<void> {
     const before = ackState.inboxIds.size;
     for (const id of await pullInbox(config, chassisWritten, denylist)) {
       ackState.inboxIds.add(id);
     }
-    const mail = ackState.inboxIds.size - before;
+    unannounced.mail += ackState.inboxIds.size - before;
     const dmBefore = ackState.dmUpTo;
     const dmUpTo = await pullXDms(config, chassisWritten, denylist);
-    if (dmUpTo !== null) ackState.dmUpTo = dmUpTo;
+    if (dmUpTo !== null) {
+      ackState.dmUpTo = dmUpTo;
+      if (dmUpTo !== dmBefore) unannounced.dms += 1;
+    }
     const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
-    const channel =
+    if (
       channelUpTo !== null &&
-      (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo);
-    if (channel) ackState.channelUpTo = channelUpTo;
-    return { mail, dms: dmUpTo !== null && dmUpTo !== dmBefore ? 1 : 0, channel };
+      (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo)
+    ) {
+      ackState.channelUpTo = channelUpTo;
+      unannounced.channel = true;
+    }
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
