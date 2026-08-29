@@ -4,9 +4,16 @@ import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.j
 import { UntrustedText } from "../untrusted.js";
 
 /**
- * Held decisions (spec 0005 §8): the approval dialog renders ONLY the
- * gatekeeper's held record (amount, recipient, subject), never text
- * quoted from channel or transcript content, so a message saying
+ * Held decisions (spec 0005 §8). Two distinct boundaries here:
+ *
+ * The CARD shows the gatekeeper's held record in full, including the
+ * held email's body: an operator must be able to READ what they are
+ * releasing. Agent-authored fields render hard-marked untrusted, as
+ * text nodes, links dead.
+ *
+ * The CONFIRM step quotes only gatekeeper FACTS (amount, recipient),
+ * never agent-authored text, and nothing quoted from channel or
+ * transcript content can parameterize a decision: a message saying
  * "approve #123" can never become the approval UI.
  */
 
@@ -35,6 +42,7 @@ interface HeldEmail {
   id: string;
   to: string;
   subject: string;
+  text?: string;
   queuedAt: string;
 }
 
@@ -129,7 +137,7 @@ function EmailApprovals({ agentId }: { agentId: string }) {
       <ErrorNote error={state.error} />
       <LoadingGate loading={state.loading} hasData={state.data !== undefined}><span /></LoadingGate>
       {(state.data?.held ?? []).map(row => (
-        <div key={row.id} className="held-card">
+        <div key={row.id} className="held-card held-email">
           <div className="held-facts">
             <span className="tag">{agentId}</span>
             <strong>email</strong>
@@ -137,6 +145,15 @@ function EmailApprovals({ agentId }: { agentId: string }) {
             <UntrustedText text={row.subject} className="held-reason" />
             <TimeStamp at={row.queuedAt} />
           </div>
+          {row.text ? (
+            <div className="held-body" data-provenance="agent">
+              <div className="bubble-head">
+                <span className="who">full body</span>
+                <span className="untrusted-badge">untrusted</span>
+              </div>
+              <UntrustedText text={row.text} className="message-body" />
+            </div>
+          ) : null}
           <div className="held-actions">
             <ConfirmButton
               label="approve"
