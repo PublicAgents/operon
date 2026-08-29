@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderLine, splitLines, stripAnsi } from "./render.js";
+import { coerceText, renderLine, splitLines, stripAnsi } from "./render.js";
 
 const ESC = "\u001B";
 
@@ -56,6 +56,16 @@ describe("renderLine", () => {
 
   it("renders a malformed JSON-looking line as plain text", () => {
     expect(renderLine("{not json")).toEqual([{ kind: "plain", text: "{not json" }]);
+  });
+});
+
+describe("coerceText", () => {
+  it("passes strings through and renders objects as JSON (the events regression)", () => {
+    expect(coerceText("plain")).toBe("plain");
+    expect(coerceText({ operator: "op", tool: "wake" })).toBe('{"operator":"op","tool":"wake"}');
+    expect(coerceText(null)).toBe("");
+    expect(coerceText(undefined)).toBe("");
+    expect(coerceText(42)).toBe("42");
   });
 });
 

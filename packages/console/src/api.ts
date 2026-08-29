@@ -108,7 +108,8 @@ export interface EventRow {
   gatekeeper: string;
   kind: string;
   agent_id: string | null;
-  detail: string | null;
+  /** A JSON object from the chronicle, not a string. */
+  detail: Record<string, unknown> | null;
 }
 
 export interface MessageRow {

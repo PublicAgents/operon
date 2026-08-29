@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { stripAnsi } from "./render.js";
+import { coerceText, stripAnsi } from "./render.js";
 
 /**
  * Rendering untrusted text (spec 0005 §8): agent and world authored
@@ -41,8 +41,11 @@ export function ExternalUrl({ url }: { url: string }) {
   );
 }
 
-export function UntrustedText({ text, className }: { text: string; className?: string }) {
-  const clean = stripAnsi(text);
+export function UntrustedText({ text, className }: { text: unknown; className?: string }) {
+  // Defensive at the boundary: chronicle detail fields arrive as JSON
+  // objects, and a non-string here must degrade to readable text, never
+  // crash the page (an uncaught render error blanks the whole console).
+  const clean = stripAnsi(coerceText(text));
   const parts: React.ReactNode[] = [];
   let cursor = 0;
   let key = 0;
