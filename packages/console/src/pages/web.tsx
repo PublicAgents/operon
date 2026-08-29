@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
+import { UntrustedText } from "../untrusted.js";
 
 interface WebSession {
   name: string;
@@ -20,6 +21,31 @@ function AgentSessions({ agentId }: { agentId: string }) {
     { pollMs: 30_000 }
   );
   const sessions = state.data?.sessions ?? [];
+  const [shot, setShot] = useState<{ name: string; data: string; pageUrl?: string } | undefined>();
+  const [actionError, setActionError] = useState<string | undefined>();
+
+  async function watchLive(name: string) {
+    setActionError(undefined);
+    try {
+      const result = (await callTool("web_live_view", { agentId, name })) as { url?: string };
+      if (result.url) window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function takeScreenshot(name: string) {
+    setActionError(undefined);
+    try {
+      const result = (await callTool("web_screenshot", { agentId, name })) as {
+        data?: string;
+        pageUrl?: string;
+      };
+      if (result.data) setShot({ name, data: result.data, pageUrl: result.pageUrl });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
   return (
     <div className="approval-block">
       <h2>{agentId}</h2>
@@ -38,6 +64,14 @@ function AgentSessions({ agentId }: { agentId: string }) {
             </span>
           </div>
           <div className="held-actions">
+            {session.live ? (
+              <>
+                <button onClick={() => void watchLive(session.name)} title="opens the provider's live view in a new tab">
+                  watch live
+                </button>
+                <button onClick={() => void takeScreenshot(session.name)}>screenshot</button>
+              </>
+            ) : null}
             <Link className="picker-item" to={`/events?gatekeeper=web&agent=${agentId}`}>
               history
             </Link>
@@ -58,6 +92,25 @@ function AgentSessions({ agentId }: { agentId: string }) {
           </div>
         </div>
       ))}
+      <ErrorNote error={actionError} />
+      {shot ? (
+        <div className="screenshot-frame" data-provenance="agent">
+          <div className="bubble-head">
+            <span className="who">
+              {agentId} / {shot.name}
+            </span>
+            {shot.pageUrl ? <UntrustedText text={shot.pageUrl} className="held-reason" /> : null}
+            <span className="untrusted-badge">untrusted</span>
+            <button onClick={() => setShot(undefined)}>close</button>
+            <button onClick={() => void takeScreenshot(shot.name)}>refresh</button>
+          </div>
+          <img
+            className="screenshot"
+            alt={`current page of ${agentId}'s ${shot.name} session (untrusted content)`}
+            src={`data:image/jpeg;base64,${shot.data}`}
+          />
+        </div>
+      ) : null}
       </LoadingGate>
     </div>
   );
@@ -73,8 +126,9 @@ export function WebSessionsPage() {
       <header className="page-head">
         <h1>Browser sessions</h1>
         <span className="sub">
-          history opens the web door's audit trail (navigations, downloads); live view and
-          recordings await the Browser Run spike (spec 0004 §6)
+          watch live and screenshot work on RUNNING sessions; history is the door's audit trail;
+          recordings replay in the Cloudflare dashboard (Browser Run &gt; Runs) after a session
+          closes
         </span>
         <label className="toggle">
           <input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)} />

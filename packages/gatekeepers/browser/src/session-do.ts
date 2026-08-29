@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { auditEvent, upstreamEndpoint } from "./audit.js";
+import { auditEvent } from "./audit.js";
 import { applyFill, cdpDecision, redactCredentials, type RelayPolicy } from "./cdp-policy.js";
+import { pickPageTarget, resolveProvider, type ProviderEnv, type TargetInfo } from "./provider.js";
 
 /**
  * One browser session per (agent, session name): the relay, its policy,
@@ -19,9 +20,7 @@ import { applyFill, cdpDecision, redactCredentials, type RelayPolicy } from "./c
  * for the TARGET context's origin.
  */
 
-export interface SessionEnv {
-  CF_ACCOUNT_ID?: string;
-  BROWSER_RUN_TOKEN?: string;
+export interface SessionEnv extends ProviderEnv {
   /** Comma-separated hosts navigation may never reach. */
   WEB_ORIGIN_DENYLIST?: string;
   [name: string]: unknown;
@@ -65,9 +64,15 @@ export class WebSession extends DurableObject<SessionEnv> {
   private upstream: WebSocket | null = null;
   private opening = false;
   private nextId = 900_000_000;
+  private liveViewSupported = false;
   private pendingOrigin = new Map<number, { raw: string; credential: string }>();
   private pendingCookieCapture = new Set<number>();
   private pendingStorageCapture = new Set<number>();
+  /** Operator-initiated control commands (live view, screenshot). */
+  private pendingControl = new Map<
+    number,
+    { resolve: (reply: { result?: Record<string, unknown>; error?: string }) => void }
+  >();
   private timers: ReturnType<typeof setInterval>[] = [];
 
   /** Drop any live relay, then forget the saved identity (remote logout). */
@@ -126,9 +131,8 @@ export class WebSession extends DurableObject<SessionEnv> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("websocket_required", { status: 426 });
     }
-    const accountId = this.env.CF_ACCOUNT_ID;
-    const token = this.env.BROWSER_RUN_TOKEN;
-    if (!accountId || !token) return new Response("browser_run_unconfigured", { status: 503 });
+    const provider = resolveProvider(this.env);
+    if ("error" in provider) return new Response(provider.error, { status: 503 });
     // One relay per DO. The dial below awaits, which yields; a second
     // concurrent connect must be refused synchronously here, before that
     // yield, or both would observe a null upstream and open two browsers.
@@ -157,11 +161,10 @@ export class WebSession extends DurableObject<SessionEnv> {
     const generation = (await this.ctx.storage.get<number>("generation")) ?? 0;
     const policy = await this.policy();
 
-    const endpoint = upstreamEndpoint(accountId).replace("wss://", "https://");
     let upstreamResponse: Response;
     try {
-      upstreamResponse = await fetch(endpoint, {
-        headers: { upgrade: "websocket", authorization: `Bearer ${token}` }
+      upstreamResponse = await fetch(provider.url, {
+        headers: { upgrade: "websocket", ...provider.headers }
       });
     } catch (error) {
       this.opening = false;
@@ -183,6 +186,7 @@ export class WebSession extends DurableObject<SessionEnv> {
     upstream.accept();
     server.accept();
     this.upstream = upstream;
+    this.liveViewSupported = provider.liveView;
     this.opening = false;
     // Each relay gets a monotonic open SEQUENCE. A write is accepted
     // only if no NEWER relay has written since: that keeps a prior
@@ -195,7 +199,7 @@ export class WebSession extends DurableObject<SessionEnv> {
     const record = (kind: string, detail: Record<string, unknown>) => {
       this.ctx.waitUntil(this.reportEvent(kind, { agentId, name, ...detail }));
     };
-    record("web_session_open", {});
+    record("web_session_open", { provider: provider.name });
 
     const teardown = (reason: string) => {
       // Identity check, not null check: a stale close/error from a PRIOR
@@ -204,6 +208,12 @@ export class WebSession extends DurableObject<SessionEnv> {
       this.upstream = null;
       this.opening = false;
       this.stopTimers();
+      // An operator control command in flight must fail fast, not hang
+      // to its timeout against a dead socket.
+      for (const [, pending] of this.pendingControl) {
+        pending.resolve({ error: "session_closed" });
+      }
+      this.pendingControl.clear();
       record("web_session_close", { reason });
       // Free the concurrency slot and accrue this session's minutes, or
       // a closed session would hold its slot until the cap is exhausted.
@@ -256,10 +266,11 @@ export class WebSession extends DurableObject<SessionEnv> {
 
     upstream.addEventListener("message", event => {
       if (typeof event.data === "string") {
-        // Our own probes and captures never reach the client.
+        // Our own probes, captures, and control replies never reach the client.
         if (this.consumeOriginReply(event.data, upstream, server, policy, record, teardown)) return;
         if (this.consumeCookieCapture(event.data, generation, relayId)) return;
         if (this.consumeStorageCapture(event.data, generation, relayId)) return;
+        if (this.consumeControlReply(event.data)) return;
         const audit = auditEvent(event.data);
         if (audit) {
           record(`web_${audit.kind}`, { url: audit.url });
@@ -363,7 +374,12 @@ export class WebSession extends DurableObject<SessionEnv> {
 
   /** Does a client frame reuse an id the relay currently has in flight? */
   private usesReservedId(data: string): boolean {
-    if (this.pendingOrigin.size === 0 && this.pendingCookieCapture.size === 0 && this.pendingStorageCapture.size === 0) {
+    if (
+      this.pendingOrigin.size === 0 &&
+      this.pendingCookieCapture.size === 0 &&
+      this.pendingStorageCapture.size === 0 &&
+      this.pendingControl.size === 0
+    ) {
       return false;
     }
     let message: { id?: unknown };
@@ -373,7 +389,202 @@ export class WebSession extends DurableObject<SessionEnv> {
       return false;
     }
     const id = typeof message.id === "number" ? message.id : -1;
-    return this.pendingOrigin.has(id) || this.pendingCookieCapture.has(id) || this.pendingStorageCapture.has(id);
+    return (
+      this.pendingOrigin.has(id) ||
+      this.pendingCookieCapture.has(id) ||
+      this.pendingStorageCapture.has(id) ||
+      this.pendingControl.has(id)
+    );
+  }
+
+  // ---- operator control commands (spec 0004 §6: see the browser) ------
+
+  /** True when the frame answered an operator control command. */
+  private consumeControlReply(data: string): boolean {
+    if (this.pendingControl.size === 0) return false;
+    let message: { id?: number; result?: Record<string, unknown>; error?: { message?: string } };
+    try {
+      message = JSON.parse(data);
+    } catch {
+      return false;
+    }
+    const id = typeof message.id === "number" ? message.id : -1;
+    const pending = this.pendingControl.get(id);
+    if (!pending) return false;
+    this.pendingControl.delete(id);
+    pending.resolve(
+      message.error
+        ? { error: message.error.message ?? "cdp_error" }
+        : { result: message.result ?? {} }
+    );
+    return true;
+  }
+
+  /**
+   * One CDP command on the live upstream, awaited. Ids come from the
+   * same unpredictable space as the fill probes, so a client can
+   * neither collide with nor forge a reply (usesReservedId drops the
+   * attempt).
+   */
+  private controlCommand(
+    method: string,
+    params: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<{ result?: Record<string, unknown>; error?: string }> {
+    const upstream = this.upstream;
+    if (!upstream) return Promise.resolve({ error: "no_live_session" });
+    const id = randomFrameId();
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (reply: { result?: Record<string, unknown>; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        resolve(reply);
+      };
+      const timer = setTimeout(() => {
+        this.pendingControl.delete(id);
+        finish({ error: "control_timeout" });
+      }, 8000);
+      const untimed = (reply: { result?: Record<string, unknown>; error?: string }) => {
+        clearTimeout(timer);
+        finish(reply);
+      };
+      this.pendingControl.set(id, { resolve: untimed });
+      try {
+        upstream.send(
+          JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })
+        );
+      } catch {
+        this.pendingControl.delete(id);
+        clearTimeout(timer);
+        finish({ error: "send_failed" });
+      }
+    });
+  }
+
+  /** The page to observe: an explicit URL-substring match wins; the
+   * heuristic (attached, non-blank, newest) otherwise. Every candidate
+   * page comes back too, so the operator SEES an ambiguous pick and can
+   * re-ask with page=<substring> instead of trusting a guess. */
+  private async observedTarget(
+    match?: string
+  ): Promise<{ targetId?: string; pageUrl?: string; pages: string[]; error?: string }> {
+    const targets = await this.controlCommand("Target.getTargets", {});
+    if (targets.error) return { pages: [], error: targets.error };
+    const infos = (targets.result?.targetInfos ?? []) as TargetInfo[];
+    const { chosen, pages, contenders } = pickPageTarget(infos, match);
+    const pageUrls = pages.map(page => page.url ?? "");
+    if (!chosen?.targetId) {
+      return { pages: pageUrls, error: match ? "no_page_matches" : "no_page_target" };
+    }
+    // Enumeration order proves nothing about the foreground: when the
+    // heuristic leaves a genuine tie, ask the browser which document is
+    // actually VISIBLE (the driven tab in a headless session). A page
+    // lying about its own visibilityState can at worst point the
+    // operator at itself, the same page whose pixels are already marked
+    // untrusted; the candidate list in the response keeps the final say
+    // with the operator either way.
+    let picked = chosen;
+    if (contenders.length > 1) {
+      // Every contender is probed: the loop stops at the first visible
+      // document, and a probe on a live target is milliseconds, so the
+      // cost scales with the background tabs actually open rather than
+      // an arbitrary cutoff that could hide the driven one.
+      const visible = await this.probeVisible(contenders);
+      if (visible) picked = visible;
+    }
+    return { targetId: picked.targetId, pageUrl: picked.url, pages: pageUrls };
+  }
+
+  /** The first candidate whose document reports itself visible. */
+  private async probeVisible(candidates: TargetInfo[]): Promise<TargetInfo | undefined> {
+    for (const candidate of candidates) {
+      if (!candidate.targetId) continue;
+      const attach = await this.controlCommand("Target.attachToTarget", {
+        targetId: candidate.targetId,
+        flatten: true
+      });
+      const sessionId =
+        typeof attach.result?.sessionId === "string" ? attach.result.sessionId : undefined;
+      if (!sessionId) continue;
+      try {
+        const evaluated = await this.controlCommand(
+          "Runtime.evaluate",
+          { expression: "document.visibilityState === 'visible'", returnByValue: true },
+          sessionId
+        );
+        const inner = evaluated.result?.result as { value?: unknown } | undefined;
+        if (inner?.value === true) return candidate;
+      } finally {
+        void this.controlCommand("Target.detachFromTarget", { sessionId });
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * A live-view URL from the provider's vendor command (Cloudflare
+   * Browser Run today). Providers without the command answer with a
+   * named refusal rather than a hang; web_screenshot is the
+   * provider-neutral way to see the page.
+   */
+  async liveView(
+    mode: "tab" | "devtools",
+    match?: string
+  ): Promise<{ ok: boolean; url?: string; pageUrl?: string; pages?: string[]; reason?: string }> {
+    if (!this.upstream) return { ok: false, reason: "no_live_session" };
+    if (!this.liveViewSupported) {
+      return { ok: false, reason: "live_view_unsupported_by_provider" };
+    }
+    const target = await this.observedTarget(match);
+    if (target.error) return { ok: false, reason: target.error, pages: target.pages };
+    const reply = await this.controlCommand("Cloudflare.getLiveView", {
+      targetId: target.targetId,
+      mode,
+      expiresInMs: 300_000
+    });
+    if (reply.error) return { ok: false, reason: reply.error };
+    const url =
+      (typeof reply.result?.url === "string" && reply.result.url) ||
+      (typeof reply.result?.liveViewUrl === "string" && reply.result.liveViewUrl) ||
+      (typeof reply.result?.devtoolsFrontendUrl === "string" && reply.result.devtoolsFrontendUrl);
+    if (!url) return { ok: false, reason: `unexpected_reply: ${Object.keys(reply.result ?? {}).join(",")}` };
+    return { ok: true, url, pageUrl: target.pageUrl, pages: target.pages };
+  }
+
+  /**
+   * Provider-neutral "what is the browser showing": plain CDP
+   * Page.captureScreenshot against the first page target. The image is
+   * WORLD CONTENT (whatever page the mind is on): untrusted pixels.
+   */
+  async screenshot(
+    match?: string
+  ): Promise<{ ok: boolean; data?: string; pageUrl?: string; pages?: string[]; reason?: string }> {
+    if (!this.upstream) return { ok: false, reason: "no_live_session" };
+    const target = await this.observedTarget(match);
+    if (target.error) return { ok: false, reason: target.error, pages: target.pages };
+    const attach = await this.controlCommand("Target.attachToTarget", {
+      targetId: target.targetId,
+      flatten: true
+    });
+    if (attach.error) return { ok: false, reason: attach.error };
+    const sessionId = typeof attach.result?.sessionId === "string" ? attach.result.sessionId : undefined;
+    if (!sessionId) return { ok: false, reason: "attach_failed" };
+    try {
+      const shot = await this.controlCommand(
+        "Page.captureScreenshot",
+        { format: "jpeg", quality: 70 },
+        sessionId
+      );
+      if (shot.error) return { ok: false, reason: shot.error };
+      const data = typeof shot.result?.data === "string" ? shot.result.data : undefined;
+      return data
+        ? { ok: true, data, pageUrl: target.pageUrl, pages: target.pages }
+        : { ok: false, reason: "no_image" };
+    } finally {
+      // Best-effort detach; the client's own targets are untouched either way.
+      void this.controlCommand("Target.detachFromTarget", { sessionId });
+    }
   }
 
   /** True when the frame was one of our origin probes (consumed here). */
