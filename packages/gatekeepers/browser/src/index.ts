@@ -78,11 +78,12 @@ export class Ops extends OpsEntrypoint<Env> {
       if (!agentId || !name || !SESSION_NAME.test(name)) {
         return errorResponse(400, "agent_and_name_required");
       }
-      const result = await session(this.env, agentId, name).liveView(mode);
+      const page = url.searchParams.get("page") ?? undefined;
+      const result = await session(this.env, agentId, name).liveView(mode, page);
       await ledger(this.env).append("web_live_view", { agentId, name, mode, ok: result.ok });
       return result.ok
-        ? json({ ok: true, url: result.url })
-        : errorResponse(409, "live_view_unavailable", result.reason);
+        ? json({ ok: true, url: result.url, pageUrl: result.pageUrl, pages: result.pages })
+        : json({ error: "live_view_unavailable", detail: result.reason, pages: result.pages ?? [] }, 409);
     }
     // Provider-neutral "what is the browser showing": one JPEG frame of
     // the live session's page. The image is world content (untrusted).
@@ -92,11 +93,12 @@ export class Ops extends OpsEntrypoint<Env> {
       if (!agentId || !name || !SESSION_NAME.test(name)) {
         return errorResponse(400, "agent_and_name_required");
       }
-      const result = await session(this.env, agentId, name).screenshot();
+      const page = url.searchParams.get("page") ?? undefined;
+      const result = await session(this.env, agentId, name).screenshot(page);
       await ledger(this.env).append("web_screenshot", { agentId, name, ok: result.ok });
       return result.ok
-        ? json({ ok: true, format: "jpeg", data: result.data })
-        : errorResponse(409, "screenshot_unavailable", result.reason);
+        ? json({ ok: true, format: "jpeg", data: result.data, pageUrl: result.pageUrl, pages: result.pages })
+        : json({ error: "screenshot_unavailable", detail: result.reason, pages: result.pages ?? [] }, 409);
     }
     // The remote logout: kill the live relay, bump the generation, drop
     // the state, so an in-flight snapshot cannot resurrect it.

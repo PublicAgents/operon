@@ -462,16 +462,22 @@ export class WebSession extends DurableObject<SessionEnv> {
     });
   }
 
-  /** The page the agent is using (attached, non-blank, newest), for
-   * target-scoped commands; a blind first-page pick could hand the
-   * operator a background tab. */
-  private async firstPageTarget(): Promise<{ targetId?: string; error?: string }> {
+  /** The page to observe: an explicit URL-substring match wins; the
+   * heuristic (attached, non-blank, newest) otherwise. Every candidate
+   * page comes back too, so the operator SEES an ambiguous pick and can
+   * re-ask with page=<substring> instead of trusting a guess. */
+  private async observedTarget(
+    match?: string
+  ): Promise<{ targetId?: string; pageUrl?: string; pages: string[]; error?: string }> {
     const targets = await this.controlCommand("Target.getTargets", {});
-    if (targets.error) return { error: targets.error };
+    if (targets.error) return { pages: [], error: targets.error };
     const infos = (targets.result?.targetInfos ?? []) as TargetInfo[];
-    const page = pickPageTarget(infos);
-    if (!page?.targetId) return { error: "no_page_target" };
-    return { targetId: page.targetId };
+    const { chosen, pages } = pickPageTarget(infos, match);
+    const pageUrls = pages.map(page => page.url ?? "");
+    if (!chosen?.targetId) {
+      return { pages: pageUrls, error: match ? "no_page_matches" : "no_page_target" };
+    }
+    return { targetId: chosen.targetId, pageUrl: chosen.url, pages: pageUrls };
   }
 
   /**
@@ -480,13 +486,16 @@ export class WebSession extends DurableObject<SessionEnv> {
    * named refusal rather than a hang; web_screenshot is the
    * provider-neutral way to see the page.
    */
-  async liveView(mode: "tab" | "devtools"): Promise<{ ok: boolean; url?: string; reason?: string }> {
+  async liveView(
+    mode: "tab" | "devtools",
+    match?: string
+  ): Promise<{ ok: boolean; url?: string; pageUrl?: string; pages?: string[]; reason?: string }> {
     if (!this.upstream) return { ok: false, reason: "no_live_session" };
     if (!this.liveViewSupported) {
       return { ok: false, reason: "live_view_unsupported_by_provider" };
     }
-    const target = await this.firstPageTarget();
-    if (target.error) return { ok: false, reason: target.error };
+    const target = await this.observedTarget(match);
+    if (target.error) return { ok: false, reason: target.error, pages: target.pages };
     const reply = await this.controlCommand("Cloudflare.getLiveView", {
       targetId: target.targetId,
       mode,
@@ -498,7 +507,7 @@ export class WebSession extends DurableObject<SessionEnv> {
       (typeof reply.result?.liveViewUrl === "string" && reply.result.liveViewUrl) ||
       (typeof reply.result?.devtoolsFrontendUrl === "string" && reply.result.devtoolsFrontendUrl);
     if (!url) return { ok: false, reason: `unexpected_reply: ${Object.keys(reply.result ?? {}).join(",")}` };
-    return { ok: true, url };
+    return { ok: true, url, pageUrl: target.pageUrl, pages: target.pages };
   }
 
   /**
@@ -506,10 +515,12 @@ export class WebSession extends DurableObject<SessionEnv> {
    * Page.captureScreenshot against the first page target. The image is
    * WORLD CONTENT (whatever page the mind is on): untrusted pixels.
    */
-  async screenshot(): Promise<{ ok: boolean; data?: string; reason?: string }> {
+  async screenshot(
+    match?: string
+  ): Promise<{ ok: boolean; data?: string; pageUrl?: string; pages?: string[]; reason?: string }> {
     if (!this.upstream) return { ok: false, reason: "no_live_session" };
-    const target = await this.firstPageTarget();
-    if (target.error) return { ok: false, reason: target.error };
+    const target = await this.observedTarget(match);
+    if (target.error) return { ok: false, reason: target.error, pages: target.pages };
     const attach = await this.controlCommand("Target.attachToTarget", {
       targetId: target.targetId,
       flatten: true
@@ -525,7 +536,9 @@ export class WebSession extends DurableObject<SessionEnv> {
       );
       if (shot.error) return { ok: false, reason: shot.error };
       const data = typeof shot.result?.data === "string" ? shot.result.data : undefined;
-      return data ? { ok: true, data } : { ok: false, reason: "no_image" };
+      return data
+        ? { ok: true, data, pageUrl: target.pageUrl, pages: target.pages }
+        : { ok: false, reason: "no_image" };
     } finally {
       // Best-effort detach; the client's own targets are untouched either way.
       void this.controlCommand("Target.detachFromTarget", { sessionId });

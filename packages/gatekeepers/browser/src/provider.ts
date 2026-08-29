@@ -42,15 +42,31 @@ export interface TargetInfo {
 }
 
 /**
- * The page the agent is ACTUALLY using, from a Target.getTargets
- * enumeration: prefer attached pages (the client is driving them) over
- * detached, real documents over blank/internal ones, and the most
- * recently created among equals (last in enumeration order). A blind
- * first-page pick could hand the operator a background tab.
+ * The page to observe, from a Target.getTargets enumeration. CDP's
+ * browser endpoint carries no focus signal, so certainty is not
+ * available; the contract is therefore: an explicit `match` (URL
+ * substring, the operator's choice) wins outright, and WITHOUT one the
+ * heuristic prefers attached pages over detached, real documents over
+ * blank/internal ones, newest among equals, while the CALLER reports
+ * every candidate page back to the operator so an ambiguous pick is
+ * visible and correctable rather than silently wrong.
  */
-export function pickPageTarget(infos: readonly TargetInfo[]): TargetInfo | undefined {
+export function pickPageTarget(
+  infos: readonly TargetInfo[],
+  match?: string
+): { chosen?: TargetInfo; pages: TargetInfo[] } {
   const pages = infos.filter(info => info.type === "page" && info.targetId);
-  if (pages.length === 0) return infos.find(info => info.targetId);
+  if (match) {
+    const wanted = pages.filter(info => (info.url ?? "").includes(match));
+    // Among URL matches, the same heuristic breaks remaining ties.
+    if (wanted.length > 0) return { chosen: heuristic(wanted), pages };
+    return { chosen: undefined, pages };
+  }
+  if (pages.length === 0) return { chosen: infos.find(info => info.targetId), pages };
+  return { chosen: heuristic(pages), pages };
+}
+
+function heuristic(pages: readonly TargetInfo[]): TargetInfo {
   const isBlank = (info: TargetInfo) =>
     !info.url || info.url === "about:blank" || info.url.startsWith("devtools://");
   const score = (info: TargetInfo) => (info.attached ? 2 : 0) + (isBlank(info) ? 0 : 1);

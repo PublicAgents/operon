@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
+import { UntrustedText } from "../untrusted.js";
 
 interface WebSession {
   name: string;
@@ -20,7 +21,7 @@ function AgentSessions({ agentId }: { agentId: string }) {
     { pollMs: 30_000 }
   );
   const sessions = state.data?.sessions ?? [];
-  const [shot, setShot] = useState<{ name: string; data: string } | undefined>();
+  const [shot, setShot] = useState<{ name: string; data: string; pageUrl?: string } | undefined>();
   const [actionError, setActionError] = useState<string | undefined>();
 
   async function watchLive(name: string) {
@@ -36,8 +37,11 @@ function AgentSessions({ agentId }: { agentId: string }) {
   async function takeScreenshot(name: string) {
     setActionError(undefined);
     try {
-      const result = (await callTool("web_screenshot", { agentId, name })) as { data?: string };
-      if (result.data) setShot({ name, data: result.data });
+      const result = (await callTool("web_screenshot", { agentId, name })) as {
+        data?: string;
+        pageUrl?: string;
+      };
+      if (result.data) setShot({ name, data: result.data, pageUrl: result.pageUrl });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     }
@@ -95,6 +99,7 @@ function AgentSessions({ agentId }: { agentId: string }) {
             <span className="who">
               {agentId} / {shot.name}
             </span>
+            {shot.pageUrl ? <UntrustedText text={shot.pageUrl} className="held-reason" /> : null}
             <span className="untrusted-badge">untrusted</span>
             <button onClick={() => setShot(undefined)}>close</button>
             <button onClick={() => void takeScreenshot(shot.name)}>refresh</button>

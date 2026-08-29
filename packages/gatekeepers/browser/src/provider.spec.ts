@@ -55,12 +55,24 @@ describe("resolveProvider", () => {
 
 describe("pickPageTarget", () => {
   it("prefers the attached, non-blank, newest page over a background first tab", () => {
-    const chosen = pickPageTarget([
+    const { chosen, pages } = pickPageTarget([
       { targetId: "t1", type: "page", url: "about:blank", attached: false },
       { targetId: "t2", type: "page", url: "https://old.example", attached: true },
       { targetId: "t3", type: "page", url: "https://current.example", attached: true }
     ]);
     expect(chosen?.targetId).toBe("t3");
+    // Every candidate page is reported, so an ambiguous pick is visible.
+    expect(pages).toHaveLength(3);
+  });
+
+  it("lets an explicit URL-substring match override the heuristic", () => {
+    const infos = [
+      { targetId: "t2", type: "page", url: "https://old.example/checkout", attached: true },
+      { targetId: "t3", type: "page", url: "https://current.example", attached: true }
+    ];
+    expect(pickPageTarget(infos, "old.example").chosen?.targetId).toBe("t2");
+    expect(pickPageTarget(infos, "nowhere").chosen).toBeUndefined();
+    expect(pickPageTarget(infos, "nowhere").pages).toHaveLength(2);
   });
 
   it("prefers attached over detached and real documents over blanks", () => {
@@ -68,13 +80,13 @@ describe("pickPageTarget", () => {
       pickPageTarget([
         { targetId: "a", type: "page", url: "https://x.example", attached: false },
         { targetId: "b", type: "page", url: "about:blank", attached: true }
-      ])?.targetId
+      ]).chosen?.targetId
     ).toBe("b");
     expect(
       pickPageTarget([
         { targetId: "a", type: "page", url: "about:blank", attached: false },
         { targetId: "b", type: "page", url: "https://x.example", attached: false }
-      ])?.targetId
+      ]).chosen?.targetId
     ).toBe("b");
   });
 
@@ -83,9 +95,9 @@ describe("pickPageTarget", () => {
       pickPageTarget([
         { targetId: "w", type: "service_worker", url: "https://x.example" },
         { targetId: "p", type: "page", url: "https://x.example" }
-      ])?.targetId
+      ]).chosen?.targetId
     ).toBe("p");
-    expect(pickPageTarget([{ targetId: "w", type: "worker" }])?.targetId).toBe("w");
-    expect(pickPageTarget([])).toBeUndefined();
+    expect(pickPageTarget([{ targetId: "w", type: "worker" }]).chosen?.targetId).toBe("w");
+    expect(pickPageTarget([]).chosen).toBeUndefined();
   });
 });
