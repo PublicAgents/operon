@@ -317,6 +317,16 @@ async function handleOutbox(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, outbox: await mailbox(env, agent.id).outbox() });
 }
 
+/** Every send awaiting the operator (the approvals surface). */
+async function handleHeld(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ agentId?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const roster = parseRoster(env.ROSTER);
+  const agent = typeof body.value.agentId === "string" ? findAgent(roster, body.value.agentId) : undefined;
+  if (!agent) return errorResponse(404, "unknown_agent");
+  return json({ ok: true, held: await mailbox(env, agent.id).listHeld() });
+}
+
 export default {
   async email(message, env, ctx): Promise<void> {
     const roster = parseRoster(env.ROSTER);
@@ -390,6 +400,9 @@ export class Ops extends OpsEntrypoint<Env> {
     }
     if (request.method === "POST" && url.pathname === "/gatekeeper/email/outbox") {
       return handleOutbox(request, this.env);
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/email/held") {
+      return handleHeld(request, this.env);
     }
     if (request.method === "GET" && url.pathname === "/gatekeeper/email/ledger") {
       return Promise.resolve(ledger(this.env).recent()).then(rows => json(rows));

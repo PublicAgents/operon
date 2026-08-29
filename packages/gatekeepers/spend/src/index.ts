@@ -540,6 +540,9 @@ export class Ops extends OpsEntrypoint<Env> {
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/outbox") {
       return json({ ok: true, outbox: await spendLedger(this.env).outbox() });
     }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/held") {
+      return json({ ok: true, held: await spendLedger(this.env).listHeld() });
+    }
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/ledger") {
       return json(await ledger(this.env).recent());
     }

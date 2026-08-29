@@ -322,12 +322,23 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: "spend_outbox",
     title: "Read the spend outbox",
     description:
-      "Every spend outbox row (held, sent, unknown) across agents; held rows carry the heldId that spend_approve and spend_reject take.",
+      "Every durable payment row across agents (reserved, paid, released, outcome_unknown). outcome_unknown rows carry the outboxId spend_reconcile takes; payments awaiting approval live in spend_held.",
     input: z.object({}),
     readOnly: true,
     decision: false,
     handler: (_input, context) =>
       context.ops("SPEND", "GET", "/gatekeeper/spend/outbox")
+  },
+  {
+    name: "spend_held",
+    title: "List payments awaiting approval",
+    description:
+      `Every held payment across agents: id (the heldId spend_approve and spend_reject take), agentId, recipient, display amount, origin, and the agent's stated reason. ${UNTRUSTED}`,
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("SPEND", "GET", "/gatekeeper/spend/held")
   },
   {
     name: "spend_approve",
@@ -368,12 +379,23 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: "email_outbox",
     title: "Read an agent's email outbox",
     description:
-      `One agent's outbox including held sends; held rows carry the heldId for email_approve and email_reject. ${UNTRUSTED}`,
+      `One agent's sent-mail outbox (to, subject, at). Sends awaiting approval live in email_held. ${UNTRUSTED}`,
     input: z.object({ agentId }),
     readOnly: true,
     decision: false,
     handler: (input, context) =>
       context.ops("EMAIL", "POST", "/gatekeeper/email/outbox", { body: input })
+  },
+  {
+    name: "email_held",
+    title: "List an agent's emails awaiting approval",
+    description:
+      `One agent's held sends: id (the heldId email_approve and email_reject take), to, subject, queuedAt. ${UNTRUSTED}`,
+    input: z.object({ agentId }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) =>
+      context.ops("EMAIL", "POST", "/gatekeeper/email/held", { body: input })
   },
   {
     name: "email_approve",

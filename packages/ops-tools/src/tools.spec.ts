@@ -58,8 +58,8 @@ describe("the registry", () => {
       "agents_list", "wakes_list", "wake_log", "wake", "agent_disable", "agent_enable",
       "chronicle_events", "chronicle_messages", "chronicle_wakes", "notifications",
       "ledger_recent", "audit_recent", "channel_send", "channel_transcript",
-      "spend_outbox", "spend_approve", "spend_reject", "spend_reconcile",
-      "email_outbox", "email_approve", "email_reject",
+      "spend_outbox", "spend_held", "spend_approve", "spend_reject", "spend_reconcile",
+      "email_outbox", "email_held", "email_approve", "email_reject",
       "web_sessions", "web_session_delete",
       "secret_list", "secret_set", "secret_rotate_group"
     ]) {

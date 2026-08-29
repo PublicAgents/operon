@@ -10,47 +10,53 @@ import { UntrustedText } from "../untrusted.js";
  * "approve #123" can never become the approval UI.
  */
 
-interface SpendRow {
-  id?: string;
-  agentId?: string;
-  at?: string;
-  status?: string;
-  origin?: string;
-  recipient?: string;
-  amount?: string;
-  currency?: string;
-  url?: string;
-  reason?: string;
+interface HeldPayment {
+  id: string;
+  agentId: string;
+  origin: string;
+  recipient: string;
+  display: string;
+  reason: string;
+  queuedAt: string;
+}
+
+interface UnknownOutcome {
+  id: string;
+  agentId: string;
+  amount: string;
+  currency: string;
+  recipient: string;
+  origin: string;
+  at: string;
+  status: string;
 }
 
 interface HeldEmail {
-  id?: string;
-  at?: string;
-  to?: string;
-  subject?: string;
+  id: string;
+  to: string;
+  subject: string;
+  queuedAt: string;
 }
 
 function SpendApprovals() {
-  const state = useTool<{ outbox: SpendRow[] }>("spend_outbox", {}, { pollMs: 15_000 });
-  const rows = state.data?.outbox ?? [];
-  const held = rows.filter(row => row.status === "held" || row.status === "held_for_approval");
-  const unknown = rows.filter(row => row.status === "unknown");
+  const held = useTool<{ held: HeldPayment[] }>("spend_held", {}, { pollMs: 15_000 });
+  const outbox = useTool<{ outbox: UnknownOutcome[] }>("spend_outbox", {}, { pollMs: 30_000 });
+  const heldRows = held.data?.held ?? [];
+  const unknown = (outbox.data?.outbox ?? []).filter(row => row.status === "outcome_unknown");
   return (
     <div className="approval-block">
       <h2>Spend</h2>
-      <ErrorNote error={state.error} />
-      {held.length === 0 && unknown.length === 0 && !state.loading ? (
+      <ErrorNote error={held.error ?? outbox.error} />
+      {heldRows.length === 0 && unknown.length === 0 && !held.loading ? (
         <Empty>nothing held</Empty>
       ) : null}
-      {held.map(row => (
+      {heldRows.map(row => (
         <div key={row.id} className="held-card">
           <div className="held-facts">
             <span className="tag">{row.agentId}</span>
-            <strong>
-              {row.amount} {row.currency}
-            </strong>
-            <span>to {row.recipient ?? row.origin ?? "?"}</span>
-            <TimeStamp at={row.at} />
+            <strong>{row.display}</strong>
+            <span>to {row.recipient || row.origin}</span>
+            <TimeStamp at={row.queuedAt} />
             {row.reason ? <UntrustedText text={row.reason} className="held-reason" /> : null}
           </div>
           <div className="held-actions">
@@ -58,12 +64,13 @@ function SpendApprovals() {
               label="approve"
               detail={
                 <span className="confirm-note">
-                  pay {row.amount} {row.currency} to {row.recipient ?? row.origin}
+                  pay {row.display} to {row.recipient || row.origin}
                 </span>
               }
               onConfirm={async () => {
                 await callTool("spend_approve", { agentId: row.agentId, heldId: row.id });
-                state.refresh();
+                held.refresh();
+                outbox.refresh();
               }}
             />
             <ConfirmButton
@@ -71,7 +78,7 @@ function SpendApprovals() {
               danger
               onConfirm={async () => {
                 await callTool("spend_reject", { agentId: row.agentId, heldId: row.id });
-                state.refresh();
+                held.refresh();
               }}
             />
           </div>
@@ -83,7 +90,7 @@ function SpendApprovals() {
             <span className="tag">{row.agentId}</span>
             <strong>outcome unknown</strong>
             <span>
-              {row.amount} {row.currency} to {row.recipient ?? row.origin ?? "?"}
+              {row.amount} {row.currency} to {row.recipient || row.origin}
             </span>
             <TimeStamp at={row.at} />
           </div>
@@ -93,14 +100,14 @@ function SpendApprovals() {
               detail={<span className="confirm-note">check the real account first</span>}
               onConfirm={async () => {
                 await callTool("spend_reconcile", { outboxId: row.id, ruling: "charged" });
-                state.refresh();
+                outbox.refresh();
               }}
             />
             <ConfirmButton
               label="not charged"
               onConfirm={async () => {
                 await callTool("spend_reconcile", { outboxId: row.id, ruling: "not_charged" });
-                state.refresh();
+                outbox.refresh();
               }}
             />
           </div>
@@ -111,26 +118,18 @@ function SpendApprovals() {
 }
 
 function EmailApprovals({ agentId }: { agentId: string }) {
-  const state = useTool<{ outbox: { held?: HeldEmail[] } | HeldEmail[] }>(
-    "email_outbox",
-    { agentId },
-    { pollMs: 20_000 }
-  );
-  const outbox = state.data?.outbox;
-  const held: HeldEmail[] = Array.isArray(outbox)
-    ? outbox.filter(row => (row as { status?: string }).status === "held")
-    : (outbox?.held ?? []);
+  const state = useTool<{ held: HeldEmail[] }>("email_held", { agentId }, { pollMs: 20_000 });
   return (
     <>
       <ErrorNote error={state.error} />
-      {held.map(row => (
+      {(state.data?.held ?? []).map(row => (
         <div key={row.id} className="held-card">
           <div className="held-facts">
             <span className="tag">{agentId}</span>
             <strong>email</strong>
-            <span>to {row.to ?? "?"}</span>
-            {row.subject ? <UntrustedText text={row.subject} className="held-reason" /> : null}
-            <TimeStamp at={row.at} />
+            <span>to {row.to}</span>
+            <UntrustedText text={row.subject} className="held-reason" />
+            <TimeStamp at={row.queuedAt} />
           </div>
           <div className="held-actions">
             <ConfirmButton
@@ -166,6 +165,9 @@ export function ApprovalsPage() {
       <SpendApprovals />
       <div className="approval-block">
         <h2>Email</h2>
+        {(agents.data?.agents ?? []).length === 0 && !agents.loading ? (
+          <Empty>no agents</Empty>
+        ) : null}
         {(agents.data?.agents ?? []).map(agent => (
           <EmailApprovals key={agent.id} agentId={agent.id} />
         ))}

@@ -162,4 +162,10 @@ export class SpendLedger extends DurableObject {
   async deleteHeld(id: string): Promise<void> {
     await this.ctx.storage.delete(`held:${id}`);
   }
+
+  /** Every payment awaiting the operator (the approvals surface). */
+  async listHeld(): Promise<HeldPayment[]> {
+    const entries = await this.ctx.storage.list<HeldPayment>({ prefix: "held:" });
+    return [...entries.values()];
+  }
 }
