@@ -24,6 +24,17 @@
       "tag": "v2",
       "new_sqlite_classes": ["Channel"]
     }
+  ],
+  // The notifications feed and the channel/ledger mirrors (spec 0005 §5)
+  // record into the chronicle D1; a deployment without this binding
+  // silently loses every notify a missing Telegram would have carried.
+  "d1_databases": [
+    {
+      "binding": "CHRONICLE",
+      "database_name": "operon-chronicle",
+      "database_id": "operon-chronicle-local",
+      "migrations_dir": "../../chronicle/migrations"
+    }
   ]
   // Secrets, set per deployment (wrangler secret put):
   //   TELEGRAM_BOT_TOKEN        the bot's API token
@@ -32,9 +43,6 @@
   //   WAKE_TRIGGER_TOKEN        bearer this Gatekeeper presents to the scheduler
   //   EMAIL_SERVICE_TOKEN       bearer for the email Gatekeeper (approve/reject
   //                             held sends from the inline buttons)
-  //   OPERATOR_API_TOKEN        bearer for an operator UI: channel send and
-  //                             transcript, ledger tailing. Telegram is one
-  //                             transport over the same channel; a UI is another.
   // Vars, set per deployment:
   //   OPERATOR_CHAT_ID          the one chat identity that is the operator
   // Service bindings, set per deployment:

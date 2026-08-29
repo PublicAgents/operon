@@ -268,6 +268,29 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     return (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) === true;
   }
 
+  /**
+   * Read-only snapshot for the operator plane: the kill-switch flag and
+   * the running wake, if any. Touches nothing.
+   */
+  async status(): Promise<{
+    disabled: boolean;
+    current?: { wakeId: string; startedAt: string; trigger: WakeTrigger };
+  }> {
+    const disabled =
+      (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) === true;
+    const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
+    return current
+      ? {
+          disabled,
+          current: {
+            wakeId: current.wakeId,
+            startedAt: current.startedAt,
+            trigger: current.trigger
+          }
+        }
+      : { disabled };
+  }
+
   override async alarm(): Promise<void> {
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     const hardWallMs =

@@ -23,7 +23,7 @@ export interface TelegramGatewayBinding {
     text: string;
     actions?: OperatorAction[];
     agentId?: string;
-  }): Promise<{ delivered: boolean }>;
+  }): Promise<{ delivered: boolean; recorded?: boolean }>;
 }
 
 export interface NotifyEnv {
@@ -53,12 +53,12 @@ export async function notifyOperator(
         ...(options.actions ? { actions: options.actions } : {}),
         ...(options.agentId ? { agentId: options.agentId } : {})
       });
-      // Delivered over the binding, buttons and all: done. If the binding
-      // reports non-delivery (Telegram refused, or it is unreachable),
-      // fall through to the public path so the operator still hears about
-      // it, text-only (a held notice with no button beats silence; the
-      // /approve command still works).
-      if (result?.delivered) return;
+      // Delivered over the binding, buttons and all: done. Recorded but
+      // undelivered (a Telegram-less colony, spec 0005 §5) is ALSO done:
+      // the notify is durably in the notifications feed, and a public-path
+      // retry would only append it twice. Fall through only when the
+      // binding call reached neither the operator nor the record.
+      if (result?.delivered || result?.recorded) return;
     } catch (error) {
       console.error("notify over binding failed", error);
     }

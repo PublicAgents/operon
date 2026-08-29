@@ -53,6 +53,9 @@
     },
     {
       "path": "./packages/gatekeepers/browser"
+    },
+    {
+      "path": "./packages/ops-tools"
     }
   ]
 }

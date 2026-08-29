@@ -108,6 +108,34 @@ describe("messages", () => {
     expect(hits[0].refId).toBe("m1");
     expect(await queryMessages(d1, { kind: "channel_operator" })).toHaveLength(1);
   });
+
+  it("reports whether the row actually landed (the notify-feed contract)", async () => {
+    expect(
+      await recordMessage(d1, {
+        at: "2026-08-27T09:10:00.000Z",
+        kind: "notify",
+        agentId: "system",
+        body: "wake failed"
+      })
+    ).toBe(true);
+    expect(
+      await recordMessage(undefined, {
+        at: "2026-08-27T09:11:00.000Z",
+        kind: "notify",
+        agentId: "system",
+        body: "lost"
+      })
+    ).toBe(false);
+    const broken = { prepare() { throw new Error("d1 down"); } } as unknown as D1Database;
+    expect(
+      await recordMessage(broken, {
+        at: "2026-08-27T09:12:00.000Z",
+        kind: "notify",
+        agentId: "system",
+        body: "lost"
+      })
+    ).toBe(false);
+  });
 });
 
 describe("wake log", () => {

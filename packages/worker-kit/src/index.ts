@@ -17,6 +17,17 @@ export {
   type AccessResult
 } from "./access.js";
 export {
+  CONTEXT_WINDOW,
+  HARD_RETENTION,
+  RETENTION,
+  concernsAgent,
+  effectiveCursors,
+  prunableIds,
+  transcriptFor,
+  type AgentTranscript,
+  type ChannelEntry
+} from "./channel.js";
+export {
   githubApi,
   buildTree,
   commitToBranch,

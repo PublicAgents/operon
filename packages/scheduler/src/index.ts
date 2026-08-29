@@ -220,6 +220,33 @@ export default {
       return json({ agentId: agent.id, ...result });
     }
 
+    if (url.pathname === "/agents" && request.method === "GET") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const roster = parseRoster(env.ROSTER);
+      // The roster joined with each agent's live supervisor state: the
+      // console's dashboard source. One status() per agent is fine at
+      // roster scale; batch if rosters ever grow past dozens.
+      const agents = await Promise.all(
+        roster.agents.map(async agent => {
+          const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
+          const status = await stub.status();
+          return {
+            id: agent.id,
+            enabled: agent.enabled,
+            cadence: agent.cadence,
+            harness: agent.harness,
+            model: agent.model,
+            hosts: agent.hosts,
+            web: agent.web === true,
+            disabled: status.disabled,
+            ...(status.current ? { currentWake: status.current } : {})
+          };
+        })
+      );
+      return json({ zone: roster.zone, agents });
+    }
+
     const wakesMatch = /^\/wakes\/([a-z0-9-]+)$/.exec(url.pathname);
     if (wakesMatch && request.method === "GET") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);

@@ -66,7 +66,64 @@ export class Channel extends DurableObject {
       }
       await this.ctx.storage.delete(ids.map(id => `e:${String(id).padStart(10, "0")}`));
     }
+    // Live push (spec 0005 §4): the console's channel view and
+    // notification badge subscribe over WebSocket; every entry (operator
+    // and agent alike) is broadcast as it lands. Subscribers dedupe by id.
+    const frame = JSON.stringify({ type: "entry", entry: stored });
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.send(frame);
+      } catch {
+        // A dying subscriber must not fail the append.
+      }
+    }
     return stored;
+  }
+
+  /**
+   * WebSocket subscription (spec 0005 §4), hibernation API. The client
+   * sends {"after": id} once open; the DO replays newer entries, then
+   * streams appends live.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("upgrade required", { status: 426 });
+    }
+    const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+      .split(",")
+      .some(entry => entry.trim() === "operon-ws");
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    return new Response(null, {
+      status: 101,
+      webSocket: pair[0],
+      // Echo the real subprotocol when offered (WHATWG clients validate).
+      ...(offered ? { headers: { "sec-websocket-protocol": "operon-ws" } } : {})
+    });
+  }
+
+  override async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
+    let after = 0;
+    try {
+      const parsed = JSON.parse(String(message)) as { after?: number };
+      if (typeof parsed.after === "number" && Number.isInteger(parsed.after)) {
+        after = parsed.after;
+      }
+    } catch {
+      ws.send(JSON.stringify({ type: "error", error: "malformed_subscribe" }));
+      return;
+    }
+    const entries = [...(await this.ctx.storage.list<ChannelEntry>({ prefix: "e:" })).values()]
+      .filter(entry => entry.id > after);
+    ws.send(JSON.stringify({ type: "entries", entries }));
+  }
+
+  override async webSocketClose(): Promise<void> {
+    // Hibernation tracks the socket set; nothing to clean.
+  }
+
+  override async webSocketError(): Promise<void> {
+    // Best-effort subscriptions; an errored socket drops out of the set.
   }
 
   /**

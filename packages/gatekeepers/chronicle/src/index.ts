@@ -77,6 +77,14 @@ async function operatorReads(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method !== "GET") return errorResponse(404, "not_found");
 
+    // Live tail over WebSocket (spec 0005 §4): the upgrade passes through
+    // to the wake's WakeLog DO, which replays from the subscriber's
+    // cursor and then streams appends.
+    const wsMatch = /^\/ws\/wake-log\/([0-9a-f-]{8,64})$/.exec(url.pathname);
+    if (wsMatch) {
+      return env.WAKE_LOG.get(env.WAKE_LOG.idFromName(wsMatch[1])).fetch(request);
+    }
+
     if (url.pathname === "/chronicle/events") {
       return json({
         ok: true,

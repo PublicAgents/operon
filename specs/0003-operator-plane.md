@@ -174,8 +174,8 @@ never carry an approve button.
    Gatekeeper, then delete the container-door bearers and their env
    plumbing.
 5. Tooling: tail-wake via Access token + `--wrangler` fallback mode.
-6. Console UI on the gateway (separate effort; the data layer and auth
-   are then already done).
+6. Console UI on the gateway (spec 0005: the console and the tool
+   registry; the data layer and auth are then already done).
 7. Phase 2 umbilical: mind credential + clone token interception
    (interceptHttps + image CA trust). The credential half is BUILT
    (feat/mind-credential-injection: per-harness host table in core,

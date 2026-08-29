@@ -26,6 +26,8 @@ export interface AccessIdentity {
   email: string;
   /** Access `sub` (stable user id). */
   sub: string;
+  /** A service token's name (Access `common_name` claim); empty for users. */
+  commonName: string;
 }
 
 export type AccessResult =
@@ -134,7 +136,8 @@ export async function verifyAccessJwt(token: string, config: AccessConfig): Prom
 
   const email = typeof payload.email === "string" ? payload.email : "";
   const sub = typeof payload.sub === "string" ? payload.sub : "";
-  return { ok: true, identity: { email, sub } };
+  const commonName = typeof payload.common_name === "string" ? payload.common_name : "";
+  return { ok: true, identity: { email, sub, commonName } };
 }
 
 /** Convenience: verify straight from the request. */

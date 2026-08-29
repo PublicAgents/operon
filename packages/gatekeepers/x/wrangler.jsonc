@@ -22,5 +22,5 @@
   //   X_API_KEY / X_API_SECRET            the developer app (OAuth1)
   //   X_ACCESS_TOKEN_<ID> / X_ACCESS_SECRET_<ID>  the agent's own account
   //   X_TOKEN_<AGENTID>                   per-agent door bearer
-  //   NOTIFY_TOKEN, OPERATOR_API_TOKEN    the usual pair
+  //   NOTIFY_TOKEN                        operator alerting
 }

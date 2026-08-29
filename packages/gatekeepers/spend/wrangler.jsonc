@@ -30,6 +30,5 @@
   //   MPP_PRIVATE_KEY        the payment key; exists ONLY here; scoped
   //                          access key with platform limits in production
   //   NOTIFY_TOKEN           telegram Gatekeeper bearer (holds, receipts)
-  //   OPERATOR_API_TOKEN     approve/reject/reconcile/outbox/ledger
   //   SPEND_TOKEN_<AGENTID>  per-agent bearers (identity from the bearer)
 }

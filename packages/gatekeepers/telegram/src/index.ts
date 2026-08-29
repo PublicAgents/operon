@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseRoster } from "@operon/core";
+import { recordMessage } from "@operon/chronicle";
 import {
   errorResponse,
   json,
@@ -31,6 +32,9 @@ interface Env {
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
+  /** The notifications feed (spec 0005 §5): every notify is recorded
+   * here whether or not Telegram delivered it. */
+  CHRONICLE?: D1Database;
 }
 
 function ledger(env: Env) {
@@ -314,6 +318,26 @@ async function recordAgentNotify(env: Env, agentId: string, text: string): Promi
   }
 }
 
+/**
+ * Durable notify record (spec 0005 §5): the notifications feed the
+ * console reads, independent of any Telegram delivery. Returns whether
+ * the record landed; a notify that is neither delivered nor recorded is
+ * a loud failure.
+ */
+async function recordNotifyFeed(env: Env, agentId: string | undefined, text: string): Promise<boolean> {
+  if (!env.CHRONICLE) return false;
+  // recordMessage reports whether the row actually landed; a suppressed
+  // D1 failure must NOT read as "recorded", or a notify that also missed
+  // Telegram would report success while reaching nothing (spec 0005 §5).
+  return recordMessage(env.CHRONICLE, {
+    at: new Date().toISOString(),
+    kind: "notify",
+    agentId: agentId && agentId.length > 0 ? agentId : "system",
+    sender: "chassis",
+    body: text.slice(0, 4000)
+  });
+}
+
 async function handleNotify(request: Request, env: Env): Promise<Response> {
   const denied = requireBearer(request, env.NOTIFY_TOKEN);
   if (denied) {
@@ -338,15 +362,20 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("notify_actions_stripped", { count: body.value.actions.length });
   }
   const delivered = await sendToOperator(env, text.slice(0, 4000));
-  await ledger(env).append("notify", { delivered, length: text.length });
+  const agentId = typeof body.value.agentId === "string" ? body.value.agentId : undefined;
+  const recorded = await recordNotifyFeed(env, agentId, text);
+  await ledger(env).append("notify", { delivered, recorded, length: text.length });
   // Attributed notifies join the conversation log, so when the operator
   // answers later, the agent's next wake sees what it had said. Recorded
   // even if the Telegram delivery failed: the channel is the memory.
-  if (typeof body.value.agentId === "string" && body.value.agentId.length > 0) {
-    await recordAgentNotify(env, body.value.agentId, text);
+  if (agentId && agentId.length > 0) {
+    await recordAgentNotify(env, agentId, text);
   }
-  if (!delivered) return errorResponse(502, "telegram_send_failed");
-  return json({ ok: true });
+  // Telegram is one optional transport (spec 0005 §5): recorded-but-
+  // undelivered is success (the feed has it). Reaching NEITHER the
+  // operator nor the record is the loud failure.
+  if (!delivered && !recorded) return errorResponse(502, "notify_unrecorded");
+  return json({ ok: true, delivered, recorded });
 }
 
 /**
@@ -358,15 +387,21 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
 export class TelegramGateway extends WorkerEntrypoint<Env> {
   async notify(input: { text: string; actions?: OperatorAction[]; agentId?: string }): Promise<{
     delivered: boolean;
+    recorded: boolean;
   }> {
     const text = String(input.text ?? "").slice(0, 4000);
-    if (!text) return { delivered: false };
+    if (!text) return { delivered: false, recorded: false };
     const delivered = await sendToOperator(this.env, text, input.actions);
-    await ledger(this.env).append("notify", { delivered, length: text.length, viaBinding: true });
+    const recorded = await recordNotifyFeed(
+      this.env,
+      typeof input.agentId === "string" ? input.agentId : undefined,
+      text
+    );
+    await ledger(this.env).append("notify", { delivered, recorded, length: text.length, viaBinding: true });
     if (typeof input.agentId === "string" && input.agentId.length > 0) {
       await recordAgentNotify(this.env, input.agentId, text);
     }
-    return { delivered };
+    return { delivered, recorded };
   }
 }
 
@@ -440,6 +475,12 @@ export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const env = this.env;
+    // Live channel subscription (spec 0005 §4): the upgrade passes
+    // through to the Channel DO, which replays from the subscriber's
+    // cursor and then streams appends.
+    if (url.pathname === "/ws/channel") {
+      return channel(env).fetch(request);
+    }
     if (url.pathname === "/channel/send" && request.method === "POST") {
       const body = await readJson<{ agentId?: string; text?: string }>(request);
       if (

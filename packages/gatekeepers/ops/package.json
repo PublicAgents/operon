@@ -22,6 +22,10 @@
     "includedScripts": [],
     "targets": { "dev": { "command": "wrangler dev", "options": { "cwd": "{projectRoot}" }, "dependsOn": ["^build"], "continuous": true } }
   },
-  "dependencies": { "@operon/worker-kit": "0.0.0" },
+  "dependencies": {
+    "@operon/worker-kit": "0.0.0",
+    "@operon/ops-tools": "0.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
   "devDependencies": { "@cloudflare/workers-types": "^5.20260801.1", "wrangler": "^4.118.0" }
 }

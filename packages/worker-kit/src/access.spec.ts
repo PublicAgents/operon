@@ -56,7 +56,10 @@ beforeAll(async () => {
 describe("verifyAccessJwt", () => {
   it("accepts a correctly signed, correctly claimed token", async () => {
     const result = await verifyAccessJwt(await sign(validPayload()), config);
-    expect(result).toEqual({ ok: true, identity: { email: "operator@example.com", sub: "user-1" } });
+    expect(result).toEqual({
+      ok: true,
+      identity: { email: "operator@example.com", sub: "user-1", commonName: "" }
+    });
   });
 
   it("rejects a wrong audience", async () => {

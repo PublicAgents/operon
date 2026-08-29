@@ -1,0 +1,25 @@
+{
+  "name": "@operon/ops-tools",
+  "version": "0.0.0",
+  "description": "The operator tool registry (spec 0005): every operator operation as data plus a handler, from which the REST API, the MCP server, the OpenAPI document, and the operator SKILL are all generated. One implementation, three surfaces; parity by construction.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}

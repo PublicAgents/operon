@@ -3,14 +3,24 @@
  * Rotate every INTERNAL bearer of the colony in one command:
  *
  *   npm run rotate:tokens              # all internal bearers (from the colony root)
- *   npm run rotate:tokens -- --only notify,operator
+ *   npm run rotate:tokens -- --only notify,wake-trigger
+ *   npm run rotate:tokens -- --direct  # skip the gateway, write via wrangler
  *
  * Internal bearers are the tokens both sides of which live in OUR
- * Workers (or the operator's own file), so rotation is self-contained:
- * one fresh value per group, put onto every worker in the group over
- * stdin (never argv, never printed). External credentials (mind
+ * Workers, so rotation is self-contained: one fresh value per group,
+ * applied to every worker in the group. External credentials (mind
  * credential, Telegram bot token, machine PATs, MPP/Tempo keys,
  * SECRET_DENYLIST) are deliberately NOT touched here.
+ *
+ * The NORMAL path is the ops gateway's secret_rotate_group tool
+ * (spec 0005 §6): rotations there are serialized per group through a
+ * Durable Object and keep durable resume state, so a CLI rotation can
+ * never interleave with a console/MCP rotation of the same group.
+ * Direct wrangler writes (values over stdin, never argv, never
+ * printed) happen automatically ONLY when they provably cannot race a
+ * gateway rotation: the colony has no gateway config, or the gateway's
+ * secrets tools are unconfigured. Every other gateway failure aborts;
+ * --direct overrides for the operator who knows nothing is in flight.
  *
  * There is a seconds-wide window while a group's puts land in sequence
  * where a call between two members 401s once; rotate while agents are
@@ -18,8 +28,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { groupsFor } from "./rotate-groups.mjs";
 
@@ -40,6 +49,7 @@ const roster = JSON.parse(stripJsonc(readFileSync(join(ROOT, "roster.jsonc"), "u
 const GROUPS = groupsFor(roster);
 
 const onlyArg = process.argv.indexOf("--only");
+const direct = process.argv.includes("--direct");
 const selected =
   onlyArg !== -1 && process.argv[onlyArg + 1]
     ? process.argv[onlyArg + 1].split(",").map(name => name.trim())
@@ -50,7 +60,86 @@ if (unknown.length > 0) {
   process.exit(2);
 }
 
-function put(workerDir, secretName, value) {
+/**
+ * The ops gateway URL, exactly as tail-wake discovers it. Distinguishes
+ * "this colony has no gateway" (its config does not exist: direct
+ * writes cannot race anything) from every other case, where a gateway
+ * that might rotate concurrently must be assumed to exist.
+ */
+function opsUrl() {
+  if (process.env.OPERON_OPS_URL) return { kind: "url", url: process.env.OPERON_OPS_URL };
+  const configPath = join(ROOT, "workers", "gatekeeper-ops", "wrangler.jsonc");
+  if (!existsSync(configPath)) return { kind: "none" };
+  const pattern = JSON.parse(stripJsonc(readFileSync(configPath, "utf8"))).routes?.[0]?.pattern;
+  return pattern ? { kind: "url", url: `https://${pattern}` } : { kind: "unknown" };
+}
+
+/**
+ * Rotate through the gateway (serialized, durable resume). Returns true
+ * when the gateway handled it; false ONLY when direct writes provably
+ * cannot race a gateway rotation (no gateway config, or the gateway's
+ * secrets tools are unconfigured). Every other failure ABORTS: a
+ * bypassed serialization can split a group, and --direct exists for
+ * the operator who knows nothing is in flight.
+ */
+async function rotateViaGateway(groups) {
+  const discovered = opsUrl();
+  if (discovered.kind === "none") {
+    console.log("this colony has no ops gateway config; writing directly");
+    return false;
+  }
+  if (discovered.kind === "unknown") {
+    console.error(
+      "✗ workers/gatekeeper-ops/wrangler.jsonc exists but has no route pattern; " +
+        "set OPERON_OPS_URL, or pass --direct only if no console/MCP rotation can be in flight"
+    );
+    process.exit(1);
+  }
+  const ops = discovered.url;
+  let token;
+  try {
+    token = execFileSync("cloudflared", ["access", "token", "--app", ops], {
+      encoding: "utf8"
+    }).trim();
+  } catch {
+    console.error(
+      `✗ no Access session for ${ops} (run: cloudflared access login ${ops}).\n` +
+        "not falling back: the gateway may be rotating concurrently and a direct write " +
+        "could interleave with it; pass --direct only if no console/MCP rotation can be in flight"
+    );
+    process.exit(1);
+  }
+  for (const name of groups) {
+    const response = await fetch(`${ops}/api/v1/secret-rotate-group`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-access-jwt-assertion": token },
+      body: JSON.stringify({ group: name })
+    });
+    const body = await response.json().catch(() => ({}));
+    // The ONLY 503 that makes direct writes safe is "secrets tools are
+    // unconfigured" (no CLOUDFLARE_API_TOKEN): a gateway that cannot
+    // rotate cannot race us. Any other 503 (audit down, rotation gate
+    // unbound, transient outage) means gateway rotations may still be
+    // possible or in flight, and a direct write could interleave with
+    // one; abort instead of bypassing the serialization.
+    if (response.status === 503 && String(body.detail ?? "").includes("CLOUDFLARE_API_TOKEN")) {
+      console.log("gateway secrets tools unconfigured; falling back to direct wrangler writes");
+      return false;
+    }
+    if (!response.ok) {
+      console.error(
+        `✗ ${name}: gateway answered ${response.status}: ${JSON.stringify(body).slice(0, 300)}\n` +
+          `not falling back (a direct write could interleave with a gateway rotation); ` +
+          `retry, or use --direct only when no console/MCP rotation can be in flight`
+      );
+      process.exit(1);
+    }
+    console.log(`→ rotated "${name}" via the gateway (${(body.written ?? []).length} member(s))`);
+  }
+  return true;
+}
+
+function putDirect(workerDir, secretName, value) {
   execFileSync(
     "npx",
     ["wrangler", "secret", "put", secretName, "-c", `workers/${workerDir}/wrangler.jsonc`],
@@ -58,18 +147,17 @@ function put(workerDir, secretName, value) {
   );
 }
 
+if (!direct && (await rotateViaGateway(selected))) {
+  console.log(`\n✓ rotated: ${selected.join(", ")} (values never printed; secrets survive deploys)`);
+  process.exit(0);
+}
+
 for (const name of selected) {
   const value = randomBytes(32).toString("hex");
-  console.log(`\n→ rotating "${name}" across ${GROUPS[name].length} worker(s)`);
+  console.log(`\n→ rotating "${name}" across ${GROUPS[name].length} worker(s) (direct)`);
   for (const [workerDir, secretName] of GROUPS[name]) {
     console.log(`  ${workerDir} · ${secretName}`);
-    put(workerDir, secretName, value);
-  }
-  if (name === "operator") {
-    const file = join(homedir(), ".operon-operator-api-token");
-    writeFileSync(file, `${value}\n`);
-    chmodSync(file, 0o600);
-    console.log(`  operator copy refreshed at ${file}`);
+    putDirect(workerDir, secretName, value);
   }
 }
 

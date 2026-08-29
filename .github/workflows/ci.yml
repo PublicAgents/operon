@@ -84,3 +84,9 @@ jobs:
       - name: Wrangler dry-run (spend Gatekeeper)
         working-directory: packages/gatekeepers/spend
         run: npx wrangler deploy --dry-run --outdir /tmp/bundle-spend
+
+      # The ops gateway carries the tool registry (zod + MCP SDK), the
+      # heaviest bundle in the chassis; prove it bundles.
+      - name: Wrangler dry-run (ops gateway)
+        working-directory: packages/gatekeepers/ops
+        run: npx wrangler deploy --dry-run --outdir /tmp/bundle-ops
