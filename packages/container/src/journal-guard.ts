@@ -33,10 +33,20 @@ export const STAMP_FILE = "/tmp/operon-journal-stamp";
 
 /**
  * The stamp must sit in a markdown HEADING line, matching what the wake
- * prompt instructs: a stray mention in body text is not an entry.
+ * prompt instructs: a stray mention in body text is not an entry, and
+ * neither is a hash-prefixed line inside a fenced code block (a quoted
+ * example must not satisfy the guard).
  */
 export function hasStampedHeading(journal: string, stamp: string): boolean {
-  return journal.split("\n").some(line => /^#{1,6}\s/.test(line) && line.includes(stamp));
+  let fenced = false;
+  for (const line of journal.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (!fenced && /^#{1,6}\s/.test(line) && line.includes(stamp)) return true;
+  }
+  return false;
 }
 export const JOURNAL_PATH = "/tmp/operon-wake/state/JOURNAL.md";
 

@@ -48,6 +48,23 @@ describe("journalGuardDecision", () => {
     expect(deepHeading.block).toBe(false);
   });
 
+  it("blocks a stamp heading quoted inside a fenced code block", () => {
+    const fencedOnly = journalGuardDecision(
+      START,
+      START + "\n```\n## example entry (" + STAMP + ")\n```\n",
+      STAMP,
+      false
+    );
+    expect(fencedOnly.block).toBe(true);
+    const realAfterFence = journalGuardDecision(
+      START,
+      START + "\n```\n## quoted (" + STAMP + ")\n```\n\n## Wake 25 (" + STAMP + ")\nEntry.\n",
+      STAMP,
+      false
+    );
+    expect(realAfterFence.block).toBe(false);
+  });
+
   it("skips the stamp requirement when no stamp was staged (fail open)", () => {
     expect(journalGuardDecision(START, START + "\nany appended entry\n", null, false).block).toBe(false);
   });
