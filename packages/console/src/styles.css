@@ -163,8 +163,50 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .bubble-head { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 2px; flex-wrap: wrap; }
 .bubble-head .who { font-weight: 600; color: var(--text); }
 .bubble-head .agent-badge { color: var(--untrusted-edge); }
-.composer { display: flex; gap: 8px; padding: 10px 0; }
+.composer { display: flex; gap: 8px; padding: 10px 0; align-items: flex-end; }
+.composer-input { flex: 1; position: relative; display: flex; }
 .composer textarea { flex: 1; min-height: 56px; resize: vertical; }
+
+/* The slash-command completion menu (Telegram-parity commands). */
+.command-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  z-index: 10;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.command-item {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.command-item.active { background: var(--panel-2); }
+.command-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); white-space: nowrap; }
+.command-detail { color: var(--muted); font-size: 12px; }
+
+/* Local console notices (command results); chassis-authored text. */
+.bubble.system {
+  align-self: center;
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  max-width: 95%;
+}
+.bubble.system-error { border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+.bubble.system-error .system-text { color: var(--danger); }
+.system-text { white-space: pre-wrap; font-size: 13px; color: var(--muted); }
 
 /* Cards */
 .approval-block { margin: 18px 0; }
