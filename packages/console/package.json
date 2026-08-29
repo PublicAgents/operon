@@ -1,0 +1,39 @@
+{
+  "name": "@operon/console",
+  "version": "0.0.0",
+  "description": "The operator console (spec 0005 §7): a React SPA served as static assets by the ops gateway behind Cloudflare Access. A pure client of the tool registry's REST surface and the /ws live tails; it contains no logic a curl user would miss.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "build": {
+        "command": "vite build",
+        "options": { "cwd": "{projectRoot}" },
+        "dependsOn": ["^build"],
+        "cache": true,
+        "inputs": ["production", "^production"],
+        "outputs": ["{projectRoot}/dist"]
+      },
+      "dev": {
+        "command": "vite",
+        "options": { "cwd": "{projectRoot}" },
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "vite": "^8.1.4",
+    "vitest": "~4.1.10"
+  }
+}

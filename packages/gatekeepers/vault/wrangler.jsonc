@@ -15,5 +15,4 @@
   // Secrets:
   //   VAULT_TOKEN_<AGENTID>  per-agent bearers (identity from the bearer)
   //   NOTIFY_TOKEN           telegram Gatekeeper bearer (set/delete notices)
-  //   OPERATOR_API_TOKEN     ledger reads
 }

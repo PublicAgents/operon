@@ -20,5 +20,4 @@
   // Secrets:
   //   CHRONICLE_SERVICE_TOKEN  the container's transcript-append bearer
   //                            (== scheduler CHRONICLE_TOKEN)
-  //   OPERATOR_API_TOKEN       all reads (events, messages, wakes, tail)
 }

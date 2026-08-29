@@ -65,6 +65,8 @@ export const OPS_ROUTES: OpsRoute[] = [
   // ---- the operator channel + agent control -------------------------
   { method: "POST", path: "/channel/send", binding: "TELEGRAM", downstreamMethod: "POST", downstreamPath: "/channel/send", decision: true },
   { method: "POST", path: "/channel/transcript", binding: "TELEGRAM", downstreamMethod: "POST", downstreamPath: "/channel/transcript" },
+  { method: "GET", path: "/agents", binding: "SCHEDULER", downstreamMethod: "GET", downstreamPath: "/agents" },
+  { method: "GET", path: "/wakes/*", binding: "SCHEDULER", downstreamMethod: "GET", downstreamPath: "/wakes/*" },
   { method: "POST", path: "/wake/*", binding: "SCHEDULER", downstreamMethod: "POST", downstreamPath: "/wake/*", decision: true },
   { method: "POST", path: "/disable/*", binding: "SCHEDULER", downstreamMethod: "POST", downstreamPath: "/disable/*", decision: true },
   { method: "POST", path: "/enable/*", binding: "SCHEDULER", downstreamMethod: "POST", downstreamPath: "/enable/*", decision: true }

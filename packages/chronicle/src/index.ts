@@ -29,7 +29,10 @@ export interface MessageRecord {
     | "channel_agent"
     | "x_post"
     | "x_dm_in"
-    | "x_dm_out";
+    | "x_dm_out"
+    /** The notifications feed (spec 0005 §5): every operator notify,
+     * recorded whether or not a Telegram delivery happened. */
+    | "notify";
   agentId: string;
   sender?: string;
   recipient?: string;

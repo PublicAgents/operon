@@ -5,6 +5,7 @@
  *   npm run tail-wake                 # follow the newest wake (from the colony root)
  *   npm run tail-wake -- <wakeId>     # a specific wake (also historical)
  *   npm run tail-wake -- --raw        # unrendered transcript (raw JSONL)
+ *   npm run tail-wake -- --poll       # force the polling path (no WebSocket)
  *
  * Auth: the Cloudflare Access session on the ops gateway (spec 0003).
  * The chronicle's operator reads are binding-only now, reached only
@@ -40,6 +41,7 @@ function opsUrl() {
 const GK = opsUrl();
 const args = process.argv.slice(2);
 const raw = args.includes("--raw");
+const forcePoll = args.includes("--poll");
 const wakeArg = args.find(arg => !arg.startsWith("--"));
 
 // A short-lived Access JWT for the ops gateway; the login is a one-time
@@ -140,6 +142,85 @@ if (!wakeId) {
 console.log(`tailing wake ${wakeId} (ctrl-c to stop)\n`);
 let after = -1;
 let carry = "";
+
+/** Emit one batch of chunks through the shared render pipeline. */
+function emitChunks(chunks) {
+  if (chunks.length === 0) return;
+  after = Math.max(after, ...chunks.map(chunk => chunk.seq));
+  // Chunk boundaries are byte-aligned, not line-aligned: carry the
+  // partial last line so JSONL events split across chunks still parse.
+  const text = carry + chunks.map(chunk => chunk.text).join("");
+  const lines = text.split("\n");
+  carry = lines.pop() ?? "";
+  for (const line of lines) {
+    const rendered = render(line);
+    if (rendered !== null && rendered !== "") console.log(rendered);
+  }
+}
+
+function finish(message) {
+  if (carry) console.log(render(carry) ?? carry);
+  console.log(`\n${message}`);
+}
+
+/**
+ * The live path (spec 0005 §4): a WebSocket straight to the wake's
+ * WakeLog DO through the gateway. The WHATWG client cannot set headers,
+ * so the Access JWT rides as a subprotocol entry beside the real
+ * protocol; the gateway verifies it exactly like the header. Resolves
+ * true when the wake completed, false to fall back to polling (an old
+ * gateway, a proxy that strips upgrades, an expired live DO).
+ */
+function tailOverWebSocket() {
+  return new Promise(resolve => {
+    let socket;
+    try {
+      socket = new WebSocket(`${GK.replace(/^https:/, "wss:")}/ws/wake-log/${wakeId}`, [
+        "operon-ws",
+        `operon-access.${token}`
+      ]);
+    } catch {
+      resolve(false);
+      return;
+    }
+    let opened = false;
+    // Chunks dedupe by seq: the subscribe replay can overlap live frames.
+    socket.addEventListener("open", () => {
+      opened = true;
+      socket.send(JSON.stringify({ after }));
+    });
+    socket.addEventListener("message", event => {
+      let frame;
+      try {
+        frame = JSON.parse(String(event.data));
+      } catch {
+        return;
+      }
+      if (frame.type !== "chunks") return;
+      emitChunks((frame.chunks ?? []).filter(chunk => chunk.seq > after));
+      if (frame.done) {
+        finish("-- wake complete --");
+        socket.close(1000);
+        resolve(true);
+      }
+    });
+    socket.addEventListener("close", event => {
+      // A normal close after done resolved already; anything else means
+      // the polling path takes over from the current cursor.
+      resolve(event.code === 1000 && event.reason === "wake done" ? true : false);
+    });
+    socket.addEventListener("error", () => {
+      if (!opened) resolve(false);
+    });
+  });
+}
+
+if (!forcePoll) {
+  const completed = await tailOverWebSocket();
+  if (completed) process.exit(0);
+  console.log("[tail-wake] live socket unavailable or interrupted; polling instead");
+}
+
 let quietPolls = 0;
 let pollFailures = 0;
 for (;;) {
@@ -165,30 +246,17 @@ for (;;) {
     continue;
   }
   const chunks = result.chunks ?? [];
-  if (chunks.length > 0) {
-    after = Math.max(...chunks.map(chunk => chunk.seq));
-    // Chunk boundaries are byte-aligned, not line-aligned: carry the
-    // partial last line so JSONL events split across chunks still parse.
-    const text = carry + chunks.map(chunk => chunk.text).join("");
-    const lines = text.split("\n");
-    carry = lines.pop() ?? "";
-    for (const line of lines) {
-      const rendered = render(line);
-      if (rendered !== null && rendered !== "") console.log(rendered);
-    }
-  }
+  emitChunks(chunks);
   const done = result.done === true || chunks.some(chunk => chunk.done === 1 || chunk.done === true);
   if (done) {
-    if (carry) console.log(render(carry) ?? carry);
-    console.log("\n-- wake complete --");
+    finish("-- wake complete --");
     break;
   }
   // Historical read (the live DO has expired or never finished): when the
   // durable copy has nothing more, the transcript simply ends, e.g. a
   // wake whose container died before the final flush.
   if (result.source === "chronicle" && chunks.length === 0 && after >= 0) {
-    if (carry) console.log(render(carry) ?? carry);
-    console.log("\n-- transcript ends (wake never marked done) --");
+    finish("-- transcript ends (wake never marked done) --");
     break;
   }
   // A live session can be quiet for minutes during a long tool run, so

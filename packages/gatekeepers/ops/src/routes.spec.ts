@@ -31,6 +31,14 @@ describe("ops route table", () => {
     expect(matchRoute("POST", "/nope")).toBeNull();
   });
 
+  it("exposes the console's wake reads on the scheduler", () => {
+    expect(matchRoute("GET", "/agents")?.route.binding).toBe("SCHEDULER");
+    const wakes = matchRoute("GET", "/wakes/promoter");
+    expect(wakes?.route.binding).toBe("SCHEDULER");
+    expect(wakes && downstreamPath(wakes)).toBe("/wakes/promoter");
+    expect(wakes?.route.decision).toBeUndefined();
+  });
+
   it("every route names a binding and a downstream path", () => {
     for (const r of OPS_ROUTES) {
       expect(r.binding).toBeTruthy();

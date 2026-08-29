@@ -29,5 +29,4 @@
   //   TILL_RECIPIENT        operator-controlled revenue recipient
   //   TILL_TOKEN_<AGENTID>  one per agent: the money doors derive identity
   //                         from WHICH bearer matched (per-agent bearers)
-  //   OPERATOR_API_TOKEN    ledger tailing for the operator UI
 }
