@@ -20,8 +20,16 @@
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 
-const ops = process.argv[2] ?? process.env.OPERON_OPS_URL;
-if (!ops || !/^https:\/\//.test(ops)) {
+// Normalized to the ORIGIN: a trailing slash or stray path in the
+// configured value would otherwise produce //mcp and miss the
+// gateway's exact route.
+const configured = process.argv[2] ?? process.env.OPERON_OPS_URL ?? "";
+let ops;
+try {
+  const parsed = new URL(configured);
+  if (parsed.protocol !== "https:") throw new Error("https required");
+  ops = parsed.origin;
+} catch {
   console.error("usage: mcp-bridge.mjs https://ops.<zone> (or set OPERON_OPS_URL)");
   process.exit(2);
 }
