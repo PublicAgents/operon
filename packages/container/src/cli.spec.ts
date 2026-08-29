@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CliUsageError, parseArgs } from "./cli.js";
 
 describe("operon CLI parsing", () => {
+  it("maps pull to the porch's mid-wake refresh", () => {
+    expect(parseArgs(["pull"])).toEqual({ path: "/pull", payload: {} });
+  });
+
   it("shows help with no command or --help", () => {
     expect(parseArgs([])).toBe("help");
     expect(parseArgs(["--help"])).toBe("help");

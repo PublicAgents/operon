@@ -67,7 +67,8 @@ function wakePrompt(budgetMinutes: number): string {
   return (
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
-    "Your doors to the world are the operon CLI: run operon --help to see which are live this wake. " +
+    "Your doors to the world are the operon CLI: run operon --help FIRST, every wake, because the guide is rendered live by the chassis and changes as your doors do; what it says supersedes anything your notes remember about the CLI. " +
+    "New input does not only arrive at wake start: operon pull fetches email, DMs, and operator messages that arrive MID-WAKE (a verification link or an operator answer is one pull away, not one wake away). " +
     "A wake is a SINGLE uninterrupted turn: you cannot sleep and resume, and there is no later continuation of THIS session. If you background a wait or a sleep intending to come back, the session simply ends while you are away and everything after it is lost. So never defer your journal entry to after a sleep or a timer: if something is not ready yet (a rate limit, a cooldown, a scheduled time), record where it stands in your journal and leave it for a FUTURE wake to pick up. ALWAYS write your JOURNAL.md entry before you stop, sleep, or wait on anything. " +
     "Act as you see fit, and when your journal entry is written, stop."
   );
@@ -674,9 +675,19 @@ async function main(): Promise<number> {
     log(`${label}: transcript shipping to the chronicle`);
   }
 
-  const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
-  const dmUpTo = await pullXDms(config, chassisWritten, denylist);
-  const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+  // Delivery bookkeeping shared between the wake-start pulls and any
+  // mid-wake `operon pull` (the porch's pullFresh below): acks always
+  // happen once, after persist, over everything delivered this wake.
+  const ackState = {
+    inboxIds: new Set<string>(),
+    dmUpTo: null as string | null,
+    channelUpTo: null as number | null
+  };
+  for (const id of await pullInbox(config, chassisWritten, denylist)) {
+    ackState.inboxIds.add(id);
+  }
+  ackState.dmUpTo = await pullXDms(config, chassisWritten, denylist);
+  ackState.channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -689,7 +700,29 @@ async function main(): Promise<number> {
     config,
     stateDir: STATE_DIR,
     denylist,
-    log
+    log,
+    // Mid-wake input refresh (operon pull): the same pulls and the same
+    // ack bookkeeping as wake start. Unacked messages re-deliver (the
+    // door forgets nothing until the post-persist ack), so re-writing an
+    // inbox file is idempotent and only genuinely NEW ids count.
+    async pullFresh() {
+      const before = ackState.inboxIds.size;
+      for (const id of await pullInbox(config, chassisWritten, denylist)) {
+        ackState.inboxIds.add(id);
+      }
+      const mail = ackState.inboxIds.size - before;
+      const dmBefore = ackState.dmUpTo;
+      const dmUpTo = await pullXDms(config, chassisWritten, denylist);
+      if (dmUpTo !== null) ackState.dmUpTo = dmUpTo;
+      const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+      const channel =
+        channelUpTo !== null &&
+        (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo);
+      if (channelUpTo !== null && (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo)) {
+        ackState.channelUpTo = channelUpTo;
+      }
+      return { mail, dms: dmUpTo !== null && dmUpTo !== dmBefore ? 1 : 0, channel };
+    }
   });
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
@@ -753,9 +786,9 @@ async function main(): Promise<number> {
   await persistState(config, changes);
   // Inbox and channel are acked only now, after the state is durably
   // persisted: a wake that failed or was blocked re-delivers both.
-  await ackInbox(config, pulledInboxIds);
-  await ackXDms(config, dmUpTo);
-  await ackChannel(config, channelUpTo);
+  await ackInbox(config, [...ackState.inboxIds]);
+  await ackXDms(config, ackState.dmUpTo);
+  await ackChannel(config, ackState.channelUpTo);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

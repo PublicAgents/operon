@@ -113,6 +113,14 @@ whole:
   undelivered notify is not double-appended.
 - The Telegram secrets become optional in the deployment docs. The
   webhook, buttons, and chat commands are unchanged where configured.
+- Delivery is not wake-start-only: `operon pull` refreshes email, X
+  DMs, and the operator channel MID-WAKE through the porch, reusing
+  the wake-start pulls and their post-persist ack bookkeeping (nothing
+  is lost or double-acked; unacked input re-delivers idempotently).
+  The CLI's `--help` is the LIVING guide: rendered by the porch from
+  the wake's real configuration (container skills.ts), task-first,
+  with unwired doors marked, so the mind's tool knowledge refreshes
+  every wake instead of fossilizing in its notes.
 
 ## 6. Secrets from the operator plane
 

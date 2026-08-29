@@ -9,7 +9,11 @@
 const HELP = `operon: the doors out of this wake
 
   operon capabilities                    which doors are live, your hosts, PR targets
-  operon notify <text...>                message the operator (Telegram)
+  operon pull                            fetch new email, X DMs, and operator
+                                         messages that arrived since wake start
+                                         (or your last pull) into inbox/ and
+                                         operator/channel.md; safe to repeat
+  operon notify <text...>                message the operator
   operon publish [dir] --host <host>     publish a directory of static files to an
                                          assigned host ("@" is the zone apex);
                                          dir defaults to "site". Swept for secrets
@@ -18,7 +22,8 @@ const HELP = `operon: the doors out of this wake
                                          send an email (disclosed as an AI agent,
                                          rate-limited; a first email to a new
                                          recipient is held for the operator). Your
-                                         inbound mail is in inbox/ each wake.
+                                         inbound mail is in inbox/ at wake
+                                         start and on every operon pull.
   operon email original <id>             the stored, UNREDACTED original of an
                                          inbound message (id = the 8-char prefix
                                          in the inbox file's name): use it when a
@@ -95,7 +100,8 @@ shown to the operator. Low volume, value first):
                                          construction: a cold DM is not a
                                          refusal, the recipient simply does not
                                          resolve. Inbound DMs arrive in inbox/
-                                         each wake, beside your mail.
+                                         beside your mail, at wake start and
+                                         on every operon pull.
 
 GitHub doors (a Gatekeeper holds the credential and does the writes; you
 submit data). Your account authored a thing = you may update it anywhere;
@@ -172,6 +178,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
   switch (command) {
     case "capabilities":
       return { path: "/capabilities", payload: {} };
+    case "pull":
+      return { path: "/pull", payload: {} };
 
     case "notify": {
       const text = rest.join(" ").trim();
@@ -478,6 +486,25 @@ async function main(): Promise<number> {
     return 2;
   }
   if (call === "help") {
+    // The living guide: rendered by the porch from THIS wake's real
+    // configuration (skills.ts), so it updates with every chassis
+    // deploy and marks doors that are not wired. The static text below
+    // is only the no-porch fallback.
+    const porchUrl = process.env.OPERON_PORCH;
+    if (porchUrl) {
+      try {
+        const response = await fetch(`${porchUrl}/help`, {
+          headers: { "x-operon-porch": "1" }
+        });
+        const body = (await response.json()) as { help?: string };
+        if (response.ok && typeof body.help === "string") {
+          console.log(body.help);
+          return 0;
+        }
+      } catch {
+        /* fall through to the static fallback */
+      }
+    }
     console.log(HELP);
     return 0;
   }

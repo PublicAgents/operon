@@ -62,7 +62,11 @@ async function startStub(
   return { url: `http://127.0.0.1:${address.port}`, requests };
 }
 
-async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
+async function startPorch(
+  wakeConfig: WakeConfig,
+  denylist: string[] = [],
+  pullFresh?: () => Promise<{ mail: number; dms: number; channel: boolean }>
+) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
   const porch = new Porch({
@@ -70,7 +74,8 @@ async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
     stateDir,
     denylist,
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
-    log: () => undefined
+    log: () => undefined,
+    ...(pullFresh ? { pullFresh } : {})
   });
   const url = await porch.start(0);
   cleanups.push(() => porch.close());
@@ -379,5 +384,48 @@ describe("contentTypeFor", () => {
     expect(contentTypeFor("a/index.html")).toContain("text/html");
     expect(contentTypeFor("x.css")).toContain("text/css");
     expect(contentTypeFor("x.bin")).toBe("application/octet-stream");
+  });
+});
+
+describe("the living help and the mid-wake pull", () => {
+  it("serves the skills guide rendered from this wake's real wiring", async () => {
+    const { url } = await startPorch(config({ notifyUrl: "http://t", notifyToken: "n" }));
+    const response = await fetch(`${url}/help`, { headers: { "x-operon-porch": "1" } });
+    const body = (await response.json()) as { ok: boolean; help: string };
+    expect(body.ok).toBe(true);
+    // Task-first guidance including the mid-wake pull...
+    expect(body.help).toContain("operon pull");
+    expect(body.help).toContain("one pull away, not one wake away");
+    // ...and honest live/not-wired marks: notify is wired, email is not.
+    expect(body.help).toMatch(/operon notify[\s\S]{0,120}message the operator(?![\s\S]{0,40}NOT WIRED)/);
+    expect(body.help).toMatch(/operon vault set[^\n]*NOT WIRED/);
+  });
+
+  it("answers pull_not_wired when the entrypoint wired no refresher", async () => {
+    const { url } = await startPorch(config());
+    const response = await fetch(`${url}/pull`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1", "content-type": "application/json" },
+      body: "{}"
+    });
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error: string }).error).toBe("pull_not_wired");
+  });
+
+  it("runs the entrypoint's refresher and reports what landed", async () => {
+    let calls = 0;
+    const { url } = await startPorch(config(), [], async () => {
+      calls += 1;
+      return { mail: 2, dms: 0, channel: true };
+    });
+    const response = await fetch(`${url}/pull`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1", "content-type": "application/json" },
+      body: "{}"
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(calls).toBe(1);
+    expect(body).toMatchObject({ ok: true, mail: 2, dms: 0, channel: true });
+    expect(String(body.note)).toContain("landed");
   });
 });

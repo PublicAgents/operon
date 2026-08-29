@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import { runGitleaks } from "./gitleaks.js";
 import { linesNotIn, scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
+import { renderSkills } from "./skills.js";
 
 /**
  * The porch: a loopback-only HTTP server the entrypoint runs for the
@@ -67,6 +68,12 @@ export interface PorchContext {
   /** Overrides the image's gitleaks config path (tests run outside the image). */
   gitleaksConfig?: string;
   log(message: string): void;
+  /**
+   * Mid-wake input refresh (operon pull): the entrypoint's closure over
+   * the same pull + ack bookkeeping the wake start uses, so nothing is
+   * lost or double-acked. Absent in tests that wire no doors.
+   */
+  pullFresh?(): Promise<{ mail: number; dms: number; channel: boolean }>;
 }
 
 interface JsonResult {
@@ -172,6 +179,23 @@ export class Porch {
       }
       if (request.method === "GET" && url.pathname === "/capabilities") {
         return ok(capabilities(this.context.config));
+      }
+      // The living guide (skills.ts): rendered fresh from THIS wake's
+      // config, so `operon --help` can never describe a different
+      // chassis than the one answering.
+      if (request.method === "GET" && url.pathname === "/help") {
+        return ok({ help: renderSkills(this.context.config, capabilities(this.context.config)) });
+      }
+      if (request.method === "POST" && url.pathname === "/pull") {
+        if (!this.context.pullFresh) return fail(503, "pull_not_wired");
+        const pulled = await this.context.pullFresh();
+        return ok({
+          ...pulled,
+          note:
+            pulled.mail || pulled.dms || pulled.channel
+              ? "new input landed in inbox/ and operator/channel.md"
+              : "nothing new since the last delivery"
+        });
       }
       const body = request.method === "POST" ? await readBody(request) : {};
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);
