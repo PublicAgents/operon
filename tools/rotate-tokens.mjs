@@ -91,14 +91,22 @@ async function rotateViaGateway(groups) {
       body: JSON.stringify({ group: name })
     });
     const body = await response.json().catch(() => ({}));
-    if (response.status === 503) {
-      // The gateway has no CLOUDFLARE_API_TOKEN: nothing there can race
-      // us, so the direct path is safe for the whole run.
+    // The ONLY 503 that makes direct writes safe is "secrets tools are
+    // unconfigured" (no CLOUDFLARE_API_TOKEN): a gateway that cannot
+    // rotate cannot race us. Any other 503 (audit down, rotation gate
+    // unbound, transient outage) means gateway rotations may still be
+    // possible or in flight, and a direct write could interleave with
+    // one; abort instead of bypassing the serialization.
+    if (response.status === 503 && String(body.detail ?? "").includes("CLOUDFLARE_API_TOKEN")) {
       console.log("gateway secrets tools unconfigured; falling back to direct wrangler writes");
       return false;
     }
     if (!response.ok) {
-      console.error(`✗ ${name}: gateway answered ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+      console.error(
+        `✗ ${name}: gateway answered ${response.status}: ${JSON.stringify(body).slice(0, 300)}\n` +
+          `not falling back (a direct write could interleave with a gateway rotation); ` +
+          `retry, or use --direct only when no console/MCP rotation can be in flight`
+      );
       process.exit(1);
     }
     console.log(`→ rotated "${name}" via the gateway (${(body.written ?? []).length} member(s))`);

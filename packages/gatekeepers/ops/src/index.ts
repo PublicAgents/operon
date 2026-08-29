@@ -136,7 +136,16 @@ export class RotationGate extends DurableObject<Env> {
         all: [...pairs]
       } satisfies PendingRotation);
     }
-    return { ...outcome, resumed: plan.resumed };
+    // Report the group's WHOLE credential state, not just this attempt's
+    // writes: on a resume, members that converged in an earlier attempt
+    // already hold the pending value, and an incomplete report that
+    // omits them would misstate which workers carry which bearer.
+    const written = pairs
+      .filter(
+        pair => !outcome.failedPairs.some(f => f[0] === pair[0] && f[1] === pair[1])
+      )
+      .map(([dir, name]) => `${dir}/${name}`);
+    return { ...outcome, written, resumed: plan.resumed };
   }
 }
 
