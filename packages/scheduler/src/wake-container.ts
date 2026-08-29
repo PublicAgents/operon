@@ -415,16 +415,40 @@ export class WakeContainer extends DurableObject<WakeEnv> {
    * explorer alongside everything else.
    */
   private mirrorOutcome(record: WakeRecord & { reason?: string }): void {
-    if (!this.env.CHRONICLE_DB) return;
-    this.ctx.waitUntil(
-      recordEvent(this.env.CHRONICLE_DB, {
-        at: record.endedAt ?? record.startedAt,
-        gatekeeper: "scheduler",
-        kind: "wake_finished",
-        agentId: record.agentId,
-        detail: { ...record }
-      })
-    );
+    if (this.env.CHRONICLE_DB) {
+      this.ctx.waitUntil(
+        recordEvent(this.env.CHRONICLE_DB, {
+          at: record.endedAt ?? record.startedAt,
+          gatekeeper: "scheduler",
+          kind: "wake_finished",
+          agentId: record.agentId,
+          detail: { ...record }
+        })
+      );
+    }
+    // A quiet egress tail (under the flush thresholds, then silence)
+    // would otherwise never land its summary: poke the audit's flush
+    // sentinel for this wake. Best-effort like every mirror; a tally
+    // held by a different (or recycled) isolate is out of reach, which
+    // bounds the loss at one partial batch.
+    try {
+      const exportsBag = (this.ctx as unknown as {
+        exports?: Record<string, (opts?: { props?: unknown }) => Fetcher>;
+      }).exports;
+      if (exportsBag?.EgressAudit) {
+        const audit = exportsBag.EgressAudit({
+          props: { agentId: record.agentId, wakeId: record.wakeId }
+        });
+        this.ctx.waitUntil(
+          audit
+            .fetch("http://operon-egress-flush.internal/", { method: "POST" })
+            .then(() => undefined)
+            .catch(() => undefined)
+        );
+      }
+    } catch {
+      /* flush is a courtesy, never a failure path */
+    }
   }
 
   /** Best-effort operator alert through the telegram Gatekeeper; never throws. */

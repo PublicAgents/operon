@@ -31,9 +31,22 @@ interface Env {
 
 const tallies = new Map<string, EgressTally>();
 
+/**
+ * The WakeContainer pokes this host at wake finish so a quiet tail
+ * (fewer than the request threshold, no further requests to trip the
+ * time window) still lands its summary. A container could reach this
+ * host itself through the catch-all interception; that only flushes
+ * its own tally early, which changes no count, so it needs no gate.
+ */
+export const EGRESS_FLUSH_HOST = "operon-egress-flush.internal";
+
 export class EgressAudit extends WorkerEntrypoint<Env> {
   override async fetch(request: Request): Promise<Response> {
     const props = (this.ctx.props ?? {}) as EgressProps;
+    if (new URL(request.url).hostname === EGRESS_FLUSH_HOST) {
+      this.flush(props.wakeId);
+      return new Response(null, { status: 204 });
+    }
     const log = requestLog(request, props);
     try {
       const response = await fetch(request);
@@ -52,20 +65,26 @@ export class EgressAudit extends WorkerEntrypoint<Env> {
     try {
       console.log(JSON.stringify(log));
       const tally = tallyLine(tallies, log, Date.now());
-      if (dueForFlush(tally, Date.now()) && this.env.CHRONICLE_DB) {
-        tallies.delete(log.wakeId);
-        this.ctx.waitUntil(
-          recordEvent(this.env.CHRONICLE_DB, {
-            at: new Date().toISOString(),
-            gatekeeper: "scheduler",
-            kind: "egress_summary",
-            agentId: tally.agentId,
-            detail: summaryDetail(tally)
-          })
-        );
-      }
+      if (dueForFlush(tally, Date.now())) this.flush(log.wakeId);
     } catch {
       /* logging must never block egress */
     }
+  }
+
+  /** Write one wake's tally (if any) to the chronicle and drop it. */
+  private flush(wakeId: string | undefined): void {
+    if (!wakeId || !this.env.CHRONICLE_DB) return;
+    const tally = tallies.get(wakeId);
+    if (!tally) return;
+    tallies.delete(wakeId);
+    this.ctx.waitUntil(
+      recordEvent(this.env.CHRONICLE_DB, {
+        at: new Date().toISOString(),
+        gatekeeper: "scheduler",
+        kind: "egress_summary",
+        agentId: tally.agentId,
+        detail: summaryDetail(tally)
+      })
+    );
   }
 }
