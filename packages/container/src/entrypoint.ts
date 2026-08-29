@@ -767,6 +767,11 @@ async function main(): Promise<number> {
       unannounced.dms = 0;
       unannounced.channel = false;
       return out;
+    },
+    recreditAnnouncements(counts) {
+      unannounced.mail += counts.mail;
+      unannounced.dms += counts.dms;
+      unannounced.channel = unannounced.channel || counts.channel;
     }
   });
   let inFlightPull: Promise<void> | null = null;

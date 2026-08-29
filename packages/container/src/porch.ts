@@ -77,11 +77,20 @@ export interface PorchContext {
    */
   pullFresh?(): Promise<void>;
   drainAnnouncements?(): { mail: number; dms: number; channel: boolean };
+  /** Put a drained-but-undelivered announcement back for the next pull. */
+  recreditAnnouncements?(counts: { mail: number; dms: number; channel: boolean }): void;
 }
 
 interface JsonResult {
   status: number;
   body: Record<string, unknown>;
+  /**
+   * Called when the response provably never reached the client (socket
+   * closed before the write finished): the /pull branch re-credits its
+   * drained announcement so a delivery cannot vanish into a dead
+   * connection.
+   */
+  undeliverable?: () => void;
 }
 
 function ok(body: Record<string, unknown> = {}): JsonResult {
@@ -136,8 +145,18 @@ export class Porch {
   async start(port = PORCH_PORT): Promise<string> {
     this.server = createServer((request, response) => {
       void this.route(request).then(result => {
-        response.writeHead(result.status, { "content-type": "application/json" });
-        response.end(JSON.stringify(result.body));
+        if (result.undeliverable) {
+          const failed = result.undeliverable;
+          response.on("close", () => {
+            if (!response.writableFinished) failed();
+          });
+        }
+        try {
+          response.writeHead(result.status, { "content-type": "application/json" });
+          response.end(JSON.stringify(result.body));
+        } catch {
+          result.undeliverable?.();
+        }
       });
     });
     // The web door is a long-lived CDP WebSocket, not a request; relay
@@ -194,19 +213,24 @@ export class Porch {
           return fail(503, "pull_not_wired");
         }
         await this.context.pullFresh();
-        // Drain only for a caller that can still hear the answer: a
-        // client that aborted (the hook past its timeout, say) must not
-        // consume the announcement, or the delivery would land silently;
-        // the buffer then waits for the next pull.
+        // A caller that already vanished (the hook past its timeout,
+        // say) drains nothing; and if the socket dies between drain and
+        // flush, the undeliverable callback below re-credits the counts,
+        // so a delivery can never vanish into a dead connection: the
+        // buffer simply waits for the next pull.
         if (request.destroyed) return fail(499, "caller_gone");
         const pulled = this.context.drainAnnouncements();
-        return ok({
-          ...pulled,
-          note:
-            pulled.mail || pulled.dms || pulled.channel
+        const fresh = Boolean(pulled.mail || pulled.dms || pulled.channel);
+        const recredit = this.context.recreditAnnouncements;
+        return {
+          ...ok({
+            ...pulled,
+            note: fresh
               ? "new input landed in inbox/ and operator/channel.md"
               : "nothing new since the last delivery"
-        });
+          }),
+          ...(fresh && recredit ? { undeliverable: () => recredit(pulled) } : {})
+        };
       }
       const body = request.method === "POST" ? await readBody(request) : {};
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);
