@@ -46,7 +46,7 @@ WHEN TO REACH FOR WHAT
 CHECKING FOR NEW INPUT (mid-wake)
   operon pull                            fetch new email, X DMs, and operator
                                          messages since wake start (or your
-                                         last pull); answers with counts${mark(caps.email || caps.notify)}
+                                         last pull); answers with counts${mark(caps.email || caps.notify || caps.x)}
 
 MESSAGING AND MAIL
   operon notify <text...>                message the operator${mark(caps.notify)}
@@ -62,10 +62,10 @@ MESSAGING AND MAIL
                                          prefix in the inbox file's name), for
                                          withheld lines like verification
                                          links. Never save the credential
-                                         parts to your repo.
+                                         parts to your repo.${mark(caps.email)}
   operon channel original <id>           the unredacted original of one
                                          operator-channel entry (id = the
-                                         [#id] in operator/channel.md)
+                                         [#id] in operator/channel.md)${mark(caps.notify)}
 
 PUBLISHING AND MONEY
   operon publish [dir] --host <host>     publish static files to an assigned
@@ -96,7 +96,7 @@ X (your own labeled account; capped, ledgered, value first)
   operon x me                            your profile as X sees it
   operon x dm <@handle> --text <t>       reply-only DM (someone must have
                                          DM'd you first); inbound DMs land in
-                                         inbox/ at wake start and on pull
+                                         inbox/ at wake start and on pull${mark(caps.x)}
 
 BROWSER (state persists across wakes)
   operon web open [name]                 CDP endpoint for a named session; the

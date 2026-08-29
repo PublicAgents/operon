@@ -412,6 +412,40 @@ describe("the living help and the mid-wake pull", () => {
     expect(((await response.json()) as { error: string }).error).toBe("pull_not_wired");
   });
 
+  it("shares one in-flight refresh between overlapping pulls", async () => {
+    // The porch passes through whatever the entrypoint's pullFresh does;
+    // the sharing contract lives in the entrypoint closure. This pins
+    // the porch side: two concurrent /pull requests both complete and
+    // both receive the refresher's answer.
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let shared: Promise<{ mail: number; dms: number; channel: boolean }> | null = null;
+    const refresher = async () => {
+      calls += 1;
+      await gate;
+      return { mail: 1, dms: 0, channel: false };
+    };
+    // Single-shot sharing in the test: clearing on completion would let
+    // the second request arrive after the first finished and legitimately
+    // start a new run, which is not what this pins.
+    const { url } = await startPorch(config(), [], () => {
+      if (!shared) shared = refresher();
+      return shared;
+    });
+    const request = () =>
+      fetch(`${url}/pull`, {
+        method: "POST",
+        headers: { "x-operon-porch": "1", "content-type": "application/json" },
+        body: "{}"
+      }).then(response => response.json() as Promise<Record<string, unknown>>);
+    const [first, second] = [request(), request()];
+    release();
+    const bodies = await Promise.all([first, second]);
+    expect(calls).toBe(1);
+    for (const body of bodies) expect(body).toMatchObject({ ok: true, mail: 1 });
+  });
+
   it("runs the entrypoint's refresher and reports what landed", async () => {
     let calls = 0;
     const { url } = await startPorch(config(), [], async () => {

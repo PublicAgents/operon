@@ -705,25 +705,35 @@ async function main(): Promise<number> {
     // ack bookkeeping as wake start. Unacked messages re-deliver (the
     // door forgets nothing until the post-persist ack), so re-writing an
     // inbox file is idempotent and only genuinely NEW ids count.
-    async pullFresh() {
-      const before = ackState.inboxIds.size;
-      for (const id of await pullInbox(config, chassisWritten, denylist)) {
-        ackState.inboxIds.add(id);
+    // Concurrent pulls SHARE one run: two overlapping calls ask the same
+    // question, and interleaved snapshots of the shared ack state would
+    // otherwise count one delivery twice.
+    pullFresh() {
+      if (!inFlightPull) {
+        inFlightPull = doPullFresh().finally(() => {
+          inFlightPull = null;
+        });
       }
-      const mail = ackState.inboxIds.size - before;
-      const dmBefore = ackState.dmUpTo;
-      const dmUpTo = await pullXDms(config, chassisWritten, denylist);
-      if (dmUpTo !== null) ackState.dmUpTo = dmUpTo;
-      const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
-      const channel =
-        channelUpTo !== null &&
-        (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo);
-      if (channelUpTo !== null && (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo)) {
-        ackState.channelUpTo = channelUpTo;
-      }
-      return { mail, dms: dmUpTo !== null && dmUpTo !== dmBefore ? 1 : 0, channel };
+      return inFlightPull;
     }
   });
+  let inFlightPull: Promise<{ mail: number; dms: number; channel: boolean }> | null = null;
+  async function doPullFresh(): Promise<{ mail: number; dms: number; channel: boolean }> {
+    const before = ackState.inboxIds.size;
+    for (const id of await pullInbox(config, chassisWritten, denylist)) {
+      ackState.inboxIds.add(id);
+    }
+    const mail = ackState.inboxIds.size - before;
+    const dmBefore = ackState.dmUpTo;
+    const dmUpTo = await pullXDms(config, chassisWritten, denylist);
+    if (dmUpTo !== null) ackState.dmUpTo = dmUpTo;
+    const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+    const channel =
+      channelUpTo !== null &&
+      (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo);
+    if (channel) ackState.channelUpTo = channelUpTo;
+    return { mail, dms: dmUpTo !== null && dmUpTo !== dmBefore ? 1 : 0, channel };
+  }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
 
