@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { auditEvent } from "./audit.js";
 import { applyFill, cdpDecision, redactCredentials, type RelayPolicy } from "./cdp-policy.js";
-import { resolveProvider, type ProviderEnv } from "./provider.js";
+import { pickPageTarget, resolveProvider, type ProviderEnv, type TargetInfo } from "./provider.js";
 
 /**
  * One browser session per (agent, session name): the relay, its policy,
@@ -462,12 +462,14 @@ export class WebSession extends DurableObject<SessionEnv> {
     });
   }
 
-  /** The first page target of the live browser, for target-scoped commands. */
+  /** The page the agent is using (attached, non-blank, newest), for
+   * target-scoped commands; a blind first-page pick could hand the
+   * operator a background tab. */
   private async firstPageTarget(): Promise<{ targetId?: string; error?: string }> {
     const targets = await this.controlCommand("Target.getTargets", {});
     if (targets.error) return { error: targets.error };
-    const infos = (targets.result?.targetInfos ?? []) as { targetId?: string; type?: string }[];
-    const page = infos.find(info => info.type === "page") ?? infos[0];
+    const infos = (targets.result?.targetInfos ?? []) as TargetInfo[];
+    const page = pickPageTarget(infos);
     if (!page?.targetId) return { error: "no_page_target" };
     return { targetId: page.targetId };
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProvider } from "./provider.js";
+import { pickPageTarget, resolveProvider } from "./provider.js";
 
 describe("resolveProvider", () => {
   it("defaults to Cloudflare Browser Run with recording and live view", () => {
@@ -50,5 +50,42 @@ describe("resolveProvider", () => {
     expect(resolveProvider({ WEB_CDP_ENDPOINT: "ws://plain.example.test/" })).toEqual({
       error: "web_cdp_endpoint_insecure"
     });
+  });
+});
+
+describe("pickPageTarget", () => {
+  it("prefers the attached, non-blank, newest page over a background first tab", () => {
+    const chosen = pickPageTarget([
+      { targetId: "t1", type: "page", url: "about:blank", attached: false },
+      { targetId: "t2", type: "page", url: "https://old.example", attached: true },
+      { targetId: "t3", type: "page", url: "https://current.example", attached: true }
+    ]);
+    expect(chosen?.targetId).toBe("t3");
+  });
+
+  it("prefers attached over detached and real documents over blanks", () => {
+    expect(
+      pickPageTarget([
+        { targetId: "a", type: "page", url: "https://x.example", attached: false },
+        { targetId: "b", type: "page", url: "about:blank", attached: true }
+      ])?.targetId
+    ).toBe("b");
+    expect(
+      pickPageTarget([
+        { targetId: "a", type: "page", url: "about:blank", attached: false },
+        { targetId: "b", type: "page", url: "https://x.example", attached: false }
+      ])?.targetId
+    ).toBe("b");
+  });
+
+  it("ignores non-page targets and falls back sensibly", () => {
+    expect(
+      pickPageTarget([
+        { targetId: "w", type: "service_worker", url: "https://x.example" },
+        { targetId: "p", type: "page", url: "https://x.example" }
+      ])?.targetId
+    ).toBe("p");
+    expect(pickPageTarget([{ targetId: "w", type: "worker" }])?.targetId).toBe("w");
+    expect(pickPageTarget([])).toBeUndefined();
   });
 });

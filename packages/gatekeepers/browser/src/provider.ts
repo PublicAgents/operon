@@ -34,6 +34,39 @@ export interface CdpProvider {
   liveView: boolean;
 }
 
+export interface TargetInfo {
+  targetId?: string;
+  type?: string;
+  url?: string;
+  attached?: boolean;
+}
+
+/**
+ * The page the agent is ACTUALLY using, from a Target.getTargets
+ * enumeration: prefer attached pages (the client is driving them) over
+ * detached, real documents over blank/internal ones, and the most
+ * recently created among equals (last in enumeration order). A blind
+ * first-page pick could hand the operator a background tab.
+ */
+export function pickPageTarget(infos: readonly TargetInfo[]): TargetInfo | undefined {
+  const pages = infos.filter(info => info.type === "page" && info.targetId);
+  if (pages.length === 0) return infos.find(info => info.targetId);
+  const isBlank = (info: TargetInfo) =>
+    !info.url || info.url === "about:blank" || info.url.startsWith("devtools://");
+  const score = (info: TargetInfo) => (info.attached ? 2 : 0) + (isBlank(info) ? 0 : 1);
+  let best = pages[0];
+  let bestScore = score(best);
+  for (const candidate of pages.slice(1)) {
+    const candidateScore = score(candidate);
+    // >= so later (newer) targets win ties.
+    if (candidateScore >= bestScore) {
+      best = candidate;
+      bestScore = candidateScore;
+    }
+  }
+  return best;
+}
+
 export function resolveProvider(env: ProviderEnv): CdpProvider | { error: string } {
   if (env.WEB_CDP_ENDPOINT) {
     let parsed: URL;
