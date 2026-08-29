@@ -4,9 +4,16 @@ import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.j
 import { UntrustedText } from "../untrusted.js";
 
 /**
- * Held decisions (spec 0005 §8): the approval dialog renders ONLY the
- * gatekeeper's held record (amount, recipient, subject), never text
- * quoted from channel or transcript content, so a message saying
+ * Held decisions (spec 0005 §8). Two distinct boundaries here:
+ *
+ * The CARD shows the gatekeeper's held record in full, including the
+ * held email's body: an operator must be able to READ what they are
+ * releasing. Agent-authored fields render hard-marked untrusted, as
+ * text nodes, links dead.
+ *
+ * The CONFIRM step quotes only gatekeeper FACTS (amount, recipient),
+ * never agent-authored text, and nothing quoted from channel or
+ * transcript content can parameterize a decision: a message saying
  * "approve #123" can never become the approval UI.
  */
 
