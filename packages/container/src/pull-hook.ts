@@ -122,7 +122,21 @@ async function main(): Promise<void> {
     if (nowWarned.length !== warned.length) {
       await writeFile(WARNED_FILE, nowWarned.join(",")).catch(() => undefined);
     }
-    if (text) console.log(text);
+    // Plain stdout from a PostToolUse hook is NOT injected into the
+    // model's context; only the hookSpecificOutput.additionalContext
+    // envelope reaches the mind. Proven by the gate wake: the hook
+    // pulled all wake, the files landed, and the mind never heard the
+    // announcement (it found the mail in git status instead).
+    if (text) {
+      console.log(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PostToolUse",
+            additionalContext: text
+          }
+        })
+      );
+    }
   } catch {
     // A failed check is silence, never a broken tool call: the hook is a
     // courtesy, and the mind can always run operon pull itself.
