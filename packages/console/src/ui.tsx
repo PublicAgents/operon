@@ -9,6 +9,34 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+/** Shown wherever data is still on its way (loading and nothing yet). */
+export function Spinner({ label = "loading" }: { label?: string }) {
+  return (
+    <div className="spinner-row" role="status">
+      <span className="spinner" aria-hidden="true" />
+      <span className="spinner-label">{label}…</span>
+    </div>
+  );
+}
+
+/**
+ * The standard data-page gate: spinner until the first answer, then the
+ * content; polls and refreshes never flash the spinner because the data
+ * from the previous tick stays until the next one lands.
+ */
+export function LoadingGate({
+  loading,
+  hasData,
+  children
+}: {
+  loading: boolean;
+  hasData: boolean;
+  children: ReactNode;
+}) {
+  if (loading && !hasData) return <Spinner />;
+  return <>{children}</>;
+}
+
 export function TimeStamp({ at }: { at?: string }) {
   if (!at) return <span className="time">–</span>;
   const date = new Date(at);

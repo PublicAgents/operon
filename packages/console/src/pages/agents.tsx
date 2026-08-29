@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { ConfirmButton, Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 
 export function AgentsPage() {
   const state = useTool<{ zone: string; agents: AgentRow[] }>("agents_list", {}, { pollMs: 15_000 });
@@ -14,6 +14,7 @@ export function AgentsPage() {
         <button onClick={state.refresh}>refresh</button>
       </header>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       {agents.length === 0 && !state.loading ? <Empty>no agents in the roster</Empty> : null}
       <table>
         <thead>
@@ -58,13 +59,19 @@ export function AgentsPage() {
                 )}
               </td>
               <td className="actions">
-                <ConfirmButton
-                  label="wake"
-                  onConfirm={async () => {
-                    await callTool("wake", { agentId: agent.id });
-                    state.refresh();
-                  }}
-                />
+                {agent.disabled ? (
+                  <button disabled title="lift the kill switch first (enable)">
+                    wake
+                  </button>
+                ) : (
+                  <ConfirmButton
+                    label="wake"
+                    onConfirm={async () => {
+                      await callTool("wake", { agentId: agent.id });
+                      state.refresh();
+                    }}
+                  />
+                )}
                 {agent.disabled ? (
                   <ConfirmButton
                     label="enable"
@@ -90,6 +97,7 @@ export function AgentsPage() {
           ))}
         </tbody>
       </table>
+      </LoadingGate>
     </section>
   );
 }

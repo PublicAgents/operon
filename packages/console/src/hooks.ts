@@ -32,6 +32,14 @@ export function useTool<T = unknown>(
     };
   }, []);
 
+  // A changed query is a NEW view: drop the previous answer so the page
+  // shows a spinner instead of stale rows (a poll tick keeps its key and
+  // therefore its data, so refreshes never flicker).
+  useEffect(() => {
+    setData(undefined);
+    setError(undefined);
+  }, [name, inputKey]);
+
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;

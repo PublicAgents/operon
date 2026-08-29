@@ -1,7 +1,7 @@
 import { Link, Navigate, useParams } from "react-router-dom";
 import { type AgentRow, type WakeRecordRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { UntrustedText } from "../untrusted.js";
 
 function AgentPicker({ selected }: { selected?: string }) {
@@ -44,6 +44,7 @@ export function WakesPage() {
       </header>
       {!agentId && !agents.loading && !agents.error ? <Empty>no agents in the roster</Empty> : null}
       <ErrorNote error={agents.error ?? wakes.error} />
+      <LoadingGate loading={wakes.loading || agents.loading} hasData={wakes.data !== undefined || !agentId}>
       {agentId && (wakes.data ?? []).length === 0 && !wakes.loading ? (
         <Empty>no wakes recorded for {agentId}</Empty>
       ) : null}
@@ -75,6 +76,7 @@ export function WakesPage() {
           ))}
         </tbody>
       </table>
+      </LoadingGate>
     </section>
   );
 }

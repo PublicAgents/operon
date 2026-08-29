@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { ConfirmButton, Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 
 interface WebSession {
   name: string;
@@ -23,6 +24,7 @@ function AgentSessions({ agentId }: { agentId: string }) {
     <div className="approval-block">
       <h2>{agentId}</h2>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       {sessions.length === 0 && !state.loading ? <Empty>no saved sessions</Empty> : null}
       {sessions.map(session => (
         <div key={session.name} className="held-card">
@@ -36,6 +38,9 @@ function AgentSessions({ agentId }: { agentId: string }) {
             </span>
           </div>
           <div className="held-actions">
+            <Link className="picker-item" to={`/events?gatekeeper=web&agent=${agentId}`}>
+              history
+            </Link>
             <ConfirmButton
               label="delete"
               danger
@@ -53,6 +58,7 @@ function AgentSessions({ agentId }: { agentId: string }) {
           </div>
         </div>
       ))}
+      </LoadingGate>
     </div>
   );
 }
@@ -66,6 +72,10 @@ export function WebSessionsPage() {
     <section>
       <header className="page-head">
         <h1>Browser sessions</h1>
+        <span className="sub">
+          history opens the web door's audit trail (navigations, downloads); live view and
+          recordings await the Browser Run spike (spec 0004 §6)
+        </span>
         <label className="toggle">
           <input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)} />
           include agents without the web door

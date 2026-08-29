@@ -1,6 +1,6 @@
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { ConfirmButton, Empty, ErrorNote, TimeStamp } from "../ui.js";
+import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { UntrustedText } from "../untrusted.js";
 
 /**
@@ -47,7 +47,11 @@ function SpendApprovals() {
     <div className="approval-block">
       <h2>Spend</h2>
       <ErrorNote error={held.error ?? outbox.error} />
-      {heldRows.length === 0 && unknown.length === 0 && !held.loading ? (
+      <LoadingGate
+        loading={held.loading || outbox.loading}
+        hasData={held.data !== undefined && outbox.data !== undefined}
+      >
+      {heldRows.length === 0 && unknown.length === 0 && !held.loading && !outbox.loading ? (
         <Empty>nothing held</Empty>
       ) : null}
       {heldRows.map(row => (
@@ -113,6 +117,7 @@ function SpendApprovals() {
           </div>
         </div>
       ))}
+      </LoadingGate>
     </div>
   );
 }
@@ -122,6 +127,7 @@ function EmailApprovals({ agentId }: { agentId: string }) {
   return (
     <>
       <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}><span /></LoadingGate>
       {(state.data?.held ?? []).map(row => (
         <div key={row.id} className="held-card">
           <div className="held-facts">

@@ -112,6 +112,18 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .state.wake-running, .state.tail-connecting, .state.tail-historical, .state.tail-done, .state.tail-closed { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .time { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+.spinner-row { display: flex; align-items: center; gap: 10px; padding: 24px 0; color: var(--muted); }
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.spinner-label { font-size: 13px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .error-note { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 6px; padding: 6px 10px; margin: 8px 0; }
 .error-note.inline { display: inline; padding: 2px 6px; margin: 0 0 0 6px; }
 .ok-note { color: var(--ok); margin: 8px 0; }

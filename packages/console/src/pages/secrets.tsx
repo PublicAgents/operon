@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
-import { ConfirmButton, Empty, ErrorNote } from "../ui.js";
+import { ConfirmButton, Empty, ErrorNote, LoadingGate } from "../ui.js";
 
 /**
  * Worker secrets (spec 0005 §6): names only, values write-only. Every
@@ -102,6 +102,7 @@ export function SecretsPage() {
       <ErrorNote error={names.error} />
       <div className="approval-block">
         <h2>names on {worker} (values are unreadable by construction)</h2>
+        <LoadingGate loading={names.loading} hasData={names.data !== undefined}>
         {(names.data?.secrets ?? []).length === 0 && !names.loading ? (
           <Empty>none listed (or secrets are not configured on the gateway)</Empty>
         ) : null}
@@ -110,6 +111,7 @@ export function SecretsPage() {
             <code key={name}>{name}</code>
           ))}
         </div>
+        </LoadingGate>
         <SetSecret worker={worker} onDone={names.refresh} />
       </div>
       <div className="approval-block">
