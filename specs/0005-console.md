@@ -131,8 +131,9 @@ whole:
   contract: the wake prompt instructs the mind to put the wake stamp
   (a short wake-id marker the chassis stages for the hook) in the
   entry's heading, and the guard requires the journal to contain the
-  stamp in a markdown heading line AND the wake-start content verbatim with new bytes around it
-  (the journal is append-only doctrine; bytes moving is not an entry).
+  stamp in a markdown heading line AND the wake-start content verbatim
+  with new bytes around it (the journal is append-only doctrine; bytes
+  moving is not an entry).
   An untouched journal blocks, a rewrite or truncation blocks, added
   bytes without the stamp block, each with its own stated reason. The
   guard yields on the second attempt (loop safety) and never blocks
