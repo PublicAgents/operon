@@ -486,7 +486,11 @@ export class WebSession extends DurableObject<SessionEnv> {
     // with the operator either way.
     let picked = chosen;
     if (contenders.length > 1) {
-      const visible = await this.probeVisible(contenders.slice(0, 4));
+      // Every contender is probed: the loop stops at the first visible
+      // document, and a probe on a live target is milliseconds, so the
+      // cost scales with the background tabs actually open rather than
+      // an arbitrary cutoff that could hide the driven one.
+      const visible = await this.probeVisible(contenders);
       if (visible) picked = visible;
     }
     return { targetId: picked.targetId, pageUrl: picked.url, pages: pageUrls };
