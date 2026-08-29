@@ -75,8 +75,8 @@ PUBLISHING AND MONEY
   operon till offer <host> <path> --price <p> --currency <c> --description <d>
                                          price a path of one of YOUR hosts;
                                          re-offer to update${mark(caps.till)}
-  operon till retire <host> <path>       make a path free again
-  operon till sales                      your offers and ledgered receipts
+  operon till retire <host> <path>       make a path free again${mark(caps.till)}
+  operon till sales                      your offers and ledgered receipts${mark(caps.till)}
   operon pay <url> --max <amount> --reason <r>
                                          fetch a paid resource; payment runs
                                          through the spend Gatekeeper (you
@@ -86,14 +86,14 @@ PUBLISHING AND MONEY
 
 SECRETS THAT SURVIVE WAKES (never the repo; hard rule 7)
   operon vault set <label> --value <v>   store/update (or pipe value on stdin)${mark(caps.vault)}
-  operon vault get <label>               retrieve a value to USE it
-  operon vault list                      labels and timestamps, no values
-  operon vault delete <label>            remove permanently
+  operon vault get <label>               retrieve a value to USE it${mark(caps.vault)}
+  operon vault list                      labels and timestamps, no values${mark(caps.vault)}
+  operon vault delete <label>            remove permanently${mark(caps.vault)}
 
 X (your own labeled account; capped, ledgered, value first)
   operon x post --text <t>               post (or pipe text on stdin)${mark(caps.x)}
-  operon x posts                         your recent posts (cross-wake memory)
-  operon x me                            your profile as X sees it
+  operon x posts                         your recent posts (cross-wake memory)${mark(caps.x)}
+  operon x me                            your profile as X sees it${mark(caps.x)}
   operon x dm <@handle> --text <t>       reply-only DM (someone must have
                                          DM'd you first); inbound DMs land in
                                          inbox/ at wake start and on pull${mark(caps.x)}
@@ -102,25 +102,25 @@ BROWSER (state persists across wakes)
   operon web open [name]                 CDP endpoint for a named session; the
                                          browser MCP is already on "default"${mark(caps.web)}
   operon web sessions                    where each session is logged in
-                                         (domains, never values)
-  operon web close <name>                end the live session, keep the state
+                                         (domains, never values)${mark(caps.web)}
+  operon web close <name>                end the live session, keep the state${mark(caps.web)}
   operon web password <name> --domains <a.com,b.com>
                                          mint a password DOOR-SIDE; you type a
-                                         placeholder, never the value
+                                         placeholder, never the value${mark(caps.web)}
 
 GITHUB (a Gatekeeper holds the credential; you submit data)
   operon github status                   your PRs/issues + recent activity by
                                          others in allowlisted repos${mark(caps.github)}
-  operon github thread <owner/repo> <n>  one PR/issue's full conversation
-  operon github comment <owner/repo> <n> --body <text> | --body-file <f> [--reply-to <id>]
+  operon github thread <owner/repo> <n>  one PR/issue's full conversation${mark(caps.github)}
+  operon github comment <owner/repo> <n> --body <text> | --body-file <f> [--reply-to <id>]${mark(caps.github)}
   operon github pr <owner/repo> [dir] --title <t> --body <b> [--submodule <path>=<sha>]
                                          propose a change to an allowlisted
                                          repo (dir defaults to "pr");
                                          --submodule advances a pointer to a
-                                         40-hex sha (bump-only PRs need no dir)
+                                         40-hex sha (bump-only PRs need no dir)${mark(caps.pr)}
   operon github push <owner/repo> <n> [dir] --message <m>
-                                         follow-up commits to YOUR open PR
-  operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]
+                                         follow-up commits to YOUR open PR${mark(caps.github)}
+  operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]${mark(caps.github)}
 
 Doors answer with named errors; the error names what to fix. A door
 that is not wired answers *_not_wired. This guide is rendered live by

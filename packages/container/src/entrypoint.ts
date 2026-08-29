@@ -557,6 +557,44 @@ async function runSession(
     }
   }
 
+  // Mid-wake input awareness for claude-code minds: a PostToolUse hook
+  // (pull-hook.ts) whose stdout the harness injects into the running
+  // session, so new mail, DMs, and operator messages reach the mind
+  // WHILE it works instead of only when it thinks to pull. Written to
+  // the mind's user settings; a state repo's own project settings are a
+  // different scope and still load. Best-effort: a wake without the
+  // hook is the old behavior, not a failure.
+  if (adapter.id === "claude-code") {
+    try {
+      const settingsDir = join(mindHome(), ".claude");
+      await mkdir(settingsDir, { recursive: true });
+      await writeFile(
+        join(settingsDir, "settings.json"),
+        JSON.stringify(
+          {
+            hooks: {
+              PostToolUse: [
+                {
+                  matcher: "*",
+                  hooks: [
+                    { type: "command", command: "node /opt/operon/pull-hook.js", timeout: 15 }
+                  ]
+                }
+              ]
+            }
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      await chownToMind(settingsDir);
+      log("mid-wake input notifier staged (PostToolUse hook)");
+    } catch (error) {
+      log(`could not stage the input notifier hook: ${String(error).slice(0, 200)}`);
+    }
+  }
+
   const ids = mindSpawnIds();
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
@@ -567,6 +605,10 @@ async function runSession(
       ...sessionBaseEnv(),
       ...spec.env,
       OPERON_PORCH: porchUrl,
+      // The pull hook tells the mind how much of its budget remains and
+      // warns when the journal deadline nears (the prompt's promise made
+      // checkable mid-wake). Epoch ms; not a credential.
+      OPERON_SESSION_DEADLINE: String(Date.now() + budgetMinutes * 60_000),
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
