@@ -76,7 +76,16 @@ The DOs that hold live state push it; clients do not poll.
   Origin header for cookie-authenticated upgrades, and pass the
   upgrade through the service binding to the owning DO (the umbilical
   already passes CDP WebSockets through a binding; same mechanism).
-- tail-wake gains a WS mode and keeps polling as fallback.
+- Reality of the edge: the Access application in front of the Worker
+  passes upgrades that carry the cookie (the console) or the JWT
+  header (any client that can set headers), but a headerless upgrade
+  offering the JWT only as a subprotocol entry never reaches the
+  Worker (the edge answers 302). The Worker still accepts the
+  subprotocol carrier for deployments where the edge passes it;
+  WHATWG-client CLIs (Node) cannot set upgrade headers, so their live
+  path is the edge's call and polling is their dependable path.
+- tail-wake gains a WS mode and keeps polling as fallback (which is
+  also what the edge behavior above degrades it to).
 - Query surfaces (events, ledgers, messages history) stay
   fetch-on-navigation: D1 has no push, and they are queries, not
   streams.
