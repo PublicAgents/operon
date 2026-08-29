@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { executeRotation, freshBearer, rotationGroups, workerNameForDir } from "./rotation.js";
+import {
+  executeRotation,
+  freshBearer,
+  planRotation,
+  rotationGroups,
+  workerNameForDir
+} from "./rotation.js";
 
 describe("rotationGroups", () => {
   it("derives the four per-agent groups from each agent id", () => {
@@ -54,7 +60,8 @@ describe("executeRotation", () => {
     );
     expect(outcome).toEqual({
       written: ["gatekeeper-till/TILL_TOKEN_PROMOTER", "scheduler/TILL_TOKEN_PROMOTER"],
-      failed: []
+      failed: [],
+      failedPairs: []
     });
     expect(tillAttempts).toBe(2);
     // A fresh value per attempt could keep a group split forever; the
@@ -80,11 +87,53 @@ describe("executeRotation", () => {
     expect(outcome.failed).toEqual([
       "gatekeeper-till/TILL_TOKEN_PROMOTER (cloudflare api 502)"
     ]);
+    // The failed members come back as pairs: the durable resume state.
+    expect(outcome.failedPairs).toEqual([["gatekeeper-till", "TILL_TOKEN_PROMOTER"]]);
   });
 
   it("mints 256-bit hex bearers", () => {
     const value = freshBearer();
     expect(value).toMatch(/^[0-9a-f]{64}$/);
     expect(freshBearer()).not.toBe(value);
+  });
+});
+
+describe("planRotation", () => {
+  const PAIRS = [
+    ["gatekeeper-till", "TILL_TOKEN_PROMOTER"],
+    ["scheduler", "TILL_TOKEN_PROMOTER"]
+  ] as const;
+
+  it("starts fresh over every member when nothing is pending", () => {
+    const plan = planRotation(undefined, PAIRS, () => "fresh");
+    expect(plan).toEqual({ value: "fresh", target: PAIRS, resumed: false });
+  });
+
+  it("resumes an incomplete rotation with the SAME value over only the missing members", () => {
+    const plan = planRotation(
+      { value: "in-flight", remaining: [["scheduler", "TILL_TOKEN_PROMOTER"]], all: [...PAIRS] },
+      PAIRS,
+      () => "fresh"
+    );
+    // Durable recovery: a re-run must not mint another value, or
+    // transient failures across attempts could keep the group split.
+    expect(plan.resumed).toBe(true);
+    expect(plan.value).toBe("in-flight");
+    expect(plan.target).toEqual([["scheduler", "TILL_TOKEN_PROMOTER"]]);
+  });
+
+  it("abandons stale state when the member list changed", () => {
+    const plan = planRotation(
+      { value: "in-flight", remaining: [["scheduler", "OLD_NAME"]], all: [["scheduler", "OLD_NAME"]] },
+      PAIRS,
+      () => "fresh"
+    );
+    expect(plan).toEqual({ value: "fresh", target: PAIRS, resumed: false });
+  });
+
+  it("starts fresh when the pending state already converged", () => {
+    const plan = planRotation({ value: "old", remaining: [], all: [...PAIRS] }, PAIRS, () => "fresh");
+    expect(plan.resumed).toBe(false);
+    expect(plan.value).toBe("fresh");
   });
 });

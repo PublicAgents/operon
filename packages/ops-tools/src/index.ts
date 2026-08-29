@@ -11,10 +11,13 @@ export { TOOLS, LEDGERS, toolByName } from "./tools.js";
 export {
   executeRotation,
   freshBearer,
+  planRotation,
   rotationGroups,
   workerNameForDir,
+  type PendingRotation,
   type RotationOutcome,
-  type RotationPair
+  type RotationPair,
+  type RotationPlan
 } from "./rotation.js";
 export { createMcpServer, NO_AUDIT } from "./mcp.js";
 export { runTool, auditSummary, AuditUnavailableError, type ToolAudit } from "./run.js";

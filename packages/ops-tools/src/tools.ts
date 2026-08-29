@@ -497,23 +497,25 @@ export const TOOLS: readonly ToolDefinition[] = [
           `unknown rotation group: ${group} (known: ${Object.keys(groups).sort().join(", ")})`
         );
       }
-      // The host serializes per group (a Durable Object) and applies one
-      // fresh value with same-value retries (executeRotation): the two
-      // properties that keep a group from splitting under concurrency or
-      // alternating transient failures. Only a member that exhausts its
-      // retries yields the incomplete report below; a serialized re-run
-      // then converges the group.
-      const { written, failed } = await secrets.rotateGroup(group, pairs);
+      // The host serializes per group (a Durable Object), applies one
+      // value with same-value retries, and keeps durable resume state:
+      // an incomplete rotation's re-run RESUMES with the stored value
+      // over only the missing members, so neither concurrency nor
+      // repeated transient failures can leave the group split across
+      // values. Only a member that exhausts its retries yields the
+      // incomplete report below.
+      const { written, failed, resumed } = await secrets.rotateGroup(group, pairs);
       if (failed.length > 0) {
         throw new ToolInputError(
-          `rotation of ${group} is INCOMPLETE: the group now holds mixed values. ` +
+          `rotation of ${group} is INCOMPLETE: the group holds mixed values until it converges. ` +
             `written: ${written.join(", ") || "none"}; failed: ${failed.join("; ")}. ` +
-            `Re-run secret_rotate_group ${group} until every member succeeds.`,
+            `Re-run secret_rotate_group ${group}: it resumes with the SAME value over the ` +
+            `missing members until every one succeeds.`,
           502,
-          { error: "rotation_incomplete", group, written, failed }
+          { error: "rotation_incomplete", group, written, failed, resumed: resumed === true }
         );
       }
-      return { ok: true, group, written };
+      return { ok: true, group, written, resumed: resumed === true };
     }
   }
 ];

@@ -58,7 +58,7 @@ export interface SecretsPort {
   rotateGroup(
     group: string,
     pairs: readonly (readonly [workerDir: string, secretName: string])[]
-  ): Promise<{ written: string[]; failed: string[] }>;
+  ): Promise<{ written: string[]; failed: string[]; resumed?: boolean }>;
 }
 
 /**

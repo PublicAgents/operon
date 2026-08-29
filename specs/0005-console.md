@@ -122,7 +122,15 @@ Cloudflare API, so rotation stops requiring a laptop.
   interleave two values over one group's members. Within a run, a
   failing member is retried with the same value; a member that
   exhausts its retries yields a rotation_incomplete report naming the
-  written and failed halves, and a re-run converges the group.
+  written and failed halves. The gate keeps DURABLE resume state (the
+  in-flight value plus the members still missing it, deleted the
+  moment the group converges), so a re-run resumes with the SAME value
+  over only the missing members: repeated transient failures can delay
+  convergence but can never leave the group split across values. The
+  pending value in the gate is the same value being written into
+  Worker secrets, not a second credential, and it is the one sanctioned
+  exception to "values are never stored"; a changed member list
+  abandons the stale plan and starts fresh.
 - The rotate-tokens CLI remains, refactored onto the same shared
   groups table, so rotate-coverage keeps pinning bearer coverage.
 - A secret write creates a new Worker version (platform behavior); the

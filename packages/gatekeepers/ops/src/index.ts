@@ -12,6 +12,7 @@ import {
   createMcpServer,
   executeRotation,
   freshBearer,
+  planRotation,
   renderOpenApi,
   renderSkill,
   runTool,
@@ -20,6 +21,7 @@ import {
   ToolUnavailableError,
   TOOLS,
   workerNameForDir,
+  type PendingRotation,
   type RotationOutcome,
   type RotationPair,
   type SecretsPort,
@@ -106,15 +108,35 @@ async function responsePayload(response: Response): Promise<unknown> {
  * minted inside the call and never stored or returned.
  */
 export class RotationGate extends DurableObject<Env> {
-  async rotate(pairs: RotationPair[]): Promise<RotationOutcome> {
+  async rotate(pairs: RotationPair[]): Promise<RotationOutcome & { resumed: boolean }> {
     const raw = rawCloudflareSecrets(this.env);
     if (!raw) {
       throw new Error("secrets are not configured on this gateway (CLOUDFLARE_API_TOKEN missing)");
     }
     const prefix = this.env.WORKER_NAME_PREFIX;
-    return executeRotation(pairs, freshBearer(), (dir, name, value) =>
+    // Durable recovery (spec 0005 §6): an incomplete rotation stores its
+    // in-flight value plus the members still missing it, so the re-run
+    // RESUMES with the same value instead of minting another and can
+    // never leave the group split across values. The pending value lives
+    // ONLY in this gate's storage and is deleted the moment the group
+    // converges; it is the same value being written into Worker secrets,
+    // not a second credential. A changed member list abandons the stale
+    // plan and starts fresh.
+    const stored = await this.ctx.storage.get<PendingRotation>("pending");
+    const plan = planRotation(stored, pairs, freshBearer);
+    const outcome = await executeRotation(plan.target, plan.value, (dir, name, value) =>
       raw.put(workerNameForDir(dir, prefix), name, value)
     );
+    if (outcome.failedPairs.length === 0) {
+      await this.ctx.storage.delete("pending");
+    } else {
+      await this.ctx.storage.put("pending", {
+        value: plan.value,
+        remaining: outcome.failedPairs,
+        all: [...pairs]
+      } satisfies PendingRotation);
+    }
+    return { ...outcome, resumed: plan.resumed };
   }
 }
 

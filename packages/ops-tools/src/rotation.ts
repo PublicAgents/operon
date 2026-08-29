@@ -99,6 +99,47 @@ export interface RotationOutcome {
   written: string[];
   /** member plus the final error, after retries were exhausted. */
   failed: string[];
+  /** The failed members as pairs, for durable resume state. */
+  failedPairs: RotationPair[];
+}
+
+/** Durable in-flight rotation state, held by the gate until convergence. */
+export interface PendingRotation {
+  value: string;
+  remaining: RotationPair[];
+  all: RotationPair[];
+}
+
+export interface RotationPlan {
+  value: string;
+  target: readonly RotationPair[];
+  /** True when resuming a prior incomplete rotation with its value. */
+  resumed: boolean;
+}
+
+/**
+ * Decide what one rotation invocation writes. An incomplete prior
+ * rotation of the SAME plan resumes with the SAME value over only the
+ * members still missing it: minting a fresh value per re-run could
+ * keep a group split forever, and rewriting already-converged members
+ * would be churn. A changed plan (the group's membership moved under a
+ * roster change) abandons the stale state and starts fresh.
+ */
+export function planRotation(
+  stored: PendingRotation | undefined,
+  pairs: readonly RotationPair[],
+  mint: () => string
+): RotationPlan {
+  const samePlan =
+    stored !== undefined &&
+    stored.all.length === pairs.length &&
+    stored.all.every(
+      (pair, index) => pair[0] === pairs[index][0] && pair[1] === pairs[index][1]
+    );
+  if (samePlan && stored.remaining.length > 0) {
+    return { value: stored.value, target: stored.remaining, resumed: true };
+  }
+  return { value: mint(), target: pairs, resumed: false };
 }
 
 /**
@@ -120,6 +161,7 @@ export async function executeRotation(
 ): Promise<RotationOutcome> {
   const written: string[] = [];
   const failed: string[] = [];
+  const failedPairs: RotationPair[] = [];
   for (const [dir, name] of pairs) {
     let lastError: unknown;
     let ok = false;
@@ -140,9 +182,10 @@ export async function executeRotation(
       failed.push(
         `${dir}/${name} (${lastError instanceof Error ? lastError.message : String(lastError)})`
       );
+      failedPairs.push([dir, name]);
     }
   }
-  return { written, failed };
+  return { written, failed, failedPairs };
 }
 
 /** One fresh 256-bit bearer, hex. Never shown to any caller. */
