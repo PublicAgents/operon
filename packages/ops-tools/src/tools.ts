@@ -17,9 +17,11 @@ import { rotationGroups } from "./rotation.js";
  * refused if the audit write fails) before the handler runs.
  */
 
-// WebCrypto is present in both hosts (Workers, Node 24); the package
-// compiles against bare es2022 so the global is declared minimally here.
+// WebCrypto and timers are present in both hosts (Workers, Node 24);
+// the package compiles against bare es2022 so the globals are declared
+// minimally here.
 declare const crypto: { getRandomValues<T extends ArrayBufferView>(array: T): T };
+declare function setTimeout(handler: () => void, timeoutMs?: number): unknown;
 
 const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
 const agentId = z
@@ -509,20 +511,35 @@ export const TOOLS: readonly ToolDefinition[] = [
         );
       }
       const value = freshBearer();
-      // A half-rotated group is a broken bearer, so a failure must name
-      // exactly what was written and what was not: every member is
-      // attempted (one refusal must not strand the rest on the old
-      // value), and any failure reports both lists so the operator
-      // re-runs the rotation (idempotent: a fresh value again) until
-      // the group converges.
+      // A half-rotated group is a broken bearer. Convergence lives INSIDE
+      // one invocation: every member is attempted (one refusal must not
+      // strand the rest on the old value) and a failing member is retried
+      // with the SAME value, because a fresh value per run could keep a
+      // group split forever under alternating transient failures. Only
+      // when a member exhausts its retries does the error report both
+      // lists; a re-run then needs one clean pass to converge.
       const written: string[] = [];
       const failed: string[] = [];
       for (const [dir, name] of pairs) {
-        try {
-          await secrets.put(dir, name, value);
+        let lastError: unknown;
+        let ok = false;
+        for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+          if (attempt > 0) {
+            await new Promise<void>(resolve => setTimeout(() => resolve(), 250 * attempt));
+          }
+          try {
+            await secrets.put(dir, name, value);
+            ok = true;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        if (ok) {
           written.push(`${dir}/${name}`);
-        } catch (error) {
-          failed.push(`${dir}/${name} (${error instanceof Error ? error.message : String(error)})`);
+        } else {
+          failed.push(
+            `${dir}/${name} (${lastError instanceof Error ? lastError.message : String(lastError)})`
+          );
         }
       }
       if (failed.length > 0) {

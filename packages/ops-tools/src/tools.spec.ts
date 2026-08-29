@@ -140,13 +140,42 @@ describe("handlers", () => {
     expect(JSON.stringify(result)).not.toContain(written[0].value);
   });
 
-  it("attempts every member and reports both lists on a partial failure", async () => {
+  it("retries a flaky member with the same value inside one invocation", async () => {
+    const writes: { worker: string; value: string }[] = [];
+    let tillAttempts = 0;
+    const { context } = fakeContext({
+      secrets: {
+        async list() { return []; },
+        async put(worker, _name, value) {
+          if (worker === "gatekeeper-till" && tillAttempts++ === 0) {
+            throw new Error("cloudflare api 502");
+          }
+          writes.push({ worker, value });
+        }
+      },
+      async scheduler() { return { agents: [{ id: "promoter" }] }; }
+    });
+    const result = (await toolByName("secret_rotate_group")!.handler(
+      { group: "till-promoter" }, context
+    )) as { ok: boolean };
+    expect(result.ok).toBe(true);
+    expect(tillAttempts).toBe(2);
+    // The retried member received the SAME value as everyone else: a
+    // fresh value per attempt could keep a group split forever.
+    expect(new Set(writes.map(w => w.value)).size).toBe(1);
+  });
+
+  it("attempts every member and reports both lists on a persistent failure", async () => {
     const written: string[] = [];
+    let attempts = 0;
     const { context } = fakeContext({
       secrets: {
         async list() { return []; },
         async put(worker, name) {
-          if (worker === "gatekeeper-till") throw new Error("cloudflare api 502");
+          if (worker === "gatekeeper-till") {
+            attempts++;
+            throw new Error("cloudflare api 502");
+          }
           written.push(`${worker}/${name}`);
         }
       },
@@ -157,6 +186,7 @@ describe("handlers", () => {
       .then(() => null, (error: unknown) => error as ToolInputError);
     expect(failure).toBeInstanceOf(ToolInputError);
     expect(failure!.message).toMatch(/INCOMPLETE/);
+    expect(attempts).toBe(3);
     expect(failure!.payload).toMatchObject({
       error: "rotation_incomplete",
       written: ["scheduler/TILL_TOKEN_PROMOTER"],
