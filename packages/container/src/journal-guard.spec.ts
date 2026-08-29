@@ -35,6 +35,19 @@ describe("journalGuardDecision", () => {
     expect(unstamped.reason).toContain("stamp");
   });
 
+  it("blocks a stamp mentioned only in body text, outside any heading", () => {
+    const bodyOnly = journalGuardDecision(
+      START,
+      START + `\nnote to self: ${STAMP} still owes a journal entry\n`,
+      STAMP,
+      false
+    );
+    expect(bodyOnly.block).toBe(true);
+    expect(bodyOnly.reason).toContain("HEADING");
+    const deepHeading = journalGuardDecision(START, START + `\n### notes (${STAMP})\nBody.\n`, STAMP, false);
+    expect(deepHeading.block).toBe(false);
+  });
+
   it("skips the stamp requirement when no stamp was staged (fail open)", () => {
     expect(journalGuardDecision(START, START + "\nany appended entry\n", null, false).block).toBe(false);
   });

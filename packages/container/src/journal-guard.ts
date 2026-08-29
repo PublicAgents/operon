@@ -30,6 +30,14 @@ import { readFile } from "node:fs/promises";
 
 export const BASELINE_FILE = "/tmp/operon-journal-baseline.md";
 export const STAMP_FILE = "/tmp/operon-journal-stamp";
+
+/**
+ * The stamp must sit in a markdown HEADING line, matching what the wake
+ * prompt instructs: a stray mention in body text is not an entry.
+ */
+export function hasStampedHeading(journal: string, stamp: string): boolean {
+  return journal.split("\n").some(line => /^#{1,6}\s/.test(line) && line.includes(stamp));
+}
 export const JOURNAL_PATH = "/tmp/operon-wake/state/JOURNAL.md";
 
 /**
@@ -73,14 +81,15 @@ export function journalGuardDecision(
         "text too, stop again and this guard will yield."
     };
   }
-  if (stamp !== null && !now.includes(stamp)) {
+  if (stamp !== null && !hasStampedHeading(now, stamp)) {
     return {
       block: true,
       reason:
-        "JOURNAL.md grew this wake but no entry carries this wake's stamp " +
-        `"${stamp}". Make sure the entry you are leaving is for THIS wake and ` +
-        `put "${stamp}" in its heading, then stop. If the stamp truly does ` +
-        "not belong there, stop again and this guard will yield."
+        "JOURNAL.md grew this wake but no entry HEADING carries this wake's " +
+        `stamp "${stamp}". Make sure the entry you are leaving is for THIS ` +
+        `wake and put "${stamp}" in its markdown heading line (a line ` +
+        "starting with #), then stop. If the stamp truly does not belong " +
+        "there, stop again and this guard will yield."
     };
   }
   return { block: false };
