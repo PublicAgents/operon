@@ -1,7 +1,8 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { HashRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { whoami } from "./api.js";
+import { PageBoundary } from "./error-boundary.js";
 import { AgentsPage } from "./pages/agents.js";
 import { ApprovalsPage } from "./pages/approvals.js";
 import { AuditPage } from "./pages/audit.js";
@@ -36,6 +37,7 @@ const NAV: { to: string; label: string }[] = [
 ];
 
 function Shell() {
+  const location = useLocation();
   const [identity, setIdentity] = useState("");
   useEffect(() => {
     whoami()
@@ -56,7 +58,8 @@ function Shell() {
         </div>
       </nav>
       <main className="content">
-        <Routes>
+        <PageBoundary key={location.pathname}>
+          <Routes>
           <Route path="/" element={<Navigate to="/agents" replace />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/channel" element={<ChannelPage />} />
@@ -72,7 +75,8 @@ function Shell() {
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/secrets" element={<SecretsPage />} />
           <Route path="*" element={<Navigate to="/agents" replace />} />
-        </Routes>
+          </Routes>
+        </PageBoundary>
       </main>
     </div>
   );

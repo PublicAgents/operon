@@ -27,6 +27,21 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "").replace(CONTROL_PATTERN, "");
 }
 
+/**
+ * Anything the API hands us becomes readable text, never a crash: the
+ * chronicle's detail fields are JSON objects, and an uncaught render
+ * error unmounts the whole console.
+ */
+export function coerceText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function trim(value: unknown, max = 200): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return text.length > max ? `${text.slice(0, max)}…` : text;
