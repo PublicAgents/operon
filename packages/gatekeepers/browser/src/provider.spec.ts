@@ -90,6 +90,17 @@ describe("pickPageTarget", () => {
     ).toBe("b");
   });
 
+  it("keeps a driven blank page probe-eligible beside a non-blank background page", () => {
+    const { chosen, contenders } = pickPageTarget([
+      { targetId: "bg", type: "page", url: "https://background.example", attached: true },
+      { targetId: "driven", type: "page", url: "about:blank", attached: true }
+    ]);
+    // The heuristic's guess may be the background page, but the probe
+    // set must include the blank driven page so visibility can win.
+    expect(chosen?.targetId).toBe("bg");
+    expect(contenders.map(c => c.targetId).sort()).toEqual(["bg", "driven"]);
+  });
+
   it("ignores non-page targets and falls back sensibly", () => {
     expect(
       pickPageTarget([

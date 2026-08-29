@@ -58,16 +58,16 @@ export function pickPageTarget(
   const pages = infos.filter(info => info.type === "page" && info.targetId);
   if (match) {
     const wanted = pages.filter(info => (info.url ?? "").includes(match));
-    // An explicit match is the operator's word: ties inside it still get
-    // the visibility probe (contenders), but nothing outside competes.
-    if (wanted.length > 0) return { chosen: heuristic(wanted), pages, contenders: topTier(wanted) };
+    // An explicit match is the operator's word: everything inside it is
+    // probe-eligible, nothing outside competes.
+    if (wanted.length > 0) return { chosen: heuristic(wanted), pages, contenders: probeSet(wanted) };
     return { chosen: undefined, pages, contenders: [] };
   }
   if (pages.length === 0) {
     const fallback = infos.find(info => info.targetId);
     return { chosen: fallback, pages, contenders: fallback ? [fallback] : [] };
   }
-  return { chosen: heuristic(pages), pages, contenders: topTier(pages) };
+  return { chosen: heuristic(pages), pages, contenders: probeSet(pages) };
 }
 
 function pageScore(info: TargetInfo): number {
@@ -75,12 +75,15 @@ function pageScore(info: TargetInfo): number {
   return (info.attached ? 2 : 0) + (blank ? 0 : 1);
 }
 
-/** Every page sharing the top score: when more than one, enumeration
- * order proves nothing about the foreground and the caller must probe
- * visibility instead of guessing. */
-function topTier(pages: readonly TargetInfo[]): TargetInfo[] {
-  const best = Math.max(...pages.map(pageScore));
-  return pages.filter(info => pageScore(info) === best);
+/**
+ * The pages worth ASKING about: every attached page (the driven tab may
+ * currently be blank or internal, so blankness must not disqualify it
+ * from the visibility probe), or every page when none is attached.
+ * Scoring is only the fallback for when no document answers visible.
+ */
+function probeSet(pages: readonly TargetInfo[]): TargetInfo[] {
+  const attached = pages.filter(info => info.attached);
+  return attached.length > 0 ? attached : [...pages];
 }
 
 function heuristic(pages: readonly TargetInfo[]): TargetInfo {
