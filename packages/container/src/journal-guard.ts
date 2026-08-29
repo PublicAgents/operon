@@ -38,13 +38,22 @@ export const STAMP_FILE = "/tmp/operon-journal-stamp";
  * example must not satisfy the guard).
  */
 export function hasStampedHeading(journal: string, stamp: string): boolean {
-  let fenced = false;
+  // CommonMark fence tracking: an opening fence may carry an info string
+  // ("```js"), but a CLOSING fence must be the same character repeated at
+  // least as many times with nothing but whitespace after it. A "```x"
+  // line inside a fence is content, not a close.
+  let fence: { char: string; len: number } | null = null;
   for (const line of journal.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      continue;
+    const open = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence === null) {
+      if (open) {
+        fence = { char: open[1][0], len: open[1].length };
+        continue;
+      }
+      if (/^#{1,6}\s/.test(line) && line.includes(stamp)) return true;
+    } else if (open && open[1][0] === fence.char && open[1].length >= fence.len && /^\s*$/.test(line.slice(open[0].length))) {
+      fence = null;
     }
-    if (!fenced && /^#{1,6}\s/.test(line) && line.includes(stamp)) return true;
   }
   return false;
 }

@@ -65,6 +65,17 @@ describe("journalGuardDecision", () => {
     expect(realAfterFence.block).toBe(false);
   });
 
+  it("does not let an invalid closing fence leak fenced content into headings", () => {
+    const trickyFence =
+      START +
+      "\n```md\n``` not a close\n## still fenced (" + STAMP + ")\n```\n";
+    expect(journalGuardDecision(START, trickyFence, STAMP, false).block).toBe(true);
+    const longFence =
+      START +
+      "\n````\n```\n## inner fence content (" + STAMP + ")\n````\n\n## Wake 25 (" + STAMP + ")\nEntry.\n";
+    expect(journalGuardDecision(START, longFence, STAMP, false).block).toBe(false);
+  });
+
   it("skips the stamp requirement when no stamp was staged (fail open)", () => {
     expect(journalGuardDecision(START, START + "\nany appended entry\n", null, false).block).toBe(false);
   });
