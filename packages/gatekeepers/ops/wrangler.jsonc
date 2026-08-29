@@ -6,9 +6,17 @@
   "workers_dev": false,
   "observability": { "enabled": true },
   "durable_objects": {
-    "bindings": [{ "name": "AUDIT", "class_name": "Ledger" }]
+    "bindings": [
+      { "name": "AUDIT", "class_name": "Ledger" },
+      // Per-group rotation serializer (spec 0005 §6): one instance per
+      // bearer group, so concurrent rotations cannot interleave values.
+      { "name": "ROTATION", "class_name": "RotationGate" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Ledger"] },
+    { "tag": "v2", "new_sqlite_classes": ["RotationGate"] }
+  ]
   // Route ops.<zone> behind a Cloudflare Access application (GitHub IdP).
   // Vars: ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com), ACCESS_AUD.
   // Secrets: WAKE_TRIGGER_TOKEN (the one downstream bearer left) and,

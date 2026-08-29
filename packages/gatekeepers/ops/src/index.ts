@@ -6,9 +6,12 @@ import {
   Ledger,
   type AccessConfig
 } from "@operon/worker-kit";
+import { DurableObject } from "cloudflare:workers";
 import {
   AuditUnavailableError,
   createMcpServer,
+  executeRotation,
+  freshBearer,
   renderOpenApi,
   renderSkill,
   runTool,
@@ -17,6 +20,8 @@ import {
   ToolUnavailableError,
   TOOLS,
   workerNameForDir,
+  type RotationOutcome,
+  type RotationPair,
   type SecretsPort,
   type ToolAudit,
   type ToolContext
@@ -54,6 +59,8 @@ interface Env {
   CHRONICLE?: D1Database;
   /** This gateway's own operator-attributed audit ledger. */
   AUDIT: DurableObjectNamespace<Ledger>;
+  /** Per-group rotation serializer (spec 0005 §6); optional like secrets. */
+  ROTATION?: DurableObjectNamespace<RotationGate>;
   /** Secrets writes via the Cloudflare API (spec 0005 §6); optional. */
   CLOUDFLARE_API_TOKEN?: string;
   CF_ACCOUNT_ID?: string;
@@ -90,7 +97,33 @@ async function responsePayload(response: Response): Promise<unknown> {
   }
 }
 
-function cloudflareSecrets(env: Env): SecretsPort | undefined {
+/**
+ * The per-group rotation serializer (spec 0005 §6). Durable Objects
+ * serialize calls per instance (idFromName(group)), so two concurrent
+ * rotations of one group run one after the other, each applying its own
+ * single value to every member: the interleaving that could split a
+ * group with both callers reporting success cannot happen. Values are
+ * minted inside the call and never stored or returned.
+ */
+export class RotationGate extends DurableObject<Env> {
+  async rotate(pairs: RotationPair[]): Promise<RotationOutcome> {
+    const raw = rawCloudflareSecrets(this.env);
+    if (!raw) {
+      throw new Error("secrets are not configured on this gateway (CLOUDFLARE_API_TOKEN missing)");
+    }
+    const prefix = this.env.WORKER_NAME_PREFIX;
+    return executeRotation(pairs, freshBearer(), (dir, name, value) =>
+      raw.put(workerNameForDir(dir, prefix), name, value)
+    );
+  }
+}
+
+interface RawSecrets {
+  list(script: string): Promise<string[]>;
+  put(script: string, name: string, value: string): Promise<void>;
+}
+
+function rawCloudflareSecrets(env: Env): RawSecrets | undefined {
   const token = env.CLOUDFLARE_API_TOKEN;
   const account = env.CF_ACCOUNT_ID;
   if (!token || !account) return undefined;
@@ -128,9 +161,29 @@ function cloudflareSecrets(env: Env): SecretsPort | undefined {
   };
 }
 
-function toolContext(env: Env, operator: string): ToolContext {
+function secretsPort(env: Env): SecretsPort | undefined {
+  const raw = rawCloudflareSecrets(env);
+  if (!raw) return undefined;
   const prefix = env.WORKER_NAME_PREFIX;
-  const secrets = cloudflareSecrets(env);
+  return {
+    // Tools address workers by DIRECTORY name; the deployed script name
+    // is directory plus the colony's prefix, mapped here once.
+    list: worker => raw.list(workerNameForDir(worker, prefix)),
+    put: (worker, name, value) => raw.put(workerNameForDir(worker, prefix), name, value),
+    async rotateGroup(group, pairs) {
+      if (!env.ROTATION) {
+        throw new ToolUnavailableError("rotation gate unbound (ROTATION durable object)");
+      }
+      // The DO serializes per group; the value is minted inside the call.
+      return env.ROTATION.get(env.ROTATION.idFromName(group)).rotate(
+        pairs.map(pair => [pair[0], pair[1]] as const)
+      );
+    }
+  };
+}
+
+function toolContext(env: Env, operator: string): ToolContext {
+  const secrets = secretsPort(env);
   return {
     operator,
     async ops(binding, method, path, options) {
@@ -185,17 +238,7 @@ function toolContext(env: Env, operator: string): ToolContext {
     async auditRecent(limit) {
       return audit(env).recent(limit);
     },
-    ...(secrets
-      ? {
-          // Tools address workers by DIRECTORY name; the deployed script
-          // name is directory plus the colony's prefix, mapped here once.
-          secrets: {
-            list: worker => secrets.list(workerNameForDir(worker, prefix)),
-            put: (worker, name, value) =>
-              secrets.put(workerNameForDir(worker, prefix), name, value)
-          }
-        }
-      : {})
+    ...(secrets ? { secrets } : {})
   };
 }
 

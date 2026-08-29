@@ -113,10 +113,16 @@ Cloudflare API, so rotation stops requiring a laptop.
   ops Worker; the scope is the control.
 - Tools: `secret_set` (worker, name, value; the value is write-only,
   never echoed, never ledgered: labels ledgered, values never),
-  `secret_list` (names only), `rotate_group` (the rotate-tokens GROUPS
-  fan-out table moves into shared chassis code; one logical bearer
-  updates every worker/secret pair that must share it, value generated
-  server-side and never returned).
+  `secret_list` (names only), `secret_rotate_group` (the rotate-tokens
+  GROUPS fan-out table moves into shared chassis code; one logical
+  bearer updates every worker/secret pair that must share it, value
+  generated server-side and never returned).
+- Rotation is SERIALIZED per group through a Durable Object
+  (RotationGate, one instance per group): concurrent rotations cannot
+  interleave two values over one group's members. Within a run, a
+  failing member is retried with the same value; a member that
+  exhausts its retries yields a rotation_incomplete report naming the
+  written and failed halves, and a re-run converges the group.
 - The rotate-tokens CLI remains, refactored onto the same shared
   groups table, so rotate-coverage keeps pinning bearer coverage.
 - A secret write creates a new Worker version (platform behavior); the

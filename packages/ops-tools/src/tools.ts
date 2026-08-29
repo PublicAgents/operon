@@ -17,12 +17,6 @@ import { rotationGroups } from "./rotation.js";
  * refused if the audit write fails) before the handler runs.
  */
 
-// WebCrypto and timers are present in both hosts (Workers, Node 24);
-// the package compiles against bare es2022 so the globals are declared
-// minimally here.
-declare const crypto: { getRandomValues<T extends ArrayBufferView>(array: T): T };
-declare function setTimeout(handler: () => void, timeoutMs?: number): unknown;
-
 const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
 const agentId = z
   .string()
@@ -68,13 +62,6 @@ function requireSecrets(context: ToolContext) {
     );
   }
   return context.secrets;
-}
-
-/** One fresh 256-bit bearer, hex. Never returned to the caller. */
-function freshBearer(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export const TOOLS: readonly ToolDefinition[] = [
@@ -510,38 +497,13 @@ export const TOOLS: readonly ToolDefinition[] = [
           `unknown rotation group: ${group} (known: ${Object.keys(groups).sort().join(", ")})`
         );
       }
-      const value = freshBearer();
-      // A half-rotated group is a broken bearer. Convergence lives INSIDE
-      // one invocation: every member is attempted (one refusal must not
-      // strand the rest on the old value) and a failing member is retried
-      // with the SAME value, because a fresh value per run could keep a
-      // group split forever under alternating transient failures. Only
-      // when a member exhausts its retries does the error report both
-      // lists; a re-run then needs one clean pass to converge.
-      const written: string[] = [];
-      const failed: string[] = [];
-      for (const [dir, name] of pairs) {
-        let lastError: unknown;
-        let ok = false;
-        for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-          if (attempt > 0) {
-            await new Promise<void>(resolve => setTimeout(() => resolve(), 250 * attempt));
-          }
-          try {
-            await secrets.put(dir, name, value);
-            ok = true;
-          } catch (error) {
-            lastError = error;
-          }
-        }
-        if (ok) {
-          written.push(`${dir}/${name}`);
-        } else {
-          failed.push(
-            `${dir}/${name} (${lastError instanceof Error ? lastError.message : String(lastError)})`
-          );
-        }
-      }
+      // The host serializes per group (a Durable Object) and applies one
+      // fresh value with same-value retries (executeRotation): the two
+      // properties that keep a group from splitting under concurrency or
+      // alternating transient failures. Only a member that exhausts its
+      // retries yields the incomplete report below; a serialized re-run
+      // then converges the group.
+      const { written, failed } = await secrets.rotateGroup(group, pairs);
       if (failed.length > 0) {
         throw new ToolInputError(
           `rotation of ${group} is INCOMPLETE: the group now holds mixed values. ` +

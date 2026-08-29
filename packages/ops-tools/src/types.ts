@@ -49,6 +49,16 @@ export interface SecretsPort {
   list(worker: string): Promise<string[]>;
   /** Write one secret. The value never comes back and is never logged. */
   put(worker: string, name: string, value: string): Promise<void>;
+  /**
+   * Rotate a whole group to one fresh value, SERIALIZED per group by
+   * the host (the gateway runs it inside a per-group Durable Object):
+   * two concurrent rotations interleaving two values over the same
+   * members would split the group with both reporting success.
+   */
+  rotateGroup(
+    group: string,
+    pairs: readonly (readonly [workerDir: string, secretName: string])[]
+  ): Promise<{ written: string[]; failed: string[] }>;
 }
 
 /**

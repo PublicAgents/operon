@@ -118,12 +118,16 @@ describe("handlers", () => {
     ).rejects.toBeInstanceOf(ToolUnavailableError);
   });
 
-  it("rotates a whole group with one shared value and returns no value", async () => {
-    const written: { worker: string; name: string; value: string }[] = [];
+  it("delegates rotation to the serialized host port and returns no value", async () => {
+    const calls: { group: string; pairs: (readonly [string, string])[] }[] = [];
     const { context } = fakeContext({
       secrets: {
         async list() { return []; },
-        async put(worker, name, value) { written.push({ worker, name, value }); }
+        async put() { /* rotation never uses put directly */ },
+        async rotateGroup(group, pairs) {
+          calls.push({ group, pairs: [...pairs] });
+          return { written: pairs.map(([dir, name]) => `${dir}/${name}`), failed: [] };
+        }
       },
       async scheduler() { return { agents: [{ id: "promoter" }] }; }
     });
@@ -131,52 +135,31 @@ describe("handlers", () => {
       { group: "till-promoter" }, context
     )) as { ok: boolean; written: string[] };
     expect(result.ok).toBe(true);
-    expect(written.map(w => `${w.worker}/${w.name}`)).toEqual([
+    expect(calls).toEqual([
+      {
+        group: "till-promoter",
+        pairs: [
+          ["gatekeeper-till", "TILL_TOKEN_PROMOTER"],
+          ["scheduler", "TILL_TOKEN_PROMOTER"]
+        ]
+      }
+    ]);
+    expect(result.written).toEqual([
       "gatekeeper-till/TILL_TOKEN_PROMOTER",
       "scheduler/TILL_TOKEN_PROMOTER"
     ]);
-    expect(new Set(written.map(w => w.value)).size).toBe(1);
-    expect(written[0].value).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.stringify(result)).not.toContain(written[0].value);
   });
 
-  it("retries a flaky member with the same value inside one invocation", async () => {
-    const writes: { worker: string; value: string }[] = [];
-    let tillAttempts = 0;
+  it("reports both lists when the serialized rotation is incomplete", async () => {
     const { context } = fakeContext({
       secrets: {
         async list() { return []; },
-        async put(worker, _name, value) {
-          if (worker === "gatekeeper-till" && tillAttempts++ === 0) {
-            throw new Error("cloudflare api 502");
-          }
-          writes.push({ worker, value });
-        }
-      },
-      async scheduler() { return { agents: [{ id: "promoter" }] }; }
-    });
-    const result = (await toolByName("secret_rotate_group")!.handler(
-      { group: "till-promoter" }, context
-    )) as { ok: boolean };
-    expect(result.ok).toBe(true);
-    expect(tillAttempts).toBe(2);
-    // The retried member received the SAME value as everyone else: a
-    // fresh value per attempt could keep a group split forever.
-    expect(new Set(writes.map(w => w.value)).size).toBe(1);
-  });
-
-  it("attempts every member and reports both lists on a persistent failure", async () => {
-    const written: string[] = [];
-    let attempts = 0;
-    const { context } = fakeContext({
-      secrets: {
-        async list() { return []; },
-        async put(worker, name) {
-          if (worker === "gatekeeper-till") {
-            attempts++;
-            throw new Error("cloudflare api 502");
-          }
-          written.push(`${worker}/${name}`);
+        async put() { /* rotation never uses put directly */ },
+        async rotateGroup() {
+          return {
+            written: ["scheduler/TILL_TOKEN_PROMOTER"],
+            failed: ["gatekeeper-till/TILL_TOKEN_PROMOTER (cloudflare api 502)"]
+          };
         }
       },
       async scheduler() { return { agents: [{ id: "promoter" }] }; }
@@ -186,20 +169,19 @@ describe("handlers", () => {
       .then(() => null, (error: unknown) => error as ToolInputError);
     expect(failure).toBeInstanceOf(ToolInputError);
     expect(failure!.message).toMatch(/INCOMPLETE/);
-    expect(attempts).toBe(3);
     expect(failure!.payload).toMatchObject({
       error: "rotation_incomplete",
       written: ["scheduler/TILL_TOKEN_PROMOTER"],
       failed: [expect.stringContaining("gatekeeper-till/TILL_TOKEN_PROMOTER")]
     });
-    expect(written).toEqual(["scheduler/TILL_TOKEN_PROMOTER"]);
   });
 
   it("names the known groups when the group is unknown", async () => {
     const { context } = fakeContext({
       secrets: {
         async list() { return []; },
-        async put() { /* never reached in this test */ }
+        async put() { /* never reached in this test */ },
+        async rotateGroup() { return { written: [], failed: [] }; }
       },
       async scheduler() { return { agents: [] }; }
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rotationGroups, workerNameForDir } from "./rotation.js";
+import { executeRotation, freshBearer, rotationGroups, workerNameForDir } from "./rotation.js";
 
 describe("rotationGroups", () => {
   it("derives the four per-agent groups from each agent id", () => {
@@ -29,5 +29,62 @@ describe("rotationGroups", () => {
     expect(workerNameForDir("scheduler")).toBe("operon-scheduler");
     expect(workerNameForDir("gatekeeper-till")).toBe("operon-gatekeeper-till");
     expect(workerNameForDir("scheduler", "acme-")).toBe("acme-scheduler");
+  });
+});
+
+describe("executeRotation", () => {
+  const PAIRS = [
+    ["gatekeeper-till", "TILL_TOKEN_PROMOTER"],
+    ["scheduler", "TILL_TOKEN_PROMOTER"]
+  ] as const;
+
+  it("retries a flaky member with the SAME value inside one invocation", async () => {
+    const writes: { dir: string; value: string }[] = [];
+    let tillAttempts = 0;
+    const outcome = await executeRotation(
+      PAIRS,
+      "value-a",
+      async (dir, _name, value) => {
+        if (dir === "gatekeeper-till" && tillAttempts++ === 0) {
+          throw new Error("cloudflare api 502");
+        }
+        writes.push({ dir, value });
+      },
+      0
+    );
+    expect(outcome).toEqual({
+      written: ["gatekeeper-till/TILL_TOKEN_PROMOTER", "scheduler/TILL_TOKEN_PROMOTER"],
+      failed: []
+    });
+    expect(tillAttempts).toBe(2);
+    // A fresh value per attempt could keep a group split forever; the
+    // retried member must receive the same value as everyone else.
+    expect(new Set(writes.map(w => w.value))).toEqual(new Set(["value-a"]));
+  });
+
+  it("attempts every member and reports both lists on a persistent failure", async () => {
+    let attempts = 0;
+    const outcome = await executeRotation(
+      PAIRS,
+      "value-b",
+      async dir => {
+        if (dir === "gatekeeper-till") {
+          attempts++;
+          throw new Error("cloudflare api 502");
+        }
+      },
+      0
+    );
+    expect(attempts).toBe(3);
+    expect(outcome.written).toEqual(["scheduler/TILL_TOKEN_PROMOTER"]);
+    expect(outcome.failed).toEqual([
+      "gatekeeper-till/TILL_TOKEN_PROMOTER (cloudflare api 502)"
+    ]);
+  });
+
+  it("mints 256-bit hex bearers", () => {
+    const value = freshBearer();
+    expect(value).toMatch(/^[0-9a-f]{64}$/);
+    expect(freshBearer()).not.toBe(value);
   });
 });
