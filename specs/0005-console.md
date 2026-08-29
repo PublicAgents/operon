@@ -40,8 +40,11 @@ operator operation as data plus a handler:
   SKILL document are emitted from the same schemas.
 - Parity is enforced by tests, not discipline: registry == REST paths
   == MCP tool list == SKILL table, and CI fails on drift.
-- The legacy `OPS_ROUTES` paths remain as thin aliases over the same
-  handlers until Telegram buttons and tail-wake migrate, then die.
+- The legacy `OPS_ROUTES` paths are GONE: tail-wake calls the registry
+  REST surface, and the Telegram buttons never used the gateway (they
+  ride the telegram worker's own service bindings). The gateway serves
+  the registry, /ws, /whoami, /routes, and the console assets, nothing
+  else.
 
 Dependency note: `ops-tools` takes `zod` and the MCP SDK, and the
 console takes React. The zero-dependency bias stands for every other
@@ -196,8 +199,8 @@ session with approve/spend/secret authority. Rules, all mechanical:
 4. Telegram-optional notify + the notifications feed.
 5. Secrets tools + shared rotation groups.
 6. The console SPA over all of it.
-7. Migrate Telegram buttons and tail-wake off the legacy aliases;
-   delete the aliases.
+7. Migrate tail-wake off the legacy aliases; delete the aliases.
+   (Done; the Telegram buttons never used them.)
 
 ## 10. Open decisions
 

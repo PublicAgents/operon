@@ -42,7 +42,6 @@ function proxyConfig(): Record<string, ProxyOptions> {
     "/mcp": shared,
     "/whoami": shared,
     "/openapi.json": shared,
-    "/chronicle": shared,
     "/ws": { ...shared, ws: true }
   };
 }

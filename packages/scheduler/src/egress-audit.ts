@@ -71,3 +71,67 @@ export function withResponse(log: EgressLog, status: number, ok: boolean): Egres
 export function withError(log: EgressLog, error: unknown): EgressLog {
   return { ...log, error: String(error).slice(0, 200) };
 }
+
+// ---- durable summaries (spec 0004 §8's "longer retention" add) --------
+//
+// Raw lines stay in console/observability (volume: an npm install is
+// thousands). What the chronicle gets is per-wake HOST HISTOGRAMS,
+// flushed on the request threshold, the time window, or the isolate's
+// own quiet timer (so a tail under the thresholds still lands, with no
+// cross-isolate reach). Tallies are per ISOLATE, so one wake can
+// produce several summary events; counts are additive and the events
+// explorer shows them in wake order. Pure logic here; the entrypoint
+// wires it.
+
+export interface EgressTally {
+  agentId: string;
+  wakeId: string;
+  requests: number;
+  errors: number;
+  hosts: Record<string, number>;
+  sinceMs: number;
+}
+
+export const SUMMARY_FLUSH_REQUESTS = 200;
+export const SUMMARY_FLUSH_MS = 60_000;
+/** Distinct hosts kept per summary; the long tail folds into "(other)". */
+export const SUMMARY_MAX_HOSTS = 50;
+
+/** Fold one line into the wake's tally (creating it on first sight). */
+export function tallyLine(
+  tallies: Map<string, EgressTally>,
+  log: EgressLog,
+  nowMs: number
+): EgressTally {
+  const existing = tallies.get(log.wakeId) ?? {
+    agentId: log.agentId,
+    wakeId: log.wakeId,
+    requests: 0,
+    errors: 0,
+    hosts: {},
+    sinceMs: nowMs
+  };
+  existing.requests += 1;
+  if (log.error !== undefined || log.ok === false) existing.errors += 1;
+  const bucket =
+    log.host in existing.hosts || Object.keys(existing.hosts).length < SUMMARY_MAX_HOSTS
+      ? log.host
+      : "(other)";
+  existing.hosts[bucket] = (existing.hosts[bucket] ?? 0) + 1;
+  tallies.set(log.wakeId, existing);
+  return existing;
+}
+
+export function dueForFlush(tally: EgressTally, nowMs: number): boolean {
+  return tally.requests >= SUMMARY_FLUSH_REQUESTS || nowMs - tally.sinceMs >= SUMMARY_FLUSH_MS;
+}
+
+/** The chronicle event for one flushed tally. */
+export function summaryDetail(tally: EgressTally): Record<string, unknown> {
+  return {
+    wakeId: tally.wakeId,
+    requests: tally.requests,
+    errors: tally.errors,
+    hosts: tally.hosts
+  };
+}

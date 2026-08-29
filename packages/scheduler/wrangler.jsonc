@@ -40,7 +40,17 @@
   "vars": {
     // Deployments override with their real roster JSON.
     "ROSTER": "{\"zone\":\"example-colony.com\",\"agents\":[]}"
-  }
+  },
+  // Wake outcomes and egress summaries mirror into the chronicle
+  // (CHRONICLE_DB, because CHRONICLE is the gatekeeper service binding
+  // in deployments). Optional: absent, the mirrors are skipped.
+  "d1_databases": [
+    {
+      "binding": "CHRONICLE_DB",
+      "database_name": "operon-chronicle",
+      "database_id": "operon-chronicle-local"
+    }
+  ]
   // Secrets, set per deployment (wrangler secret put):
   //   WAKE_TRIGGER_TOKEN        bearer for POST /wake/:agentId and GET /wakes/:agentId
   //   MIND_CREDENTIAL_CLAUDE_CODE  subscription OAuth token for claude-code minds

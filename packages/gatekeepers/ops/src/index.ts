@@ -29,12 +29,10 @@ import {
   type ToolContext
 } from "@operon/ops-tools";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { downstreamPath, matchRoute, OPS_ROUTES, type OpsRoute } from "./routes.js";
 import { securityHeaders, withSecurityHeaders } from "./headers.js";
 import { csrfDenied, wsOriginDenied, wsProtocolToken } from "./guards.js";
 
 export { Ledger };
-export * from "./routes.js";
 
 /**
  * The ops gateway (spec 0003 §3, spec 0005): the ONE operator surface,
@@ -43,8 +41,6 @@ export * from "./routes.js";
  *
  *   - REST:   POST /api/v1/<tool>      (the console's data layer)
  *   - MCP:    /mcp                     (agents and CLIs; same tools)
- *   - Legacy: the OPS_ROUTES table     (tail-wake, Telegram buttons;
- *                                       aliases until both migrate)
  *
  * plus /ws/* WebSocket passthroughs to the live DOs and the console SPA
  * itself as static assets on every unmatched GET. Every decision writes
@@ -83,10 +79,6 @@ interface Env {
   TELEGRAM?: Fetcher;
   SCHEDULER?: Fetcher;
   [name: string]: unknown;
-}
-
-function bearerFor(route: OpsRoute, env: Env): string | undefined {
-  return route.binding === "SCHEDULER" ? env.WAKE_TRIGGER_TOKEN : undefined;
 }
 
 /** Downstream JSON (or text) as a value, for wrapping into tool errors. */
@@ -354,8 +346,7 @@ export default {
           name: tool.name,
           path: toolPath(tool.name),
           decision: tool.decision
-        })),
-        legacy: OPS_ROUTES.map(r => ({ method: r.method, path: r.path, decision: !!r.decision }))
+        }))
       });
     }
     if (url.pathname === "/openapi.json" && request.method === "GET") {
@@ -446,80 +437,6 @@ export default {
       } finally {
         await server.close();
       }
-    }
-
-    // ---- legacy alias table (until tail-wake + Telegram migrate) -----
-    const match = matchRoute(request.method, url.pathname);
-    if (match) {
-      const binding = env[match.route.binding] as Fetcher | undefined;
-      if (!binding) return errorResponse(503, "binding_unwired", match.route.binding);
-      const bearer = bearerFor(match.route, env);
-      if (match.route.binding === "SCHEDULER" && !bearer) {
-        return errorResponse(503, "downstream_token_missing", match.route.binding);
-      }
-      if (request.method === "POST") {
-        const denied = csrfDenied(request, url);
-        if (denied) return denied;
-      }
-
-      // Body for the downstream call. A POST operator request forwards its
-      // body verbatim; a GET whose downstream is a POST (e.g. email/outbox,
-      // which reads {agentId} from a body) carries the query params AS the
-      // body, so ?agentId=promoter reaches the handler.
-      let body: string | undefined;
-      if (match.route.downstreamMethod === "POST") {
-        body =
-          request.method === "POST"
-            ? await request.text()
-            : JSON.stringify(Object.fromEntries(url.searchParams));
-      }
-
-      // Operator-attributed audit (spec 0003). For DECISIONS the record
-      // comes FIRST and its failure refuses the action; reads audit
-      // best-effort after the fact.
-      if (match.route.decision) {
-        try {
-          await audit(env).append("operator_decision", {
-            operator,
-            via: "legacy",
-            method: match.route.method,
-            path: url.pathname,
-            body: (body ?? "").slice(0, 500)
-          });
-        } catch (error) {
-          console.error("ops audit unavailable; refusing decision", error);
-          return errorResponse(503, "audit_unavailable", "decision refused: it could not be attributed");
-        }
-      }
-
-      const target = `https://internal${downstreamPath(match)}${match.route.downstreamMethod === "GET" ? url.search : ""}`;
-      const response = await binding.fetch(target, {
-        method: match.route.downstreamMethod,
-        headers: {
-          ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-          "x-operon-operator": operator,
-          ...(match.route.downstreamMethod === "POST" ? { "content-type": "application/json" } : {})
-        },
-        ...(body !== undefined ? { body } : {})
-      });
-      const text = await response.text();
-
-      try {
-        await audit(env).append(match.route.decision ? "operator_decision_result" : "operator_read", {
-          operator,
-          via: "legacy",
-          method: match.route.method,
-          path: url.pathname,
-          status: response.status
-        });
-      } catch (error) {
-        console.error("ops audit append failed", error);
-      }
-
-      return new Response(text, {
-        status: response.status,
-        headers: { "content-type": response.headers.get("content-type") ?? "application/json" }
-      });
     }
 
     // ---- the console SPA (spec 0005 §7): unmatched GETs are assets ---
