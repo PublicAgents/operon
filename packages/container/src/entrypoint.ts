@@ -419,12 +419,14 @@ async function cloneState(config: WakeConfig): Promise<string> {
     [...hardenedGitFlags(), "config", "user.email", `${config.agentId}@operon.invalid`],
     { cwd: STATE_DIR }
   );
-  await chownToMind(WORKDIR);
   // The wake-start commit: presleep staging diffs against THIS, not HEAD,
   // so a mind that commits locally cannot hide its work from persistence.
+  // Read BEFORE the chown below: after it the repo belongs to the mind
+  // uid and a root git refuses it as dubious ownership (exit 128).
   const { stdout } = await runCapture("git", [...hardenedGitFlags(), "rev-parse", "HEAD"], {
     cwd: STATE_DIR
   });
+  await chownToMind(WORKDIR);
   return stdout.trim();
 }
 
