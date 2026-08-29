@@ -246,6 +246,9 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .message-card .subject { font-weight: 600; margin-bottom: 2px; }
 .message-body { color: var(--text); font-size: 13px; }
 
+.screenshot-frame { margin: 10px 0; padding: 8px 12px; }
+.screenshot { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px; }
+
 .picker { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .picker-item {
   color: var(--muted);

@@ -56,10 +56,3 @@ export function sessionNameFromPath(pathname: string): string | null {
   return SESSION_NAME.test(name) ? name : null;
 }
 
-/** The upstream Browser Run CDP endpoint for an account. */
-export function upstreamEndpoint(accountId: string): string {
-  return (
-    `wss://api.cloudflare.com/client/v4/accounts/${accountId}` +
-    `/browser-rendering/devtools/browser?keep_alive=600000&recording=true`
-  );
-}

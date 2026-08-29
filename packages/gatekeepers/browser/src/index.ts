@@ -67,6 +67,37 @@ export class Ops extends OpsEntrypoint<Env> {
       }
       return json({ ok: true, agentId, sessions, usage: await agentMeter.usage() });
     }
+    // A live-view URL for a running session (spec 0004 §6): the
+    // provider's vendor command; providers without one answer with a
+    // named refusal. Watching the agent's browser is a notable read,
+    // so it is ledgered.
+    if (url.pathname === "/gatekeeper/web/live-view") {
+      const agentId = url.searchParams.get("agentId");
+      const name = url.searchParams.get("name");
+      const mode = url.searchParams.get("mode") === "devtools" ? "devtools" : "tab";
+      if (!agentId || !name || !SESSION_NAME.test(name)) {
+        return errorResponse(400, "agent_and_name_required");
+      }
+      const result = await session(this.env, agentId, name).liveView(mode);
+      await ledger(this.env).append("web_live_view", { agentId, name, mode, ok: result.ok });
+      return result.ok
+        ? json({ ok: true, url: result.url })
+        : errorResponse(409, "live_view_unavailable", result.reason);
+    }
+    // Provider-neutral "what is the browser showing": one JPEG frame of
+    // the live session's page. The image is world content (untrusted).
+    if (url.pathname === "/gatekeeper/web/screenshot") {
+      const agentId = url.searchParams.get("agentId");
+      const name = url.searchParams.get("name");
+      if (!agentId || !name || !SESSION_NAME.test(name)) {
+        return errorResponse(400, "agent_and_name_required");
+      }
+      const result = await session(this.env, agentId, name).screenshot();
+      await ledger(this.env).append("web_screenshot", { agentId, name, ok: result.ok });
+      return result.ok
+        ? json({ ok: true, format: "jpeg", data: result.data })
+        : errorResponse(409, "screenshot_unavailable", result.reason);
+    }
     // The remote logout: kill the live relay, bump the generation, drop
     // the state, so an in-flight snapshot cannot resurrect it.
     if (url.pathname === "/gatekeeper/web/delete") {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditEvent, sessionNameFromPath, upstreamEndpoint } from "./audit.js";
+import { auditEvent, sessionNameFromPath } from "./audit.js";
 
 describe("audit taps", () => {
   it("ledgers a top-frame navigation", () => {
@@ -40,10 +40,4 @@ describe("audit taps", () => {
     expect(sessionNameFromPath("/web/other")).toBeNull();
   });
 
-  it("builds the recorded, kept-alive upstream endpoint", () => {
-    const url = upstreamEndpoint("acc123");
-    expect(url).toContain("/accounts/acc123/browser-rendering/devtools/browser");
-    expect(url).toContain("recording=true");
-    expect(url).toContain("keep_alive=600000");
-  });
 });

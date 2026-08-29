@@ -201,8 +201,15 @@ session with approve/spend/secret authority. Rules, all mechanical:
 
 ## 10. Open decisions
 
-1. Browser Run live-view (spec 0004 §6): spike-gated; ships when the
-   CDP command is verified.
+1. Browser Run live-view: RESOLVED. Cloudflare.getLiveView is real and
+   the door serves it (web_live_view); web_screenshot (plain CDP) is
+   the provider-neutral sibling. The upstream CDP provider itself is
+   now configuration (browser provider.ts: WEB_CDP_ENDPOINT/TOKEN/
+   PROVIDER; Cloudflare Browser Run is the default), and per-agent or
+   per-session provider SELECTION is Phase 2 registry data. Session
+   recordings are already captured (recording=true) and replay in the
+   Cloudflare dashboard; an in-console rrweb viewer would need the R2
+   archive from spec 0004 §6.
 2. Whether the notifications feed later moves from chronicle messages
    to its own DO with push; the console abstracts the source either
    way.
