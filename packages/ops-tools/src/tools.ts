@@ -308,6 +308,17 @@ export const TOOLS: readonly ToolDefinition[] = [
 
   // ---- money and mail decisions -------------------------------------
   {
+    name: "till_offers",
+    title: "The state of the till",
+    description:
+      `Every live offer across agents (host, path, price, currency, description) plus the colony ceilings bounding them (max price, max simultaneous offers). Selling is cap-bounded, not approval-gated; descriptions are agent-authored. ${UNTRUSTED}`,
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("TILL", "GET", "/gatekeeper/till/offers")
+  },
+  {
     name: "spend_outbox",
     title: "Read the spend outbox",
     description:

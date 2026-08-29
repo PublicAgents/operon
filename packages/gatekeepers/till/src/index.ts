@@ -234,8 +234,19 @@ export default {
 /** The operator's binding-only view of the till ledger (spec 0003 step 3). */
 export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === "/gatekeeper/till/ledger") {
+    const pathname = new URL(request.url).pathname;
+    if (pathname === "/gatekeeper/till/ledger") {
       return json(await ledger(this.env).recent());
+    }
+    // The state of the till: every live offer across agents, plus the
+    // colony ceilings that bound them (selling is cap-bounded, not
+    // approval-gated: spec 0002 §2.1).
+    if (pathname === "/gatekeeper/till/offers") {
+      return json({
+        ok: true,
+        offers: await catalog(this.env).listAll(),
+        limits: limits(this.env)
+      });
     }
     return errorResponse(404, "not_found");
   }
