@@ -43,7 +43,7 @@ describe("composeNotice", () => {
     // Crossing the next threshold warns again.
     const second = composeNotice(NOTHING, 4 * 60_000, first.nowWarned);
     expect(second.text).toContain("About 4 minute(s) left");
-    expect(second.nowWarned.sort()).toEqual([5, 15]);
+    expect(second.nowWarned.sort((a, b) => a - b)).toEqual([5, 15]);
   });
 
   it("attaches a due warning to an input notice instead of dropping it", () => {
