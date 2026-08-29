@@ -35,6 +35,7 @@ interface HeldEmail {
   id: string;
   to: string;
   subject: string;
+  text?: string;
   queuedAt: string;
 }
 
@@ -129,7 +130,7 @@ function EmailApprovals({ agentId }: { agentId: string }) {
       <ErrorNote error={state.error} />
       <LoadingGate loading={state.loading} hasData={state.data !== undefined}><span /></LoadingGate>
       {(state.data?.held ?? []).map(row => (
-        <div key={row.id} className="held-card">
+        <div key={row.id} className="held-card held-email">
           <div className="held-facts">
             <span className="tag">{agentId}</span>
             <strong>email</strong>
@@ -137,6 +138,15 @@ function EmailApprovals({ agentId }: { agentId: string }) {
             <UntrustedText text={row.subject} className="held-reason" />
             <TimeStamp at={row.queuedAt} />
           </div>
+          {row.text ? (
+            <div className="held-body" data-provenance="agent">
+              <div className="bubble-head">
+                <span className="who">full body</span>
+                <span className="untrusted-badge">untrusted</span>
+              </div>
+              <UntrustedText text={row.text} className="message-body" />
+            </div>
+          ) : null}
           <div className="held-actions">
             <ConfirmButton
               label="approve"
