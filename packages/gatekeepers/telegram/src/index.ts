@@ -326,19 +326,16 @@ async function recordAgentNotify(env: Env, agentId: string, text: string): Promi
  */
 async function recordNotifyFeed(env: Env, agentId: string | undefined, text: string): Promise<boolean> {
   if (!env.CHRONICLE) return false;
-  try {
-    await recordMessage(env.CHRONICLE, {
-      at: new Date().toISOString(),
-      kind: "notify",
-      agentId: agentId && agentId.length > 0 ? agentId : "system",
-      sender: "chassis",
-      body: text.slice(0, 4000)
-    });
-    return true;
-  } catch (error) {
-    console.error("notify feed record failed", error);
-    return false;
-  }
+  // recordMessage reports whether the row actually landed; a suppressed
+  // D1 failure must NOT read as "recorded", or a notify that also missed
+  // Telegram would report success while reaching nothing (spec 0005 §5).
+  return recordMessage(env.CHRONICLE, {
+    at: new Date().toISOString(),
+    kind: "notify",
+    agentId: agentId && agentId.length > 0 ? agentId : "system",
+    sender: "chassis",
+    body: text.slice(0, 4000)
+  });
 }
 
 async function handleNotify(request: Request, env: Env): Promise<Response> {

@@ -57,8 +57,15 @@ export async function recordEvent(d1: D1Database | undefined, row: EventRecord):
   }
 }
 
-export async function recordMessage(d1: D1Database | undefined, row: MessageRecord): Promise<void> {
-  if (!d1) return;
+/**
+ * Best-effort mirror write, as ever, but the outcome is REPORTED: true
+ * only when the row actually landed. Mirror callers ignore it; a caller
+ * whose own success contract depends on durability (the notify feed,
+ * spec 0005 §5) must check it, because "recorded" may never mean "the
+ * insert was attempted".
+ */
+export async function recordMessage(d1: D1Database | undefined, row: MessageRecord): Promise<boolean> {
+  if (!d1) return false;
   try {
     await drizzle(d1).insert(messages).values({
       at: row.at,
@@ -71,8 +78,10 @@ export async function recordMessage(d1: D1Database | undefined, row: MessageReco
       refId: row.refId ?? null,
       meta: row.meta ?? null
     });
+    return true;
   } catch (error) {
     console.error("chronicle message mirror failed", error);
+    return false;
   }
 }
 
