@@ -67,7 +67,8 @@ function wakePrompt(budgetMinutes: number): string {
   return (
     "Read CHARTER.md and the rest of this repository: it is your memory, and this is one wake of your life. " +
     `You have about ${budgetMinutes} minutes in this session; pace your work so you append your journal entry to JOURNAL.md before the time is up, because an unjournaled wake did not happen as far as your memory is concerned. ` +
-    "Your doors to the world are the operon CLI: run operon --help to see which are live this wake. " +
+    "Your doors to the world are the operon CLI: run operon --help FIRST, every wake, because the guide is rendered live by the chassis and changes as your doors do; what it says supersedes anything your notes remember about the CLI. " +
+    "New input does not only arrive at wake start: operon pull fetches email, DMs, and operator messages that arrive MID-WAKE (a verification link or an operator answer is one pull away, not one wake away). " +
     "A wake is a SINGLE uninterrupted turn: you cannot sleep and resume, and there is no later continuation of THIS session. If you background a wait or a sleep intending to come back, the session simply ends while you are away and everything after it is lost. So never defer your journal entry to after a sleep or a timer: if something is not ready yet (a rate limit, a cooldown, a scheduled time), record where it stands in your journal and leave it for a FUTURE wake to pick up. ALWAYS write your JOURNAL.md entry before you stop, sleep, or wait on anything. " +
     "Act as you see fit, and when your journal entry is written, stop."
   );
@@ -556,6 +557,44 @@ async function runSession(
     }
   }
 
+  // Mid-wake input awareness for claude-code minds: a PostToolUse hook
+  // (pull-hook.ts) whose stdout the harness injects into the running
+  // session, so new mail, DMs, and operator messages reach the mind
+  // WHILE it works instead of only when it thinks to pull. Written to
+  // the mind's user settings; a state repo's own project settings are a
+  // different scope and still load. Best-effort: a wake without the
+  // hook is the old behavior, not a failure.
+  if (adapter.id === "claude-code") {
+    try {
+      const settingsDir = join(mindHome(), ".claude");
+      await mkdir(settingsDir, { recursive: true });
+      await writeFile(
+        join(settingsDir, "settings.json"),
+        JSON.stringify(
+          {
+            hooks: {
+              PostToolUse: [
+                {
+                  matcher: "*",
+                  hooks: [
+                    { type: "command", command: "node /opt/operon/pull-hook.js", timeout: 15 }
+                  ]
+                }
+              ]
+            }
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+      await chownToMind(settingsDir);
+      log("mid-wake input notifier staged (PostToolUse hook)");
+    } catch (error) {
+      log(`could not stage the input notifier hook: ${String(error).slice(0, 200)}`);
+    }
+  }
+
   const ids = mindSpawnIds();
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
@@ -566,6 +605,10 @@ async function runSession(
       ...sessionBaseEnv(),
       ...spec.env,
       OPERON_PORCH: porchUrl,
+      // The pull hook tells the mind how much of its budget remains and
+      // warns when the journal deadline nears (the prompt's promise made
+      // checkable mid-wake). Epoch ms; not a credential.
+      OPERON_SESSION_DEADLINE: String(Date.now() + budgetMinutes * 60_000),
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
@@ -674,9 +717,19 @@ async function main(): Promise<number> {
     log(`${label}: transcript shipping to the chronicle`);
   }
 
-  const pulledInboxIds = await pullInbox(config, chassisWritten, denylist);
-  const dmUpTo = await pullXDms(config, chassisWritten, denylist);
-  const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+  // Delivery bookkeeping shared between the wake-start pulls and any
+  // mid-wake `operon pull` (the porch's pullFresh below): acks always
+  // happen once, after persist, over everything delivered this wake.
+  const ackState = {
+    inboxIds: new Set<string>(),
+    dmUpTo: null as string | null,
+    channelUpTo: null as number | null
+  };
+  for (const id of await pullInbox(config, chassisWritten, denylist)) {
+    ackState.inboxIds.add(id);
+  }
+  ackState.dmUpTo = await pullXDms(config, chassisWritten, denylist);
+  ackState.channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -689,8 +742,61 @@ async function main(): Promise<number> {
     config,
     stateDir: STATE_DIR,
     denylist,
-    log
+    log,
+    // Mid-wake input refresh (operon pull): the same pulls and the same
+    // ack bookkeeping as wake start. Unacked messages re-deliver (the
+    // door forgets nothing until the post-persist ack), so re-writing an
+    // inbox file is idempotent and only genuinely NEW ids count.
+    // Concurrent pulls SHARE one run; its freshness lands in the
+    // unannounced buffer and is DRAINED at response time by the porch,
+    // only for a caller that is still connected. One delivery is
+    // announced exactly once, to whoever can actually hear it: not
+    // twice to overlapping callers, and not into the void when the
+    // initiator (say, the hook hitting its timeout) aborted.
+    pullFresh() {
+      if (!inFlightPull) {
+        inFlightPull = doPullFresh().finally(() => {
+          inFlightPull = null;
+        });
+      }
+      return inFlightPull;
+    },
+    drainAnnouncements() {
+      const out = { ...unannounced };
+      unannounced.mail = 0;
+      unannounced.dms = 0;
+      unannounced.channel = false;
+      return out;
+    },
+    recreditAnnouncements(counts) {
+      unannounced.mail += counts.mail;
+      unannounced.dms += counts.dms;
+      unannounced.channel = unannounced.channel || counts.channel;
+    }
   });
+  let inFlightPull: Promise<void> | null = null;
+  const unannounced = { mail: 0, dms: 0, channel: false };
+  async function doPullFresh(): Promise<void> {
+    const before = ackState.inboxIds.size;
+    for (const id of await pullInbox(config, chassisWritten, denylist)) {
+      ackState.inboxIds.add(id);
+    }
+    unannounced.mail += ackState.inboxIds.size - before;
+    const dmBefore = ackState.dmUpTo;
+    const dmUpTo = await pullXDms(config, chassisWritten, denylist);
+    if (dmUpTo !== null) {
+      ackState.dmUpTo = dmUpTo;
+      if (dmUpTo !== dmBefore) unannounced.dms += 1;
+    }
+    const channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+    if (
+      channelUpTo !== null &&
+      (ackState.channelUpTo === null || channelUpTo > ackState.channelUpTo)
+    ) {
+      ackState.channelUpTo = channelUpTo;
+      unannounced.channel = true;
+    }
+  }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
 
@@ -753,9 +859,9 @@ async function main(): Promise<number> {
   await persistState(config, changes);
   // Inbox and channel are acked only now, after the state is durably
   // persisted: a wake that failed or was blocked re-delivers both.
-  await ackInbox(config, pulledInboxIds);
-  await ackXDms(config, dmUpTo);
-  await ackChannel(config, channelUpTo);
+  await ackInbox(config, [...ackState.inboxIds]);
+  await ackXDms(config, ackState.dmUpTo);
+  await ackChannel(config, ackState.channelUpTo);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

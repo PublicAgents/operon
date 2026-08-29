@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import { runGitleaks } from "./gitleaks.js";
 import { linesNotIn, scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
+import { renderSkills } from "./skills.js";
 
 /**
  * The porch: a loopback-only HTTP server the entrypoint runs for the
@@ -67,11 +68,29 @@ export interface PorchContext {
   /** Overrides the image's gitleaks config path (tests run outside the image). */
   gitleaksConfig?: string;
   log(message: string): void;
+  /**
+   * Mid-wake input refresh (operon pull): the entrypoint's closure over
+   * the same pull + ack bookkeeping the wake start uses, so nothing is
+   * lost or double-acked. Freshness lands in the entrypoint's
+   * unannounced buffer; drainAnnouncements hands it to exactly one
+   * still-connected caller. Absent in tests that wire no doors.
+   */
+  pullFresh?(): Promise<void>;
+  drainAnnouncements?(): { mail: number; dms: number; channel: boolean };
+  /** Put a drained-but-undelivered announcement back for the next pull. */
+  recreditAnnouncements?(counts: { mail: number; dms: number; channel: boolean }): void;
 }
 
 interface JsonResult {
   status: number;
   body: Record<string, unknown>;
+  /**
+   * Called when the response provably never reached the client (socket
+   * closed before the write finished): the /pull branch re-credits its
+   * drained announcement so a delivery cannot vanish into a dead
+   * connection.
+   */
+  undeliverable?: () => void;
 }
 
 function ok(body: Record<string, unknown> = {}): JsonResult {
@@ -126,8 +145,18 @@ export class Porch {
   async start(port = PORCH_PORT): Promise<string> {
     this.server = createServer((request, response) => {
       void this.route(request).then(result => {
-        response.writeHead(result.status, { "content-type": "application/json" });
-        response.end(JSON.stringify(result.body));
+        if (result.undeliverable) {
+          const failed = result.undeliverable;
+          response.on("close", () => {
+            if (!response.writableFinished) failed();
+          });
+        }
+        try {
+          response.writeHead(result.status, { "content-type": "application/json" });
+          response.end(JSON.stringify(result.body));
+        } catch {
+          result.undeliverable?.();
+        }
       });
     });
     // The web door is a long-lived CDP WebSocket, not a request; relay
@@ -172,6 +201,36 @@ export class Porch {
       }
       if (request.method === "GET" && url.pathname === "/capabilities") {
         return ok(capabilities(this.context.config));
+      }
+      // The living guide (skills.ts): rendered fresh from THIS wake's
+      // config, so `operon --help` can never describe a different
+      // chassis than the one answering.
+      if (request.method === "GET" && url.pathname === "/help") {
+        return ok({ help: renderSkills(this.context.config, capabilities(this.context.config)) });
+      }
+      if (request.method === "POST" && url.pathname === "/pull") {
+        if (!this.context.pullFresh || !this.context.drainAnnouncements) {
+          return fail(503, "pull_not_wired");
+        }
+        await this.context.pullFresh();
+        // A caller that already vanished (the hook past its timeout,
+        // say) drains nothing; and if the socket dies between drain and
+        // flush, the undeliverable callback below re-credits the counts,
+        // so a delivery can never vanish into a dead connection: the
+        // buffer simply waits for the next pull.
+        if (request.destroyed) return fail(499, "caller_gone");
+        const pulled = this.context.drainAnnouncements();
+        const fresh = Boolean(pulled.mail || pulled.dms || pulled.channel);
+        const recredit = this.context.recreditAnnouncements;
+        return {
+          ...ok({
+            ...pulled,
+            note: fresh
+              ? "new input landed in inbox/ and operator/channel.md"
+              : "nothing new since the last delivery"
+          }),
+          ...(fresh && recredit ? { undeliverable: () => recredit(pulled) } : {})
+        };
       }
       const body = request.method === "POST" ? await readBody(request) : {};
       if (request.method === "POST" && url.pathname === "/notify") return await this.notify(body);

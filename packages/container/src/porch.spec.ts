@@ -62,7 +62,12 @@ async function startStub(
   return { url: `http://127.0.0.1:${address.port}`, requests };
 }
 
-async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
+async function startPorch(
+  wakeConfig: WakeConfig,
+  denylist: string[] = [],
+  pullFresh?: () => Promise<void>,
+  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean }
+) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
   const porch = new Porch({
@@ -70,7 +75,9 @@ async function startPorch(wakeConfig: WakeConfig, denylist: string[] = []) {
     stateDir,
     denylist,
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
-    log: () => undefined
+    log: () => undefined,
+    ...(pullFresh ? { pullFresh } : {}),
+    ...(drainAnnouncements ? { drainAnnouncements } : {})
   });
   const url = await porch.start(0);
   cleanups.push(() => porch.close());
@@ -379,5 +386,73 @@ describe("contentTypeFor", () => {
     expect(contentTypeFor("a/index.html")).toContain("text/html");
     expect(contentTypeFor("x.css")).toContain("text/css");
     expect(contentTypeFor("x.bin")).toBe("application/octet-stream");
+  });
+});
+
+describe("the living help and the mid-wake pull", () => {
+  it("serves the skills guide rendered from this wake's real wiring", async () => {
+    const { url } = await startPorch(config({ notifyUrl: "http://t", notifyToken: "n" }));
+    const response = await fetch(`${url}/help`, { headers: { "x-operon-porch": "1" } });
+    const body = (await response.json()) as { ok: boolean; help: string };
+    expect(body.ok).toBe(true);
+    // Task-first guidance including the mid-wake pull...
+    expect(body.help).toContain("operon pull");
+    expect(body.help).toContain("one pull away, not one wake away");
+    // ...and honest live/not-wired marks: notify is wired, vault is not.
+    expect(body.help).toMatch(/operon notify[\s\S]{0,120}message the operator(?![\s\S]{0,40}NOT WIRED)/);
+    expect(body.help).toMatch(/operon vault set[^\n]*NOT WIRED/);
+  });
+
+  it("answers pull_not_wired when the entrypoint wired no refresher", async () => {
+    const { url } = await startPorch(config());
+    const response = await fetch(`${url}/pull`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1", "content-type": "application/json" },
+      body: "{}"
+    });
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error: string }).error).toBe("pull_not_wired");
+  });
+
+  it("shares the run and announces each delivery exactly once, to a live caller", async () => {
+    // The entrypoint contract in miniature: runs deposit freshness into a
+    // buffer; the drain hands it to exactly one caller. Overlapping pulls
+    // share one run (calls stays 1), one of them drains the counts, the
+    // other truthfully hears nothing new; a later pull with an empty
+    // buffer also hears nothing new.
+    let calls = 0;
+    const buffer = { mail: 0, dms: 0, channel: false };
+    let shared: Promise<void> | null = null;
+    const { url } = await startPorch(
+      config(),
+      [],
+      () => {
+        if (!shared) {
+          shared = (async () => {
+            calls += 1;
+            buffer.mail += 1;
+          })();
+        }
+        return shared;
+      },
+      () => {
+        const out = { ...buffer };
+        buffer.mail = 0;
+        buffer.dms = 0;
+        buffer.channel = false;
+        return out;
+      }
+    );
+    const request = () =>
+      fetch(`${url}/pull`, {
+        method: "POST",
+        headers: { "x-operon-porch": "1", "content-type": "application/json" },
+        body: "{}"
+      }).then(response => response.json() as Promise<Record<string, unknown>>);
+    const bodies = await Promise.all([request(), request()]);
+    expect(calls).toBe(1);
+    const mails = bodies.map(body => body.mail).sort();
+    expect(mails).toEqual([0, 1]);
+    for (const body of bodies) expect(body).toMatchObject({ ok: true });
   });
 });
