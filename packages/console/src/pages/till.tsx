@@ -108,7 +108,7 @@ export function TillPage() {
         note="operator custody; till receipts settle to this address"
         wallet={receiving}
       />
-      <ErrorNote error={state.error} />      <ErrorNote error={state.error} />
+      <ErrorNote error={state.error} />
       <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       <div className="approval-block">
         <h2>live offers ({offers.length})</h2>
