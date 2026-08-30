@@ -842,14 +842,16 @@ export class Ops extends OpsEntrypoint<Env> {
       }
       const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
       if (revoked) {
-        await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at }).catch(async error => {
+        try {
+          await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at });
+        } catch (error) {
           console.error("allowance_revoked outcome row lost", body.value.allowanceId, error);
           await notifyOperator(
             this.env,
             `spend audit gap: allowance ${body.value.allowanceId} WAS revoked at ${at} but its allowance_revoked row could not be written; reconstruct from this notice.`,
             []
           ).catch(() => undefined);
-        });
+        }
       }
       return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
