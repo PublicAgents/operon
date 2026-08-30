@@ -151,18 +151,13 @@ export class SpendLedger extends DurableObject {
 
   // ---- holds (the email Gatekeeper's claim pattern, verbatim) ----------
 
-  /**
-   * Hold a payment for the operator, DEDUPLICATED: an unclaimed pending
-   * hold for the same (agent, origin, method, recipient, currency,
-   * amount) is returned instead of creating a twin, so a repeated pay
-   * across wakes cannot queue two approvals that would mint two
-   * allowances. Serialized by the DO, so the check-then-put is atomic.
-   */
-  async hold(payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">, at: string): Promise<HeldPayment> {
+  private async findEquivalentHold(
+    payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">
+  ): Promise<HeldPayment | null> {
     for (const existing of await this.listHeld()) {
       if (
         // Claimed rows count too: a decision in flight is still THE hold
-        // for this payment, and returning it beats minting a twin whose
+        // for this payment, and reporting it beats minting a twin whose
         // separate approval would double the authorization.
         existing.agentId === payment.agentId &&
         existing.origin === payment.origin &&
@@ -174,9 +169,24 @@ export class SpendLedger extends DurableObject {
         return existing;
       }
     }
+    return null;
+  }
+
+  /**
+   * Hold a payment for the operator, DEDUPLICATED against every pending
+   * hold (claimed included): the caller learns whether this is a new
+   * hold (ledger it, notify the operator) or an existing one (report
+   * it, notify nobody twice). Serialized by the DO, so atomic.
+   */
+  async hold(
+    payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">,
+    at: string
+  ): Promise<{ held: HeldPayment; deduped: boolean }> {
+    const existing = await this.findEquivalentHold(payment);
+    if (existing) return { held: existing, deduped: true };
     const held: HeldPayment = { id: crypto.randomUUID(), queuedAt: at, ...payment };
     await this.ctx.storage.put(`held:${held.id}`, held);
-    return held;
+    return { held, deduped: false };
   }
 
   async claimHeld(id: string): Promise<HeldPayment | undefined> {
@@ -213,24 +223,25 @@ export class SpendLedger extends DurableObject {
   }
 
   /**
-   * Mark allowances that lapsed by expiry and return the NEWLY lapsed
-   * ones exactly once, so the caller can ledger the transition (spec
-   * §2.2: every mint, consume, revoke, and expiry-lapse is ledgered).
+   * Allowances that lapsed by expiry and are not yet audit-ledgered.
+   * Read-only: the caller appends the ledger rows first and acks with
+   * markExpiryLedgered after they land, so a failed append re-surfaces
+   * the lapse next sweep (at-least-once; a duplicate audit row is
+   * benign, a lost one is not).
    */
-  async sweepExpired(nowIso: string): Promise<Allowance[]> {
-    const lapsed: Allowance[] = [];
-    for (const allowance of await this.listAllowances()) {
-      if (
+  async lapsedUnledgered(nowIso: string): Promise<Allowance[]> {
+    return (await this.listAllowances()).filter(
+      allowance =>
         allowance.consumedAt === undefined &&
         allowance.revokedAt === undefined &&
         allowance.expiresAt <= nowIso &&
         !(allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
-      ) {
-        await this.ctx.storage.put(`allow:${allowance.id}`, { ...allowance, expiryLedgered: true });
-        lapsed.push(allowance);
-      }
-    }
-    return lapsed;
+    );
+  }
+
+  async markExpiryLedgered(id: string): Promise<void> {
+    const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
+    if (allowance) await this.ctx.storage.put(`allow:${id}`, { ...allowance, expiryLedgered: true });
   }
 
   async listAllowances(agentId?: string): Promise<Allowance[]> {
@@ -250,17 +261,34 @@ export class SpendLedger extends DurableObject {
   }
 
   /**
-   * Reserve an above-cap attempt by CONSUMING a matching allowance, in
-   * one serialized turn: the allowance cannot double-spend, and the
-   * outbox row is durable before any credential exists. Cap-exempt by
-   * doctrine (the operator approved this exact settlement); the agent's
-   * own maxAmount ceiling still binds at the call site. Returns null
-   * when no allowance matches.
+   * THE pay decision, in one serialized turn so no worker-side read can
+   * go stale between classification and reservation (spec 0002 §2.2):
+   *
+   * 1. Caps admit it -> reserve normally.
+   * 2. A cap refuses it -> a matching one-time allowance is consumed
+   *    atomically with the outbox row (cap-exempt by doctrine, counted
+   *    against nothing else, no double-spend possible).
+   * 3. No allowance, amount under the hold ceiling -> hold a proposal,
+   *    deduplicated against every pending hold, claimed included.
+   * 4. Otherwise -> refused with the cap problem.
+   *
+   * The agent's own maxAmount refuses before anything else: an amount
+   * the agent did not agree to is never reserved, allowed, or held.
    */
-  async reserveWithAllowance(
+  async decidePay(
     row: Omit<OutboxRow, "id" | "status" | "allowanceId">,
-    summary: ChallengeSummary
-  ): Promise<{ outboxId: string; allowanceId: string } | null> {
+    caps: { maxAmount: string; maxTx: string; dailyCap: string },
+    summary: ChallengeSummary,
+    holdOption: { payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">; holdMax: string } | null
+  ): Promise<
+    | { outcome: "reserved"; outboxId: string; allowanceId?: string }
+    | { outcome: "held"; held: HeldPayment; deduped: boolean }
+    | { outcome: "refused"; problem: CapProblem }
+  > {
+    const plain = await this.reserve(row, caps);
+    if (plain.ok) return { outcome: "reserved", outboxId: plain.outboxId };
+    if (plain.problem === "over_max_amount") return { outcome: "refused", problem: plain.problem };
+
     for (const allowance of await this.listAllowances(row.agentId)) {
       if (allowanceMatches(allowance, row.agentId, summary, row.at)) {
         const id = crypto.randomUUID();
@@ -275,9 +303,14 @@ export class SpendLedger extends DurableObject {
           allowanceId: allowance.id,
           ...row
         });
-        return { outboxId: id, allowanceId: allowance.id };
+        return { outcome: "reserved", outboxId: id, allowanceId: allowance.id };
       }
     }
-    return null;
+
+    if (holdOption && BigInt(row.amount) <= BigInt(holdOption.holdMax)) {
+      const { held, deduped } = await this.hold(holdOption.payment, row.at);
+      return { outcome: "held", held, deduped };
+    }
+    return { outcome: "refused", problem: plain.problem };
   }
 }
