@@ -158,6 +158,11 @@ async function wake(
       await notify(env, `[${agent.id}] wake skipped: ${detail}`);
       return { status: "locked", wakeId: result.wakeId, detail };
     }
+    if (result.status === "paused") {
+      // The launch-level pause refusal (the registration-adjacent
+      // check); same meaning as the early check above.
+      return { status: "paused", detail: result.detail };
+    }
     if (result.status === "disabled") {
       // Deliberate operator state, notified only for manual wakes: a cron
       // firing against a disabled agent is the kill switch doing its job,
@@ -229,16 +234,25 @@ export default {
     if (url.pathname === "/pause" && request.method === "POST") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
       if (denied) return denied;
-      const body = (await request.json().catch(() => ({}))) as { reason?: string };
+      const body = (await request.json().catch(() => ({}))) as { reason?: string; token?: string };
       const reason = typeof body.reason === "string" && body.reason.length > 0 ? body.reason : "operator pause";
-      await fleetControl(env).pause(reason.slice(0, 200));
+      const token = typeof body.token === "string" && body.token.length > 0 ? body.token : "operator";
+      const result = await fleetControl(env).pause(reason.slice(0, 200), token.slice(0, 80));
+      if (!result.ok) {
+        return errorResponse(409, "fleet_already_paused", `held since ${result.at}: ${result.reason}`);
+      }
       return json({ ok: true, paused: true, reason });
     }
     if (url.pathname === "/resume" && request.method === "POST") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
       if (denied) return denied;
-      await fleetControl(env).resume();
-      return json({ ok: true, paused: false });
+      const body = (await request.json().catch(() => ({}))) as { token?: string; force?: boolean };
+      const token = typeof body.token === "string" && body.token.length > 0 ? body.token : "operator";
+      const result = await fleetControl(env).resume(token.slice(0, 80), body.force === true);
+      if (!result.ok) {
+        return errorResponse(409, "pause_held_elsewhere", "another holder's pause; pass force to override");
+      }
+      return json({ ok: true, paused: false, wasPaused: result.wasPaused });
     }
 
     const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);

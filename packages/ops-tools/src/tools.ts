@@ -126,22 +126,34 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: "Pause new wake starts",
     description:
       "Defer every NEW wake (cron fires again at its next cadence; manual wakes answer with the reason) without touching wakes in flight. The deploy drain uses this; lift with fleet_resume. Distinct from agent_disable, which is the kill switch and destroys a running wake.",
-    input: z.object({ reason: z.string().min(1).max(200) }),
+    input: z.object({
+      reason: z.string().min(1).max(200),
+      token: z.string().min(1).max(80).optional().describe("holder token; deploys pass their own, operators omit")
+    }),
     readOnly: false,
     decision: true,
     handler: (input, context) => {
-      const { reason } = input as { reason: string };
-      return context.scheduler("POST", "/pause", { body: { reason } });
+      const { reason, token } = input as { reason: string; token?: string };
+      return context.scheduler("POST", "/pause", { body: { reason, ...(token !== undefined ? { token } : {}) } });
     }
   },
   {
     name: "fleet_resume",
     title: "Resume wake starts",
-    description: "Lift a fleet_pause; the next cron cadence fires normally.",
-    input: z.object({}),
+    description:
+      "Lift a fleet_pause; the next cron cadence fires normally. A pause held by a deploy resumes only with its token or with force: true (the operator override for a stuck deploy).",
+    input: z.object({
+      token: z.string().min(1).max(80).optional(),
+      force: z.boolean().optional()
+    }),
     readOnly: false,
     decision: true,
-    handler: (_input, context) => context.scheduler("POST", "/resume", {})
+    handler: (input, context) => {
+      const { token, force } = input as { token?: string; force?: boolean };
+      return context.scheduler("POST", "/resume", {
+        body: { ...(token !== undefined ? { token } : {}), ...(force !== undefined ? { force } : {}) }
+      });
+    }
   },
   {
     name: "agent_disable",

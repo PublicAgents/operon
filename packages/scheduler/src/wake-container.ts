@@ -45,6 +45,7 @@ export type LaunchResult =
   | { status: "started"; wakeId: string }
   | { status: "locked"; wakeId: string; startedAt: string; stale: boolean }
   | { status: "disabled" }
+  | { status: "paused"; detail: string }
   | { status: "error"; error: string };
 
 interface WakeEnv {
@@ -88,6 +89,23 @@ export class WakeContainer extends DurableObject<WakeEnv> {
   async launch(args: LaunchArgs): Promise<LaunchResult> {
     if (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) {
       return { status: "disabled" };
+    }
+    // The fleet pause re-checked HERE, adjacent to registration: the
+    // scheduler's early check races a pause that lands during launch
+    // preparation, and a wake that registered nothing yet would be
+    // invisible to the deploy drain's quiet check. Refusing at the
+    // door keeps "no current wakes" and "no wake about to start"
+    // the same fact (spec 0006 §5).
+    const fleet = (this.env as { FLEET_CONTROL?: DurableObjectNamespace }).FLEET_CONTROL;
+    if (fleet) {
+      const state = await (
+        fleet.get(fleet.idFromName("fleet")) as unknown as {
+          state(): Promise<{ paused: boolean; reason?: string }>;
+        }
+      ).state();
+      if (state.paused) {
+        return { status: "paused", detail: state.reason ?? "fleet paused" };
+      }
     }
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (current) {

@@ -156,21 +156,27 @@ async function opsCall(manifest, tool, body) {
 }
 
 /**
- * Spec 0006 §5: PAUSE new wake starts (fleet_pause defers, it never
- * touches a wake in flight; the kill switch is a different tool for a
- * different job), then wait for the current-wake set to empty.
+ * Spec 0006 §5: wait for the current-wake set to be empty on two
+ * consecutive polls (the fleet is already paused by the caller; the
+ * double read plus the launch-level pause check in the scheduler
+ * closes the register-in-flight window). Throws rather than exits, so
+ * the caller's finally always gets to resume.
  */
-async function drain(manifest) {
-  await opsCall(manifest, "fleet-pause", { reason: "deploy: wake image rolling" });
-  console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
+async function waitForQuiet(manifest) {
   const deadline = Date.now() + 45 * 60 * 1000;
+  let quietOnce = false;
   for (;;) {
     const { agents: now } = await opsCall(manifest, "agents-list");
     const running = now.filter(agent => agent.currentWake).map(agent => agent.id);
-    if (running.length === 0) return;
-    if (Date.now() > deadline) fail(`drain timed out; still running: ${running.join(", ")}`);
-    console.log(`  waiting for wakes to finish: ${running.join(", ")}`);
-    await new Promise(resolve => setTimeout(resolve, 30_000));
+    if (running.length === 0) {
+      if (quietOnce) return;
+      quietOnce = true;
+    } else {
+      quietOnce = false;
+      console.log(`  waiting for wakes to finish: ${running.join(", ")}`);
+    }
+    if (Date.now() > deadline) throw new Error(`drain timed out; still running: ${running.join(", ")}`);
+    await new Promise(resolve => setTimeout(resolve, quietOnce ? 10_000 : 30_000));
   }
 }
 
@@ -219,6 +225,7 @@ for (const manifest of manifests) {
   const sourceHash = containerSourceHash();
   const liveHash = await liveContainerHash(manifest);
   const imageChanges = liveHash !== sourceHash;
+  const drainToken = `deploy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   let paused = false;
   if (imageChanges && !noDrain) {
     if (liveHash === null) {
@@ -227,14 +234,15 @@ for (const manifest of manifests) {
       console.log(`container source changed (${liveHash} -> ${sourceHash}); draining before the image rolls`);
     }
     try {
-      await drain(manifest);
+      await opsCall(manifest, "fleet-pause", { reason: "deploy: wake image rolling", token: drainToken });
       paused = true;
+      console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
     } catch (error) {
       fail(
-        `cannot drain (${String(error.message ?? error).slice(0, 200)})\n` +
-          `Deploying the scheduler would roll the wake image and kill running wakes.\n` +
+        `cannot pause the fleet (${String(error.message ?? error).slice(0, 200)})\n` +
+          `Deploying would roll the wake image and kill running wakes.\n` +
           `Provide ops access (OPERON_OPS_URL + CF_ACCESS_CLIENT_ID/SECRET or cloudflared login),\n` +
-          `or pass --no-drain to proceed anyway, killing whatever is running.`
+          `wait if another deploy holds the pause, or pass --no-drain to kill whatever is running.`
       );
     }
   } else if (!imageChanges) {
@@ -243,8 +251,13 @@ for (const manifest of manifests) {
     console.log("--no-drain: proceeding without draining; running wakes may be killed by the image roll");
   }
 
+  // Everything after a successful pause runs under one try: whatever
+  // fails (the quiet wait included), the finally resumes THIS deploy's
+  // pause by token, so no failure mode leaves the fleet refusing wakes
+  // and no overlapping deploy gets its pause released from under it.
   const rosterVar = JSON.stringify({ zone: manifest.roster.zone, agents: manifest.roster.agents });
   try {
+    if (paused) await waitForQuiet(manifest);
     for (const key of DEPLOY_ORDER) {
       console.log(`\n→ deploying ${manifest.project}/${key}`);
       execFileSync(
@@ -254,10 +267,8 @@ for (const manifest of manifests) {
       );
     }
   } finally {
-    // The resume is unconditional once paused: a failed deploy must
-    // never leave the fleet silently refusing wakes.
     if (paused) {
-      await opsCall(manifest, "fleet-resume").then(
+      await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
         () => console.log("  fleet resumed"),
         error => console.error(`  RESUME FAILED, wakes stay paused: run fleet_resume by hand (${error})`)
       );
