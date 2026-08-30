@@ -237,7 +237,18 @@ for (const manifest of manifests) {
     if (paused) {
       resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
         () => (console.log("  fleet resumed"), false),
-        error => (console.error(`  RESUME FAILED: ${error}`), true)
+        error => (
+          // Full recovery instructions HERE, inside the finally: when
+          // the deploy itself also threw, its exception propagates past
+          // the post-loop check and this is the only line the operator
+          // sees about the stuck pause.
+          console.error(
+            `  RESUME FAILED, the fleet is STILL PAUSED and wakes are deferred.\n` +
+              `  Recover with the fleet_resume tool (force: true) on the ops console or API.\n` +
+              `  (${error})`
+          ),
+          true
+        )
       );
     }
   }
