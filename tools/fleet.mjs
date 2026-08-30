@@ -207,9 +207,16 @@ for (const manifest of manifests) {
       paused = true;
       console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
     } catch (error) {
+      // The pause may have COMMITTED with its response lost. The
+      // tokened resume is the safe probe-and-undo: it clears exactly a
+      // pause held by OUR token, is refused for another holder's, and
+      // is a no-op when none exists.
+      await opsCall(manifest, "fleet-resume", { token: drainToken }).catch(() => undefined);
       fail(
         `cannot pause the fleet (${String(error.message ?? error).slice(0, 200)})\n` +
-          `Deploying may roll the wake image and kill running wakes.\n` +
+          `A best-effort resume for this deploy's token was attempted in case the pause\n` +
+          `committed with a lost response; verify with agents-list (paused field) and\n` +
+          `recover with fleet_resume (force: true) if wakes are still deferred.\n` +
           `Provide ops access (OPERON_OPS_URL + CF_ACCESS_CLIENT_ID/SECRET or cloudflared login),\n` +
           `wait if another deploy holds the pause, or pass --no-drain to kill whatever is running.`
       );
