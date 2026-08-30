@@ -85,7 +85,13 @@ PUBLISHING AND MONEY
                                          through the spend Gatekeeper (you
                                          never hold a key); a FIRST payment to
                                          a new merchant is held for the
-                                         operator${mark(caps.pay)}
+                                         operator, and so is an ABOVE-CAP
+                                         payment (operator approval mints a
+                                         one-time allowance; settle it by
+                                         re-running the SAME pay)${mark(caps.pay)}
+  operon pay proposals                   your pending holds and unspent
+                                         allowances, across wakes: check here
+                                         BEFORE re-asking the operator${mark(caps.pay)}
 
 SECRETS THAT SURVIVE WAKES (never the repo; hard rule 7)
   operon vault set <label> --value <v>   store/update (or pipe value on stdin)${mark(caps.vault)}

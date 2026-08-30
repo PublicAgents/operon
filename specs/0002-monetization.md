@@ -96,6 +96,37 @@ adversarially reviewed into robustness:
   confirms no charge landed before the retry is permitted. One logical
   purchase maps to one outbox row for its whole life, however many
   network exchanges it takes.
+- **Above-cap payments hold, then settle by one-time allowance** (the
+  operon#59 shape). A payment that exceeds the per-transaction or daily
+  cap is not rejected outright when it fits under an operator-configured
+  hold ceiling (`SPEND_HOLD_MAX`; unset means the feature is off and
+  over-cap pays reject as before): it is HELD as a spend proposal with
+  the decoded challenge (amount, currency, recipient), the agent's
+  reason, and the same approve/reject surface as every other hold. An
+  above-cap payment to a NEW merchant is ONE hold, not two. Approval
+  moves no money: challenges expire in minutes and wakes are hours
+  apart, so approval mints a ONE-TIME ALLOWANCE keyed on (origin,
+  method, recipient, currency, max amount = the held challenge amount,
+  expiry `SPEND_ALLOWANCE_DAYS`, default 7) and, when the merchant was
+  new, approves the tuple in the same act. The agent settles by
+  re-running the same pay: a fresh challenge matching an unspent,
+  unexpired allowance (same tuple and currency, amount at or under the
+  allowance max) consumes it atomically with the outbox reservation and
+  is exempt from the per-transaction and daily caps; it counts against
+  nothing else, so normal cap-bounded spending is not squeezed by an
+  approved settlement. An allowance is one-time and fails safe:
+  consumed is consumed, even if the payment later releases, and a new
+  settlement takes a new proposal. The operator can list and REVOKE
+  unspent allowances at any time; every mint, consume, revoke, and
+  expiry-lapse is ledgered TRANSACTIONALLY: the audit event commits in
+  the same Durable Object turn as the state change it describes, so a
+  transition without its record (or a record without its transition)
+  is unrepresentable, and events drain to the activity ledger as an
+  at-least-once mirror (a duplicate mirrored row is benign, a lost one
+  impossible). Settlement outcomes are judged from the
+  receipt the rail returns, never from a client library's happy path
+  (a parser error over a mined transaction is outcome_unknown, not
+  failure).
 - **Everything ledgered before and after**: a durable outbox row for the
   attempt in the same DO turn as the reservation, a receipt row on
   success. A payment can never occur without an operator-visible record.

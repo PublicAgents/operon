@@ -44,6 +44,37 @@ export class Ledger extends DurableObject {
     return row;
   }
 
+  /**
+   * Idempotent append for MIRRORED rows: the caller supplies the row's
+   * time and a stable key (the source event's id), so a replayed
+   * mirror finds the row already present and writes nothing, chronicle
+   * side-effect included. Returns whether a row was written.
+   */
+  async appendIdempotent(
+    kind: string,
+    detail: Record<string, unknown>,
+    at: string,
+    key: string
+  ): Promise<boolean> {
+    const storageKey = `row:${at}:${key}`;
+    if ((await this.ctx.storage.get(storageKey)) !== undefined) return false;
+    const row: LedgerRow = { at, kind, detail };
+    await this.ctx.storage.put(storageKey, row);
+    const chronicle = (this.env as { CHRONICLE?: D1Database }).CHRONICLE;
+    if (chronicle) {
+      this.ctx.waitUntil(
+        recordEvent(chronicle, {
+          at,
+          gatekeeper: this.ctx.id.name ?? "unknown",
+          kind,
+          agentId: typeof detail.agentId === "string" ? detail.agentId : undefined,
+          detail
+        })
+      );
+    }
+    return true;
+  }
+
   async recent(limit = 100): Promise<LedgerRow[]> {
     const entries = await this.ctx.storage.list<LedgerRow>({
       prefix: "row:",

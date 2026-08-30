@@ -170,3 +170,60 @@ export function summarizeChallenge(
     description: challenge.description
   };
 }
+
+export interface Allowance {
+  id: string;
+  agentId: string;
+  /** The exact pay URL the operator approved; consumption binds to it. */
+  url: string;
+  origin: string;
+  method: string;
+  recipient: string;
+  currency: string;
+  /** Ceiling in base units (the held challenge amount the operator approved). */
+  maxAmount: string;
+  decimals: number;
+  display: string;
+  mintedAt: string;
+  expiresAt: string;
+  /** Set when consumed; carries the outbox row that spent it. */
+  consumedAt?: string;
+  outboxId?: string;
+  /** Set when the operator revoked it unspent. */
+  revokedAt?: string;
+  /**
+   * Set when the expiry lapse was recorded (terminal). Matching refuses
+   * it independently of timestamps: a payment carrying a pre-expiry
+   * timestamp must not consume an allowance whose expiry is already on
+   * the record.
+   */
+  expiryLedgered?: boolean;
+}
+
+/**
+ * Whether an allowance authorizes THIS fresh challenge: same tuple and
+ * currency, amount at or under the approved ceiling, unspent, unrevoked,
+ * unexpired. Pure so the decision is unit-tested; the DO makes the
+ * consume atomic.
+ */
+export function allowanceMatches(
+  allowance: Allowance,
+  agentId: string,
+  url: string,
+  summary: ChallengeSummary,
+  nowIso: string
+): boolean {
+  return (
+    allowance.consumedAt === undefined &&
+    allowance.revokedAt === undefined &&
+    allowance.expiryLedgered !== true &&
+    allowance.expiresAt > nowIso &&
+    allowance.agentId === agentId &&
+    allowance.url === url &&
+    allowance.origin === summary.origin &&
+    allowance.method === summary.method &&
+    allowance.recipient.toLowerCase() === summary.recipient.toLowerCase() &&
+    allowance.currency.toLowerCase() === summary.currency.toLowerCase() &&
+    BigInt(summary.amount) <= BigInt(allowance.maxAmount)
+  );
+}

@@ -8,15 +8,14 @@ import { errorResponse, json, readJson, requireBearer, Ledger,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
   type TelegramGatewayBinding, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
-import { SpendLedger } from "./spend-do.js";
+import { SpendLedger , type HeldPayment } from "./spend-do.js";
 import {
   parseCurrencyMap,
   spendTokenVar,
   summarizeChallenge,
   toBaseUnits,
   validatePayUrl,
-  type ChallengeSummary
-} from "./policy.js";
+  type ChallengeSummary, type Allowance } from "./policy.js";
 
 export { Ledger, SpendLedger };
 export * from "./policy.js";
@@ -33,6 +32,10 @@ export * from "./policy.js";
 interface Env {
   ROSTER: string;
   SPEND_MAX_TX?: string;
+  /** Ceiling for HOLDABLE above-cap proposals (display units); unset = feature off. */
+  SPEND_HOLD_MAX?: string;
+  /** One-time allowance lifetime in days (default 7). */
+  SPEND_ALLOWANCE_DAYS?: string;
   SPEND_DAILY_CAP?: string;
   SPEND_TESTNET?: string;
   /** Known assets as "0xaddr=decimals,...": the spend-side currency map. */
@@ -177,6 +180,16 @@ interface PayContext {
   url: string;
   maxAmountDisplay: string;
   reason: string;
+  /**
+   * When set, an over-cap challenge holds as a spend proposal (kind
+   * above_cap) instead of refusing; unset on approval-time executions
+   * where re-holding would loop.
+   */
+  holdPayment?: Omit<HeldPayment, "id" | "queuedAt" | "claimed">;
+  /** Approval-time execution of a specific held proposal (see decidePay). */
+  forbidAllowanceConsumption?: boolean;
+  /** The hold whose approval is executing; stamped on the outbox row. */
+  approvalHeldId?: string;
 }
 
 /**
@@ -194,29 +207,60 @@ async function executePayment(
   const maxAmount = toBaseUnits(context.maxAmountDisplay, summary.decimals);
   if (maxAmount === null) return errorResponse(400, "invalid_max_amount");
   const at = new Date().toISOString();
+  const row = {
+    agentId: context.agent.id,
+    ...(context.approvalHeldId !== undefined ? { heldId: context.approvalHeldId } : {}),
+    url: context.url,
+    origin: summary.origin,
+    method: summary.method,
+    recipient: summary.recipient,
+    currency: summary.currency,
+    amount: summary.amount,
+    reason: context.reason,
+    at
+  };
   const caps = {
     maxAmount: maxAmount.toString(),
     maxTx: (toBaseUnits(env.SPEND_MAX_TX ?? "0.10", summary.decimals) ?? 0n).toString(),
     dailyCap: (toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", summary.decimals) ?? 0n).toString()
   };
-  const reservation = await spendLedger(env).reserve(
-    {
-      agentId: context.agent.id,
-      url: context.url,
-      origin: summary.origin,
-      method: summary.method,
-      recipient: summary.recipient,
-      currency: summary.currency,
-      amount: summary.amount,
-      reason: context.reason,
-      at
-    },
-    caps
+  // The reserve-or-allowance-or-hold decision is ONE serialized DO turn
+  // (spec 0002 §2.2): no worker-side classification can go stale between
+  // reading the budget and reserving against it. Expiry lapses observed
+  // by this payment path are ledgered first (at-least-once).
+  await spendLedger(env).sweepExpired(at);
+  const holdMaxBase = context.holdPayment && env.SPEND_HOLD_MAX
+    ? toBaseUnits(env.SPEND_HOLD_MAX, summary.decimals)
+    : null;
+  const decision = await spendLedger(env).decidePay(
+    row,
+    caps,
+    summary,
+    context.holdPayment && holdMaxBase !== null
+      ? { payment: context.holdPayment, holdMax: holdMaxBase.toString() }
+      : null,
+    { forbidAllowanceConsumption: context.forbidAllowanceConsumption === true }
   );
-  if (!reservation.ok) {
-    await ledger(env).append("pay_refused", { agentId: context.agent.id, url: context.url, problem: reservation.problem });
-    return errorResponse(422, reservation.problem);
+  if (decision.outcome === "held") {
+    await mirrorSpendEvents(env);
+    if (!decision.deduped) {
+      await notifyOperator(
+        env,
+        `[${context.agent.id}] ABOVE-CAP payment to ${summary.origin} HELD: ${summary.display} (${summary.method}) to ${summary.recipient}\nApproval mints a one-time allowance; the agent settles by re-running the pay.\nReason: ${context.reason}`,
+        [
+          { label: "Approve", kind: "spend_approve", agentId: context.agent.id, id: decision.held.id },
+          { label: "Reject", kind: "spend_reject", agentId: context.agent.id, id: decision.held.id }
+        ]
+      );
+    }
+    return json({ ok: true, status: "held_for_approval", heldId: decision.held.id, challenge: summary });
   }
+  if (decision.outcome === "refused") {
+    await mirrorSpendEvents(env);
+    return errorResponse(422, decision.problem);
+  }
+  await mirrorSpendEvents(env);
+  const reservation = { ok: true as const, outboxId: decision.outboxId };
 
   if (!env.MPP_PRIVATE_KEY) {
     await spendLedger(env).settle(reservation.outboxId, "released", "spend_unconfigured");
@@ -411,7 +455,7 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
   if (!approved) {
     const maxBase = toBaseUnits(maxAmount, summary.decimals);
     if (maxBase === null) return errorResponse(400, "invalid_max_amount");
-    const held = await spendLedger(env).hold(
+    const { held, deduped } = await spendLedger(env).hold(
       {
         agentId: agent.id,
         url,
@@ -427,19 +471,69 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
       },
       new Date().toISOString()
     );
-    await ledger(env).append("pay_held", { agentId: agent.id, url, origin: summary.origin, heldId: held.id });
-    await notifyOperator(
-      env,
-      `[${agent.id}] first payment to ${summary.origin} HELD: ${summary.display} (${summary.method}) to ${summary.recipient}\nReason: ${reason}`,
-      [
-        { label: "Approve", kind: "spend_approve", agentId: agent.id, id: held.id },
-        { label: "Reject", kind: "spend_reject", agentId: agent.id, id: held.id }
-      ]
-    );
+    if (!deduped) {
+      await ledger(env).append("pay_held", { agentId: agent.id, url, origin: summary.origin, heldId: held.id });
+      await notifyOperator(
+        env,
+        `[${agent.id}] first payment to ${summary.origin} HELD: ${summary.display} (${summary.method}) to ${summary.recipient}\nReason: ${reason}`,
+        [
+          { label: "Approve", kind: "spend_approve", agentId: agent.id, id: held.id },
+          { label: "Reject", kind: "spend_reject", agentId: agent.id, id: held.id }
+        ]
+      );
+    }
     return json({ ok: true, status: "held_for_approval", heldId: held.id, challenge: summary });
   }
 
-  return executePayment(env, { agent, url, maxAmountDisplay: maxAmount, reason }, summary);
+  // Approved merchant: the reserve-or-allowance-or-hold decision runs
+  // atomically inside executePayment's DO turn. The hold payload rides
+  // along so an over-cap challenge becomes a spend proposal instead of
+  // a refusal (feature off without SPEND_HOLD_MAX).
+  return executePayment(
+    env,
+    {
+      agent,
+      url,
+      maxAmountDisplay: maxAmount,
+      reason,
+      holdPayment: {
+        agentId: agent.id,
+        url,
+        origin: summary.origin,
+        method: summary.method,
+        recipient: summary.recipient,
+        currency: summary.currency,
+        amount: summary.amount,
+        decimals: summary.decimals,
+        display: summary.display,
+        maxAmount,
+        reason,
+        kind: "above_cap"
+      }
+    },
+    summary
+  );
+}
+
+/**
+ * Mirror the SpendLedger's transactional audit events into the activity
+ * ledger, at-least-once: each event was committed in the SAME DO turn
+ * as the state change it describes, so a transition without its record
+ * is unrepresentable; the mirror only moves records, acking each batch
+ * after it lands (a failed mirror drains again on the next call, and a
+ * duplicate mirrored row after a failed ack is benign).
+ */
+async function mirrorSpendEvents(env: Env): Promise<void> {
+  try {
+    const events = await spendLedger(env).drainEvents();
+    if (events.length === 0) return;
+    for (const event of events) {
+      await ledger(env).appendIdempotent(event.kind, { ...event.detail, eventId: event.id }, event.at, event.id);
+    }
+    await spendLedger(env).ackEvents(events.map(event => event.id));
+  } catch (error) {
+    console.error("spend event mirror deferred", error);
+  }
 }
 
 async function handleDecision(request: Request, env: Env, approve: boolean): Promise<Response> {
@@ -450,18 +544,41 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
   if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
 
-  const held = await spendLedger(env).claimHeld(heldId);
-  if (!held) return errorResponse(409, "held_unavailable");
   if (!approve) {
-    await spendLedger(env).deleteHeld(heldId);
-    await ledger(env).append("pay_rejected", { agentId: agent.id, heldId, origin: held.origin });
+    // Rejection is one atomic DO turn with NO claim gate: the hold
+    // (claimed or not), any allowance minted for it, and every audit
+    // event commit together; a consumption racing the rejection reports
+    // already_consumed instead of a clean rejection.
+    const at = new Date().toISOString();
+    const outcome = await spendLedger(env).rejectHold(heldId, agent.id, at);
+    await mirrorSpendEvents(env);
+    if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
+    if (outcome.status === "approval_in_flight") return errorResponse(409, "approval_in_flight");
+    if (outcome.status === "approval_paid") return errorResponse(409, "approval_already_paid");
+    if (outcome.status === "already_consumed") return json({ ok: true, status: "already_consumed" });
     return json({ ok: true, status: "rejected" });
   }
+
+  const held = await spendLedger(env).claimHeld(heldId);
+  if (!held) return errorResponse(409, "held_unavailable");
   // The approval BINDS the tuple exactly as held (spec §2.2): origin,
-  // method, and recipient. A future challenge differing in any of the
-  // three is a new hold, not a payable request.
-  await spendLedger(env).approveTuple(held);
-  await ledger(env).append("tuple_approved", { agentId: agent.id, origin: held.origin, recipient: held.recipient });
+  // method, and recipient. The grant revalidates the hold in its own
+  // DO turn (a rejection that raced this approval wins, and the tuple
+  // stays unapproved) and commits with its event.
+  const grant = await spendLedger(env).approveTupleForHold(heldId, new Date().toISOString());
+  await mirrorSpendEvents(env);
+  if (grant === "hold_gone") return errorResponse(409, "rejected_meanwhile");
+
+  // An over-cap hold (explicitly above_cap, or a first-merchant hold
+  // whose amount the per-tx cap plainly refuses) settles by ALLOWANCE:
+  // nothing moves at approval, because the held challenge is minutes
+  // stale and the wallet may not be funded yet. The agent re-runs the
+  // pay; a fresh matching challenge consumes the allowance.
+  const maxTx = toBaseUnits(env.SPEND_MAX_TX ?? "0.10", held.decimals) ?? 0n;
+  if (held.kind === "above_cap" || BigInt(held.amount) > maxTx) {
+    return mintAllowanceForHeld(env, agent.id, heldId, held);
+  }
+
   const summary: ChallengeSummary = {
     origin: held.origin,
     method: held.method,
@@ -473,7 +590,14 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   };
   const response = await executePayment(
     env,
-    { agent, url: held.url, maxAmountDisplay: held.maxAmount, reason: held.reason },
+    {
+      agent,
+      url: held.url,
+      maxAmountDisplay: held.maxAmount,
+      reason: held.reason,
+      forbidAllowanceConsumption: true,
+      approvalHeldId: heldId
+    },
     summary
   );
   if (response.ok) {
@@ -482,10 +606,78 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     } catch (error) {
       console.error("held cleanup failed after payment (claimed, will not re-pay)", error);
     }
-  } else {
-    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
+    return response;
   }
+  // The serialized reservation is the ONLY budget authority: when it
+  // refuses the approval-time execution on a cap (say, the day's budget
+  // moved between the hold and the click), the approval still stands
+  // and settles by allowance instead. No worker-side pre-read can be
+  // current, so the fallback is driven by the outcome, not a forecast.
+  if (response.status === 422) {
+    try {
+      const body = (await response.clone().json()) as { error?: string };
+      if (body.error === "over_tx_cap" || body.error === "over_daily_cap") {
+        return mintAllowanceForHeld(env, agent.id, heldId, held);
+      }
+    } catch {
+      /* unreadable body: fall through to unclaim */
+    }
+  }
+  await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
   return response;
+}
+
+/**
+ * Turn an approved hold into a one-time allowance (spec 0002 §2.2) and
+ * retire the hold. Nothing moves here; the agent settles by re-running
+ * the pay.
+ */
+async function mintAllowanceForHeld(
+  env: Env,
+  agentId: string,
+  heldId: string,
+  held: HeldPayment
+): Promise<Response> {
+  const days = Number(env.SPEND_ALLOWANCE_DAYS);
+  const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;
+  const now = Date.now();
+  const allowance: Allowance = {
+    // The hold's id: one hold mints at most one allowance, and a retry
+    // after a lost response finds the SAME record instead of minting a
+    // twin authorization under a fresh random id.
+    id: heldId,
+    agentId,
+    url: held.url,
+    origin: held.origin,
+    method: held.method,
+    recipient: held.recipient,
+    currency: held.currency,
+    maxAmount: held.amount,
+    decimals: held.decimals,
+    display: held.display,
+    mintedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
+  };
+  // The hold revalidation, the mint, its allowance_minted event, and
+  // the hold's retirement commit in one DO turn (the transactional
+  // event log): a rejection that raced this approval leaves no hold,
+  // and the mint then refuses instead of creating authority for a
+  // rejected payment.
+  let outcome: "minted" | "exists" | "hold_gone";
+  try {
+    outcome = await spendLedger(env).mintForHold(allowance);
+  } catch (error) {
+    // Nothing committed: unclaim so the operator's retry can approve
+    // again. A mint that committed but lost its response answers
+    // "exists" on retry and is never re-recorded.
+    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
+    return errorResponse(500, "allowance_mint_failed", String(error).slice(0, 200));
+  }
+  await mirrorSpendEvents(env);
+  if (outcome === "hold_gone") {
+    return errorResponse(409, "rejected_meanwhile");
+  }
+  return json({ ok: true, status: "allowance_minted", allowance });
 }
 
 /** Reconcile an ambiguous outbox row (operator ruling). */
@@ -515,6 +707,24 @@ export default {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
       return json({ ok: true, outbox: await spendLedger(env).outbox(agent.id) });
+    }
+    // Cross-wake visibility (spec §2.2): a memoryless agent can see its
+    // own pending holds and unspent allowances without asking the
+    // operator what happened while it slept.
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/proposals") {
+      const agent = agentFromBearer(request, env);
+      if (!agent) return errorResponse(401, "unauthorized");
+      const now = new Date().toISOString();
+      await spendLedger(env).sweepExpired(now);
+      await mirrorSpendEvents(env);
+      const held = (await spendLedger(env).listHeld()).filter(row => row.agentId === agent.id);
+      const allowances = (await spendLedger(env).listAllowances(agent.id)).filter(
+        allowance =>
+          allowance.consumedAt === undefined &&
+          allowance.revokedAt === undefined &&
+          allowance.expiresAt > now
+      );
+      return json({ ok: true, held, allowances });
     }
     return errorResponse(404, "not_found");
   }
@@ -581,6 +791,24 @@ export class Ops extends OpsEntrypoint<Env> {
     }
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/wallet") {
       return handleWallet(this.env);
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/allowances") {
+      await spendLedger(this.env).sweepExpired(new Date().toISOString());
+      await mirrorSpendEvents(this.env);
+      return json({ ok: true, allowances: await spendLedger(this.env).listAllowances() });
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/allowance-revoke") {
+      const body = await readJson<{ allowanceId?: string }>(request);
+      if (!body.ok || typeof body.value.allowanceId !== "string") {
+        return errorResponse(400, "invalid_request");
+      }
+      const at = new Date().toISOString();
+      // The revocation and its allowance_revoked event commit in one
+      // DO turn; the mirror drains it. A refused revocation (consumed,
+      // expired, gone) writes nothing, which is the truth.
+      const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
+      await mirrorSpendEvents(this.env);
+      return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
     return errorResponse(404, "not_found");
   }
