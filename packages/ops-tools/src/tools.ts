@@ -122,6 +122,28 @@ export const TOOLS: readonly ToolDefinition[] = [
     }
   },
   {
+    name: "fleet_pause",
+    title: "Pause new wake starts",
+    description:
+      "Defer every NEW wake (cron fires again at its next cadence; manual wakes answer with the reason) without touching wakes in flight. The deploy drain uses this; lift with fleet_resume. Distinct from agent_disable, which is the kill switch and destroys a running wake.",
+    input: z.object({ reason: z.string().min(1).max(200) }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) => {
+      const { reason } = input as { reason: string };
+      return context.scheduler("POST", "/pause", { body: { reason } });
+    }
+  },
+  {
+    name: "fleet_resume",
+    title: "Resume wake starts",
+    description: "Lift a fleet_pause; the next cron cadence fires normally.",
+    input: z.object({}),
+    readOnly: false,
+    decision: true,
+    handler: (_input, context) => context.scheduler("POST", "/resume", {})
+  },
+  {
     name: "agent_disable",
     title: "Disable an agent (kill switch)",
     description:

@@ -259,8 +259,16 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
             instance_type: { vcpu: 1, memory_mib: 3072, disk_mb: 4000 }
           }
         ],
-        durable_objects: { bindings: [{ name: "WAKE_CONTAINER", class_name: "WakeContainer" }] },
-        migrations: [{ tag: "v1", new_sqlite_classes: ["WakeContainer"] }],
+        durable_objects: {
+          bindings: [
+            { name: "WAKE_CONTAINER", class_name: "WakeContainer" },
+            { name: "FLEET_CONTROL", class_name: "FleetControl" }
+          ]
+        },
+        migrations: [
+          { tag: "v1", new_sqlite_classes: ["WakeContainer"] },
+          { tag: "v2", new_sqlite_classes: ["FleetControl"] }
+        ],
         // The wake_finished mirror writes chronicle rows directly; the
         // binding is named CHRONICLE_DB because CHRONICLE is the
         // chronicle gatekeeper's service binding above.

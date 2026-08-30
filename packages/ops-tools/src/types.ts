@@ -84,7 +84,7 @@ export interface ToolContext {
    * Call the scheduler's public control surface (the host attaches the
    * wake-trigger bearer). Same error semantics as ops().
    */
-  scheduler(method: OpsMethod, path: string): Promise<unknown>;
+  scheduler(method: OpsMethod, path: string, options?: { body?: unknown }): Promise<unknown>;
   /** The gateway's own operator audit ledger, most recent first. */
   auditRecent(limit: number): Promise<unknown>;
   /** Absent when CLOUDFLARE_API_TOKEN is not configured. */

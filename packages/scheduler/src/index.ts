@@ -6,6 +6,7 @@ import {
   type LaunchContext
 } from "./launch.js";
 import { WakeContainer } from "./wake-container.js";
+export { FleetControl } from "./fleet-control.js";
 import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };
@@ -26,6 +27,7 @@ const STALE_AFTER_MS = 45 * 60 * 1000;
 interface Env {
   /** Injected by the fleet deploy: the wake-image source hash (drain gating). */
   CONTAINER_SRC_HASH?: string;
+  FLEET_CONTROL: DurableObjectNamespace<import("./fleet-control.js").FleetControl>;
   ROSTER: string;
   WAKE_TRIGGER_TOKEN?: string;
   NOTIFY_URL?: string;
@@ -118,11 +120,26 @@ function launchContext(env: Env): LaunchContext {
   };
 }
 
+function fleetControl(env: Env) {
+  return env.FLEET_CONTROL.get(env.FLEET_CONTROL.idFromName("fleet"));
+}
+
 async function wake(
   env: Env,
   agent: RosterAgent,
   trigger: "cron" | "manual"
 ): Promise<{ status: string; wakeId?: string; detail?: string }> {
+  // The fleet pause (spec 0006 §5): a deploy drain defers NEW wakes and
+  // never touches one in flight. A paused cron fires again at its next
+  // cadence; manual wakes answer with the pause reason.
+  const pauseState = await fleetControl(env).state();
+  if (pauseState.paused) {
+    if (trigger === "manual") {
+      return { status: "paused", detail: `fleet paused: ${pauseState.reason}` };
+    }
+    console.log(`[${agent.id}] cron wake deferred: fleet paused (${pauseState.reason})`);
+    return { status: "paused", detail: pauseState.reason };
+  }
   const wakeId = crypto.randomUUID();
   const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
   try {
@@ -209,6 +226,21 @@ export default {
       return json(await wake(env, agent, "manual"));
     }
 
+    if (url.pathname === "/pause" && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const body = (await request.json().catch(() => ({}))) as { reason?: string };
+      const reason = typeof body.reason === "string" && body.reason.length > 0 ? body.reason : "operator pause";
+      await fleetControl(env).pause(reason.slice(0, 200));
+      return json({ ok: true, paused: true, reason });
+    }
+    if (url.pathname === "/resume" && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      await fleetControl(env).resume();
+      return json({ ok: true, paused: false });
+    }
+
     const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);
     if (toggleMatch && request.method === "POST") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
@@ -249,9 +281,11 @@ export default {
       // The container source hash the fleet deploy injected (spec 0006
       // §5): the drain gate compares it to the sources it is about to
       // deploy, so an unchanged image rolls nothing and skips draining.
+      const pauseState = await fleetControl(env).state();
       return json({
         zone: roster.zone,
         agents,
+        ...(pauseState.paused ? { paused: { at: pauseState.at, reason: pauseState.reason } } : {}),
         ...(typeof env.CONTAINER_SRC_HASH === "string" && env.CONTAINER_SRC_HASH.length > 0
           ? { containerHash: env.CONTAINER_SRC_HASH }
           : {})
