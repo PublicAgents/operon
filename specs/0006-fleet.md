@@ -5,7 +5,7 @@ design after living with the Phase 1 console. The goal, in the
 operator's words: starting a new project should boil down to adding a
 domain, adding git repos, and writing the goal and the charters, with
 one Cloudflare account, one chassis lineage, and one upgrade motion
-per project (independently pinned; see §9).
+per project (independently pinned; see §10).
 
 ## 1. The unit: `.operon/` in any repo
 
@@ -20,21 +20,24 @@ A PROJECT is a repository carrying an `.operon/` directory, the way
                      afterward: the state repo remains the living copy)
 ```
 
-The manifest's first required field is `project:`, the explicit,
-stable project name. It is never derived (a repo basename is neither
-unique nor stable), it seeds every account-level resource name (worker
-prefix `operon-<project>-*`, the D1 database, the Access application),
-and bootstrap refuses to proceed when resources under that prefix
-already exist and belong to a different repo: collisions are a
-hard error at the door, not a surprise at deploy.
+The manifest's first required field is `project:`, and it is THE
+project identity in every layout: never derived (a repo basename is
+neither unique nor stable), it alone seeds every account-level
+resource name (worker prefix `operon-<project>-*`, the D1 database)
+and every qualified agent name. Bootstrap refuses to proceed when
+resources under that prefix already exist and belong to a different
+repo: collisions are a hard error at the door, not a surprise at
+deploy.
 
 A repo may also host SEVERAL projects, as
-`.operon/projects/<name>/{operon.yaml, charters/}`; the deploy CLI
-takes `--project <name>` or acts on every project it finds. Projects
-sharing a repo share its chassis pin and therefore upgrade together,
-so co-locate projects you want in lockstep and give a project its own
-repo when it should pin independently (the §9 canary pattern needs
-that).
+`.operon/projects/<name>/{operon.yaml, charters/}`. The directory
+name MUST equal the manifest's `project` field, validation refuses a
+mismatch, and `--project <name>` therefore selects by the one
+identity there is; the deploy CLI acts on every project it finds when
+no selection is given. Projects sharing a repo share its chassis pin
+and therefore upgrade together, so co-locate projects you want in
+lockstep and give a project its own repo when it should pin
+independently (the §10 canary pattern needs that).
 
 The chassis stays a git submodule pinned by the project (the pin is
 the deploy gate, as today). The fleet is simply the set of repos that
@@ -85,7 +88,7 @@ Each project deploys its own full set of workers under its prefix
 (`operon-<project>-gatekeeper-*`), its own D1, its own Durable Object
 namespaces (which follow the workers automatically), its own zone, its
 own zone. Projects share an account, a chassis lineage, and the
-CONTROL PLANE (§8) and nothing else: no shared DO, no shared
+CONTROL PLANE (§9) and nothing else: no shared DO, no shared
 database, no shared secret store. The blast radius of any compromise or bug
 stays one project wide. Shared-runtime tenancy (projects inside one
 set of workers) is explicitly out of scope; if the fleet ever grows
@@ -107,11 +110,33 @@ a fresh domain into a running project using the account-scoped
 4. Report the secrets the manifest declares but the workers lack, as a
    checklist; the operator sets them via the gateway secrets tools.
 5. Deploy the project, then enroll it in the control plane and
-   redeploy the plane so its bindings exist (§8).
+   redeploy the plane so its bindings exist (§9).
 
 Idempotent: re-running converges and reports, never duplicates.
 
-## 5. Naming
+## 5. Deploys never kill running wakes
+
+The image rollout terminating live containers has cost real wakes
+(unjournaled work, an interrupted negotiation). The fleet deploy makes
+that structurally impossible instead of a timing gamble:
+
+- **Image rolls are content-gated**: the wake image rebuilds and rolls
+  ONLY when the container source between the old and new pin actually
+  changed (content hash). Worker-only deploys roll no containers and
+  can never touch a wake.
+- **When the image must roll, the deploy DRAINS first**: it asks the
+  scheduler to pause new wake starts (deferred crons are ledgered and
+  fire after), waits for the current-wake set to empty, bounded by the
+  colony's maximum wake length, then rolls, then unpauses. The
+  entrypoint's existing SIGTERM grace (persist, then die) remains the
+  last line, not the plan.
+- `--force` exists for emergencies, does not wait, and says plainly in
+  its output which wakes it is about to kill.
+- Fleet-wide bumps compose this per project: each project drains and
+  rolls independently, so one project's long wake never blocks
+  another's deploy.
+
+## 6. Naming
 
 - `agentId` is unique WITHIN a project, enforced by manifest
   validation. Nothing keyed by agent id crosses a project boundary.
@@ -131,7 +156,7 @@ Idempotent: re-running converges and reports, never duplicates.
   projects, and the operator should still avoid it, because
   counterparties bind reputation to the name.
 
-## 6. Doors per agent
+## 7. Doors per agent
 
 Whether an agent has a door (email, x, pay, till, vault, web, publish,
 github, notify) becomes explicit policy instead of an accident of
@@ -152,7 +177,7 @@ which secrets exist:
 - Granularity is door-level; per-subcommand policy is a compatible
   extension inside the same matrix if a need appears.
 
-## 7. Secrets across the fleet
+## 8. Secrets across the fleet
 
 The DEFAULT posture is per-project values for every secret, because a
 shared value extends that secret's blast radius fleet-wide by
@@ -170,9 +195,9 @@ always. The rotation-group machinery generalizes for the opted-in
 shared secrets: a group's member list may span project prefixes, so
 one rotation or `secrets sync` writes one value to every declared
 worker through the gateway API, per project against its own pinned
-schema (§9). Values never transit chat or logs, exactly as today.
+schema (§10). Values never transit chat or logs, exactly as today.
 
-## 8. The control plane: one console, one API, one MCP, one CLI
+## 9. The control plane: one console, one API, one MCP, one CLI
 
 There is ONE operator plane for the whole fleet, not one per project.
 The control plane is the ops worker generalized: it already speaks to
@@ -192,7 +217,7 @@ concepts retire.
   the console, the API, and `/mcp`. One MCP connection and one CLI
   configuration control the whole fleet. The console gains a project
   selector in the shell; a selected project is the resolution context
-  for unqualified names (§5), and live surfaces (wake tails, channel)
+  for unqualified names (§6), and live surfaces (wake tails, channel)
   ride the same `/ws/*` binding passthrough as today, per project.
 - **Enrollment is config, deployment is rendered**: the control plane
   is fleet-level infrastructure with its own small manifest (enrolled
@@ -200,26 +225,30 @@ concepts retire.
   declared at deploy time, so enrolling a project re-renders and
   redeploys the control plane; `operon bootstrap` for a new project
   ends by doing exactly that. Removal is the same motion in reverse.
-- **Version skew across bindings**: the control plane deploys from its
-  own chassis pin and its registry defines the advertised surface.
-  Gatekeeper `Ops` routes are additive across versions, so the rule is
-  simple: keep the control plane's pin at or ahead of the newest
-  enrolled project, and a tool aimed at an older project that lacks
-  the route fails with a named error naming the project's pin.
-  `fleet_projects` (each enrolled project and its pin) is a registry
-  tool like any other.
+- **Version skew across bindings is governed by a compatibility
+  contract, not hope.** Registry inputs and gatekeeper `Ops` routes
+  evolve ADDITIVELY within a control-plane major: new tools and new
+  OPTIONAL fields only, and gatekeepers ignore unknown optional
+  fields. The control plane deploys from its own pin, kept at or
+  ahead of the newest enrolled project, and validates with its own
+  registry; a tool or field an older project's pin lacks fails with a
+  named error carrying both pins, never a silent mismatch. A BREAKING
+  registry change declares a minimum project pin, and the control
+  plane refuses calls to projects below that floor by name.
+  `fleet_projects` reports each enrolled project's pin and any floors,
+  as a registry tool like any other.
 - **Blast radius, stated plainly**: one Access application now grants
   fleet-wide operator authority, which is the point and the price. The
   control plane sits in the crown-jewel tier beside the Cloudflare
   token; per-project containment is that bindings are explicit and
   removable per project by redeploying the plane.
 
-## 9. Version skew between projects
+## 10. Version skew between projects
 
 Projects pin the chassis independently, and the isolation model makes
 that safe: every project runtime artifact (workers, D1 schema, DO
 classes, the wake image) comes from the project's own pin and deploys
-on its own; the console ships with the control plane at ITS pin (§8).
+on its own; the console ships with the control plane at ITS pin (§9).
 Projects at different versions interact with nothing but the control
 plane, which is what makes CANARY BUMPS the normal upgrade motion:
 bump the control plane first, then a low-stakes project, watch it,
@@ -227,14 +256,14 @@ then roll the rest.
 
 The one discipline lives in fleet-level tooling: **no fleet operation
 assumes a single chassis version.** Cross-project tooling (secrets
-sync, cross-prefix rotation, the control plane itself per §8) iterates
+sync, cross-prefix rotation, the control plane itself per §9) iterates
 projects and respects each project's OWN pinned scripts and manifest
 schema, never a central copy at some other version. The only cross-version coupling
 permitted at all is convention rather than code: the qualified
 `project/agent` naming on shared surfaces, which is stable text with
 no schema to drift.
 
-## 10. Migrating a project between operon instances
+## 11. Migrating a project between operon instances
 
 Durable truth is portable by construction: agent memory is the state
 repo (git), money is on-chain and follows the wallet key (a secret the
@@ -267,7 +296,7 @@ from the same manifest and pin, re-set secrets with the same wallet
 key, import, re-point at the same state repos, re-enable agent by
 agent.
 
-## 11. Out of scope
+## 12. Out of scope
 
 - Shared-runtime tenancy (see §3).
 - Publishing the chassis as an installable package and prebuilt wake
@@ -275,7 +304,7 @@ agent.
   public.
 - Cross-project agent interaction of any kind.
 
-## 12. Order of work
+## 13. Order of work
 
 1. Manifest schema and template rendering in the chassis; `deploy
    --check` validation against the schema (the livevariant colony
