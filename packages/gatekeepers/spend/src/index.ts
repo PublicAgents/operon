@@ -528,14 +528,24 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
  */
 async function ledgerExpiredAllowances(env: Env, nowIso: string): Promise<void> {
   for (const lapsed of await spendLedger(env).lapsedUnledgered(nowIso)) {
-    await ledger(env).append("allowance_expired", {
-      agentId: lapsed.agentId,
-      allowanceId: lapsed.id,
-      origin: lapsed.origin,
-      display: lapsed.display,
-      expiresAt: lapsed.expiresAt
-    });
-    await spendLedger(env).markExpiryLedgered(lapsed.id);
+    // The claim re-verifies atomically in the DO: a payment that
+    // consumed this allowance since the read wins, and no expired row
+    // is written for it. On a failed append the claim is compensated
+    // so the lapse re-surfaces (at-least-once), and expiry audit never
+    // blocks the payment path it runs on.
+    if (!(await spendLedger(env).claimExpiry(lapsed.id, nowIso))) continue;
+    try {
+      await ledger(env).append("allowance_expired", {
+        agentId: lapsed.agentId,
+        allowanceId: lapsed.id,
+        origin: lapsed.origin,
+        display: lapsed.display,
+        expiresAt: lapsed.expiresAt
+      });
+    } catch (error) {
+      await spendLedger(env).unmarkExpiry(lapsed.id).catch(() => undefined);
+      console.error("allowance expiry audit deferred (append failed, claim compensated)", error);
+    }
   }
 }
 

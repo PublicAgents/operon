@@ -239,9 +239,37 @@ export class SpendLedger extends DurableObject {
     );
   }
 
-  async markExpiryLedgered(id: string): Promise<void> {
+  /**
+   * Atomically CLAIM one allowance's expiry for audit: re-verifies in
+   * the DO's serialized turn that it is still unconsumed, unrevoked,
+   * expired, and unclaimed (a payment that consumed it between the
+   * caller's read and this claim wins, and no allowance_expired row is
+   * written for a consumed allowance). Returns false when the claim
+   * loses; unmarkExpiry is the compensation when the caller's ledger
+   * append fails after a successful claim.
+   */
+  async claimExpiry(id: string, nowIso: string): Promise<boolean> {
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
-    if (allowance) await this.ctx.storage.put(`allow:${id}`, { ...allowance, expiryLedgered: true });
+    if (
+      !allowance ||
+      allowance.consumedAt !== undefined ||
+      allowance.revokedAt !== undefined ||
+      allowance.expiresAt > nowIso ||
+      (allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
+    ) {
+      return false;
+    }
+    await this.ctx.storage.put(`allow:${id}`, { ...allowance, expiryLedgered: true });
+    return true;
+  }
+
+  async unmarkExpiry(id: string): Promise<void> {
+    const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
+    if (allowance) {
+      const copy = { ...allowance } as Allowance & { expiryLedgered?: boolean };
+      delete copy.expiryLedgered;
+      await this.ctx.storage.put(`allow:${id}`, copy);
+    }
   }
 
   async listAllowances(agentId?: string): Promise<Allowance[]> {
