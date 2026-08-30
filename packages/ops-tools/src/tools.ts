@@ -330,6 +330,17 @@ export const TOOLS: readonly ToolDefinition[] = [
       context.ops("SPEND", "GET", "/gatekeeper/spend/outbox")
   },
   {
+    name: "spend_wallet",
+    title: "The spend wallet: address, chain, balances",
+    description:
+      "The colony spend wallet's ADDRESS (funding means sending to it; the key never leaves the Worker), the configured chain id, and a best-effort on-chain balance per allowlisted currency (null when the RPC read fails).",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("SPEND", "GET", "/gatekeeper/spend/wallet")
+  },
+  {
     name: "spend_held",
     title: "List payments awaiting approval",
     description:

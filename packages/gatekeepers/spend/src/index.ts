@@ -521,6 +521,77 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 /**
+ * The spend wallet, for the operator: the ADDRESS derived from the key
+ * (the key itself never leaves the Worker), the configured chain, and a
+ * best-effort on-chain balance for every currency in the colony's
+ * allowlist. Funding the wallet is sending to this address; there is
+ * deliberately no other way to touch it.
+ */
+/**
+ * Exact base-units-to-display formatting: BigInt arithmetic, no float,
+ * full precision with only trailing zeros trimmed (truncating would let
+ * a positive high-decimals balance display as zero).
+ */
+function formatUnits(raw: string, decimals: number): string {
+  const units = BigInt(raw);
+  const base = 10n ** BigInt(decimals);
+  const whole = units / base;
+  const fraction = (units % base).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
+}
+
+async function handleWallet(env: Env): Promise<Response> {
+  if (!env.MPP_PRIVATE_KEY) return errorResponse(503, "spend_unconfigured");
+  const address = privateKeyToAccount(env.MPP_PRIVATE_KEY as `0x${string}`).address;
+  const configuredChain = Number(env.SPEND_CHAIN_ID);
+  const chainId =
+    env.SPEND_TESTNET === "true"
+      ? 42431
+      : Number.isInteger(configuredChain) && configuredChain > 0
+        ? configuredChain
+        : null;
+  const currencies = [...parseCurrencyMap(env.SPEND_CURRENCIES).entries()];
+  const apiKey = typeof env.TEMPO_API_KEY === "string" && env.TEMPO_API_KEY.length > 0 ? env.TEMPO_API_KEY : null;
+  const rpcUrl = apiKey
+    ? `https://api.tempo.xyz/rpc/${chainId}`
+    : typeof env.SPEND_RPC_URL === "string" && env.SPEND_RPC_URL.length > 0
+      ? env.SPEND_RPC_URL
+      : null;
+  const balances = await Promise.all(
+    currencies.map(async ([currency, decimals]) => {
+      let raw: string | null = null;
+      if (rpcUrl && chainId !== null) {
+        try {
+          // balanceOf(address): selector 0x70a08231 + the address left-padded.
+          const data = `0x70a08231000000000000000000000000${address.slice(2).toLowerCase()}`;
+          const response = await fetch(rpcUrl, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "eth_call",
+              params: [{ to: currency, data }, "latest"]
+            })
+          });
+          const body = (await response.json()) as { result?: string };
+          if (typeof body.result === "string" && body.result.startsWith("0x")) {
+            raw = BigInt(body.result).toString();
+          }
+        } catch {
+          // Balance stays null: the address is the load-bearing fact.
+        }
+      }
+      return { currency, decimals, raw, display: raw === null ? null : formatUnits(raw, decimals) };
+    })
+  );
+  return json({ ok: true, address, chainId, balances });
+}
+
+/**
  * The operator's binding-only decision + read surface (spec 0003 step 3):
  * approve/reject/reconcile a hold, the full outbox, and the ledger. No
  * bearer, the service binding is the authorization.
@@ -545,6 +616,9 @@ export class Ops extends OpsEntrypoint<Env> {
     }
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/ledger") {
       return json(await ledger(this.env).recent());
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/wallet") {
+      return handleWallet(this.env);
     }
     return errorResponse(404, "not_found");
   }
