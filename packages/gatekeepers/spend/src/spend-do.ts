@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { checkCaps, tupleKey, type CapProblem, type MerchantTuple } from "./policy.js";
+import { allowanceMatches, checkCaps, tupleKey, type Allowance, type CapProblem, type ChallengeSummary, type MerchantTuple } from "./policy.js";
 
 /**
  * One SpendLedger Durable Object per colony: approved merchant tuples,
@@ -24,6 +24,8 @@ export interface OutboxRow {
   status: "reserved" | "paid" | "released" | "outcome_unknown";
   receipt?: string;
   detail?: string;
+  /** Set when this attempt spent a one-time allowance (cap-exempt). */
+  allowanceId?: string;
 }
 
 export interface HeldPayment {
@@ -41,6 +43,12 @@ export interface HeldPayment {
   reason: string;
   queuedAt: string;
   claimed?: boolean;
+  /**
+   * Why it is held: a first payment to a new merchant, or a payment over
+   * the caps (spec 0002 §2.2 allowance flow). Missing means "merchant"
+   * (rows held before the field existed).
+   */
+  kind?: "merchant" | "above_cap";
 }
 
 function day(at: string): string {
@@ -109,7 +117,9 @@ export class SpendLedger extends DurableObject {
     if (!found) return;
     const { key, row } = found;
     if (row.status !== "reserved" && row.status !== "outcome_unknown") return;
-    if (status === "released") {
+    // Allowance-spent rows never touched the daily counter, so a release
+    // must not decrement it (and the allowance stays consumed: fails safe).
+    if (status === "released" && row.allowanceId === undefined) {
       const spentKey = `spent:${row.agentId}:${day(row.at)}`;
       const spent = BigInt((await this.ctx.storage.get<string>(spentKey)) ?? "0");
       const reduced = spent - BigInt(row.amount);
@@ -167,5 +177,59 @@ export class SpendLedger extends DurableObject {
   async listHeld(): Promise<HeldPayment[]> {
     const entries = await this.ctx.storage.list<HeldPayment>({ prefix: "held:" });
     return [...entries.values()];
+  }
+
+  // ---- one-time allowances (spec 0002 §2.2, the operon#59 shape) -------
+
+  async mintAllowance(allowance: Allowance): Promise<void> {
+    await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
+  }
+
+  async listAllowances(agentId?: string): Promise<Allowance[]> {
+    const entries = await this.ctx.storage.list<Allowance>({ prefix: "allow:" });
+    const all = [...entries.values()];
+    return agentId ? all.filter(allowance => allowance.agentId === agentId) : all;
+  }
+
+  /** Operator revocation of an UNSPENT allowance. */
+  async revokeAllowance(id: string, at: string): Promise<boolean> {
+    const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
+    if (!allowance || allowance.consumedAt !== undefined || allowance.revokedAt !== undefined) {
+      return false;
+    }
+    await this.ctx.storage.put(`allow:${id}`, { ...allowance, revokedAt: at });
+    return true;
+  }
+
+  /**
+   * Reserve an above-cap attempt by CONSUMING a matching allowance, in
+   * one serialized turn: the allowance cannot double-spend, and the
+   * outbox row is durable before any credential exists. Cap-exempt by
+   * doctrine (the operator approved this exact settlement); the agent's
+   * own maxAmount ceiling still binds at the call site. Returns null
+   * when no allowance matches.
+   */
+  async reserveWithAllowance(
+    row: Omit<OutboxRow, "id" | "status" | "allowanceId">,
+    summary: ChallengeSummary
+  ): Promise<{ outboxId: string; allowanceId: string } | null> {
+    for (const allowance of await this.listAllowances(row.agentId)) {
+      if (allowanceMatches(allowance, row.agentId, summary, row.at)) {
+        const id = crypto.randomUUID();
+        await this.ctx.storage.put(`allow:${allowance.id}`, {
+          ...allowance,
+          consumedAt: row.at,
+          outboxId: id
+        });
+        await this.ctx.storage.put(`out:${row.at}:${id}`, {
+          id,
+          status: "reserved",
+          allowanceId: allowance.id,
+          ...row
+        });
+        return { outboxId: id, allowanceId: allowance.id };
+      }
+    }
+    return null;
   }
 }

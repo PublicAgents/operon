@@ -363,6 +363,28 @@ export const TOOLS: readonly ToolDefinition[] = [
       context.ops("SPEND", "GET", "/gatekeeper/spend/held")
   },
   {
+    name: "spend_allowances",
+    title: "List one-time spend allowances",
+    description:
+      "Every operator-minted one-time allowance (spec 0002 §2.2 above-cap flow): tuple, currency, ceiling, expiry, and whether it was consumed or revoked. Active means unconsumed, unrevoked, unexpired.",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("SPEND", "GET", "/gatekeeper/spend/allowances")
+  },
+  {
+    name: "spend_allowance_revoke",
+    title: "Revoke an unspent allowance",
+    description:
+      "Revoke one unspent, unrevoked allowance by allowanceId (from spend_allowances). A consumed allowance cannot be revoked; revocation is ledgered.",
+    input: z.object({ allowanceId: z.string().min(1) }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) =>
+      context.ops("SPEND", "POST", "/gatekeeper/spend/allowance-revoke", { body: input })
+  },
+  {
     name: "spend_approve",
     title: "Approve a held spend",
     description:

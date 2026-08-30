@@ -25,6 +25,20 @@ interface HeldPayment {
   display: string;
   reason: string;
   queuedAt: string;
+  kind?: "merchant" | "above_cap";
+}
+
+interface Allowance {
+  id: string;
+  agentId: string;
+  origin: string;
+  recipient: string;
+  currency: string;
+  display: string;
+  mintedAt: string;
+  expiresAt: string;
+  consumedAt?: string;
+  revokedAt?: string;
 }
 
 interface UnknownOutcome {
@@ -44,6 +58,58 @@ interface HeldEmail {
   subject: string;
   text?: string;
   queuedAt: string;
+}
+
+function AllowanceList() {
+  const allowances = useTool<{ allowances: Allowance[] }>("spend_allowances", {}, { pollMs: 30_000 });
+  const rows = allowances.data?.allowances ?? [];
+  const now = new Date().toISOString();
+  const state = (row: Allowance) =>
+    row.consumedAt ? "consumed" : row.revokedAt ? "revoked" : row.expiresAt <= now ? "expired" : "active";
+  return (
+    <div className="approval-block">
+      <h2>One-time allowances</h2>
+      <span className="sub">
+        approval of an above-cap hold mints one; the agent settles by re-running the pay
+      </span>
+      <ErrorNote error={allowances.error} />
+      <LoadingGate loading={allowances.loading} hasData={allowances.data !== undefined}>
+        {rows.length === 0 && !allowances.loading ? <Empty>no allowances</Empty> : null}
+        {rows.map(row => (
+          <div key={row.id} className="held-card">
+            <div className="held-facts">
+              <span className="tag">{row.agentId}</span>
+              <span className="tag">{state(row)}</span>
+              <strong>{row.display}</strong>
+              <span>
+                to {row.recipient} at {row.origin}
+              </span>
+              <span>
+                expires <TimeStamp at={row.expiresAt} />
+              </span>
+            </div>
+            {state(row) === "active" ? (
+              <div className="held-actions">
+                <ConfirmButton
+                  label="revoke"
+                  danger
+                  detail={
+                    <span className="confirm-note">
+                      revoke the {row.display} allowance for {row.origin}
+                    </span>
+                  }
+                  onConfirm={async () => {
+                    await callTool("spend_allowance_revoke", { allowanceId: row.id });
+                    allowances.refresh();
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </LoadingGate>
+    </div>
+  );
 }
 
 function SpendApprovals() {
@@ -66,6 +132,7 @@ function SpendApprovals() {
         <div key={row.id} className="held-card">
           <div className="held-facts">
             <span className="tag">{row.agentId}</span>
+            {row.kind === "above_cap" ? <span className="tag">above cap</span> : null}
             <strong>{row.display}</strong>
             <span>to {row.recipient || row.origin}</span>
             <TimeStamp at={row.queuedAt} />
@@ -76,7 +143,9 @@ function SpendApprovals() {
               label="approve"
               detail={
                 <span className="confirm-note">
-                  pay {row.display} to {row.recipient || row.origin}
+                  {row.kind === "above_cap"
+                    ? `mint a one-time allowance for ${row.display} to ${row.recipient || row.origin} (the agent settles by re-running the pay)`
+                    : `pay ${row.display} to ${row.recipient || row.origin}`}
                 </span>
               }
               onConfirm={async () => {
@@ -186,6 +255,7 @@ export function ApprovalsPage() {
         <h1>Approvals</h1>
       </header>
       <SpendApprovals />
+      <AllowanceList />
       <div className="approval-block">
         <h2>Email</h2>
         {(agents.data?.agents ?? []).length === 0 && !agents.loading ? (

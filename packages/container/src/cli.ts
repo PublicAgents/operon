@@ -55,7 +55,10 @@ custody and recipients are the operator's alone):
                                          your --max and the colony caps is PAID by
                                          the spend Gatekeeper (you never hold a
                                          key); a FIRST payment to a new merchant is
-                                         held for the operator. Ambiguous outcomes
+                                         held for the operator, and so is an
+                                         above-cap payment (approval mints a
+                                         one-time allowance; re-run the same pay
+                                         to settle). Ambiguous outcomes
                                          freeze and are never retried by you.
 
 Vault doors (your own secret store, for anything that must survive
@@ -63,6 +66,8 @@ between wakes but may NEVER sit in your repo, hard rule 7). A vaulted
 value is folded into the secret sweep: it cannot appear in your repo, a
 publish, a PR, or an email. Retrieve it when you need to USE it:
 
+  operon pay proposals                   your pending holds and unspent
+                                         allowances, across wakes
   operon vault set <label> --value <v>   store or update a secret by label (or
                                          pipe the value on stdin and omit
                                          --value). Do not ALSO write it to a
@@ -232,11 +237,16 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return { path: "/channel/original", payload: { id } };
     }
     case "pay": {
+      if (rest[0] === "proposals") {
+        return { path: "/pay/proposals", payload: {} };
+      }
       const [url] = positionals(rest);
       const max = flagValue(rest, "--max");
       const reason = flagValue(rest, "--reason");
       if (!url || !url.startsWith("https://") || !max || !reason) {
-        throw new CliUsageError("usage: operon pay <https-url> --max <amount> --reason <r>");
+        throw new CliUsageError(
+          "usage: operon pay <https-url> --max <amount> --reason <r> (or: operon pay proposals)"
+        );
       }
       return { path: "/pay", payload: { url, maxAmount: max, reason } };
     }

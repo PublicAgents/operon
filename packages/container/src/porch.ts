@@ -248,6 +248,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/till/retire") return await this.tillRetire(body);
       if (request.method === "POST" && url.pathname === "/till/sales") return await this.tillSales();
       if (request.method === "POST" && url.pathname === "/pay") return await this.pay(body);
+      if (request.method === "POST" && url.pathname === "/pay/proposals") return await this.payProposals();
       if (request.method === "POST" && url.pathname === "/channel/original") return await this.channelOriginal(body);
       if (request.method === "POST" && url.pathname === "/vault/set") return await this.vaultSet(body);
       if (request.method === "POST" && url.pathname === "/vault/get") return await this.vaultCall("get", body);
@@ -703,6 +704,23 @@ export class Porch {
 
   private async tillSales(): Promise<JsonResult> {
     return this.tillCall("sales", {});
+  }
+
+  /**
+   * The agent's own pending holds and unspent allowances (spec 0002
+   * §2.2): cross-wake spend state without asking the operator.
+   */
+  private async payProposals(): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.spendUrl || !config.spendToken) return fail(503, "pay_not_wired");
+    const response = await fetch(`${config.spendUrl}/gatekeeper/spend/proposals`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.spendToken}` },
+      body: "{}"
+    });
+    const resultText = (await response.text()).slice(0, 100_000);
+    if (!response.ok) return fail(502, "proposals_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
   private async pay(body: Record<string, unknown>): Promise<JsonResult> {

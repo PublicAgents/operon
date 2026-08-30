@@ -16,7 +16,7 @@ import {
   toBaseUnits,
   validatePayUrl,
   type ChallengeSummary
-} from "./policy.js";
+, type CapProblem , allowanceMatches, type Allowance } from "./policy.js";
 
 export { Ledger, SpendLedger };
 export * from "./policy.js";
@@ -33,6 +33,10 @@ export * from "./policy.js";
 interface Env {
   ROSTER: string;
   SPEND_MAX_TX?: string;
+  /** Ceiling for HOLDABLE above-cap proposals (display units); unset = feature off. */
+  SPEND_HOLD_MAX?: string;
+  /** One-time allowance lifetime in days (default 7). */
+  SPEND_ALLOWANCE_DAYS?: string;
   SPEND_DAILY_CAP?: string;
   SPEND_TESTNET?: string;
   /** Known assets as "0xaddr=decimals,...": the spend-side currency map. */
@@ -194,25 +198,48 @@ async function executePayment(
   const maxAmount = toBaseUnits(context.maxAmountDisplay, summary.decimals);
   if (maxAmount === null) return errorResponse(400, "invalid_max_amount");
   const at = new Date().toISOString();
+  const row = {
+    agentId: context.agent.id,
+    url: context.url,
+    origin: summary.origin,
+    method: summary.method,
+    recipient: summary.recipient,
+    currency: summary.currency,
+    amount: summary.amount,
+    reason: context.reason,
+    at
+  };
   const caps = {
     maxAmount: maxAmount.toString(),
     maxTx: (toBaseUnits(env.SPEND_MAX_TX ?? "0.10", summary.decimals) ?? 0n).toString(),
     dailyCap: (toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", summary.decimals) ?? 0n).toString()
   };
-  const reservation = await spendLedger(env).reserve(
-    {
-      agentId: context.agent.id,
-      url: context.url,
-      origin: summary.origin,
-      method: summary.method,
-      recipient: summary.recipient,
-      currency: summary.currency,
-      amount: summary.amount,
-      reason: context.reason,
-      at
-    },
-    caps
-  );
+  // Over-cap settlement rides an operator-minted one-time allowance
+  // (spec 0002 §2.2): consumed atomically with the reservation, exempt
+  // from the tx/daily caps, still bounded by the agent's own maxAmount.
+  let reservation: { ok: true; outboxId: string } | { ok: false; problem: CapProblem };
+  if (BigInt(summary.amount) > maxAmount) {
+    reservation = { ok: false, problem: "over_max_amount" };
+  } else if (
+    BigInt(summary.amount) > BigInt(caps.maxTx) ||
+    BigInt(summary.amount) > BigInt(caps.dailyCap)
+  ) {
+    const spent = await spendLedger(env).reserveWithAllowance(row, summary);
+    if (spent) {
+      await ledger(env).append("allowance_consumed", {
+        agentId: context.agent.id,
+        allowanceId: spent.allowanceId,
+        outboxId: spent.outboxId,
+        origin: summary.origin,
+        display: summary.display
+      });
+      reservation = { ok: true, outboxId: spent.outboxId };
+    } else {
+      reservation = { ok: false, problem: "over_tx_cap" };
+    }
+  } else {
+    reservation = await spendLedger(env).reserve(row, caps);
+  }
   if (!reservation.ok) {
     await ledger(env).append("pay_refused", { agentId: context.agent.id, url: context.url, problem: reservation.problem });
     return errorResponse(422, reservation.problem);
@@ -439,7 +466,69 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, status: "held_for_approval", heldId: held.id, challenge: summary });
   }
 
+  // Approved merchant, but the challenge exceeds the colony caps: hold a
+  // spend PROPOSAL under the operator's hold ceiling instead of refusing
+  // outright, unless a matching allowance already authorizes it (then
+  // executePayment consumes it). Without SPEND_HOLD_MAX the feature is
+  // off and over-cap pays refuse exactly as before.
+  const overCap = await aboveCapWithoutAllowance(env, agent.id, summary);
+  if (overCap === "holdable") {
+    const held = await spendLedger(env).hold(
+      {
+        agentId: agent.id,
+        url,
+        origin: summary.origin,
+        method: summary.method,
+        recipient: summary.recipient,
+        currency: summary.currency,
+        amount: summary.amount,
+        decimals: summary.decimals,
+        display: summary.display,
+        maxAmount,
+        reason,
+        kind: "above_cap"
+      },
+      new Date().toISOString()
+    );
+    await ledger(env).append("pay_held", {
+      agentId: agent.id, url, origin: summary.origin, heldId: held.id, kind: "above_cap"
+    });
+    await notifyOperator(
+      env,
+      `[${agent.id}] ABOVE-CAP payment to ${summary.origin} HELD: ${summary.display} (${summary.method}) to ${summary.recipient}\nApproval mints a one-time allowance; the agent settles by re-running the pay.\nReason: ${reason}`,
+      [
+        { label: "Approve", kind: "spend_approve", agentId: agent.id, id: held.id },
+        { label: "Reject", kind: "spend_reject", agentId: agent.id, id: held.id }
+      ]
+    );
+    return json({ ok: true, status: "held_for_approval", heldId: held.id, challenge: summary });
+  }
+
   return executePayment(env, { agent, url, maxAmountDisplay: maxAmount, reason }, summary);
+}
+
+/**
+ * Whether this challenge is over the colony caps, under the operator's
+ * hold ceiling, and NOT already covered by a matching allowance (which
+ * executePayment would consume). "holdable" means: hold a proposal.
+ */
+async function aboveCapWithoutAllowance(
+  env: Env,
+  agentId: string,
+  summary: ChallengeSummary
+): Promise<"holdable" | "no"> {
+  const holdMax = env.SPEND_HOLD_MAX ? toBaseUnits(env.SPEND_HOLD_MAX, summary.decimals) : null;
+  if (holdMax === null) return "no";
+  const amount = BigInt(summary.amount);
+  const maxTx = toBaseUnits(env.SPEND_MAX_TX ?? "0.10", summary.decimals) ?? 0n;
+  const dailyCap = toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", summary.decimals) ?? 0n;
+  if (amount <= maxTx && amount <= dailyCap) return "no";
+  if (amount > holdMax) return "no";
+  const now = new Date().toISOString();
+  const covered = (await spendLedger(env).listAllowances(agentId)).some(allowance =>
+    allowanceMatches(allowance, agentId, summary, now)
+  );
+  return covered ? "no" : "holdable";
 }
 
 async function handleDecision(request: Request, env: Env, approve: boolean): Promise<Response> {
@@ -462,6 +551,45 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   // three is a new hold, not a payable request.
   await spendLedger(env).approveTuple(held);
   await ledger(env).append("tuple_approved", { agentId: agent.id, origin: held.origin, recipient: held.recipient });
+
+  // An over-cap hold (explicitly above_cap, or a first-merchant hold
+  // whose amount the caps would refuse anyway) settles by ALLOWANCE:
+  // nothing moves at approval, because the held challenge is minutes
+  // stale and the wallet may not be funded yet. The agent re-runs the
+  // pay; a fresh matching challenge consumes the allowance.
+  const maxTx = toBaseUnits(env.SPEND_MAX_TX ?? "0.10", held.decimals) ?? 0n;
+  const dailyCap = toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", held.decimals) ?? 0n;
+  const overCap = BigInt(held.amount) > maxTx || BigInt(held.amount) > dailyCap;
+  if (held.kind === "above_cap" || overCap) {
+    const days = Number(env.SPEND_ALLOWANCE_DAYS);
+    const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;
+    const now = Date.now();
+    const allowance: Allowance = {
+      id: crypto.randomUUID(),
+      agentId: agent.id,
+      origin: held.origin,
+      method: held.method,
+      recipient: held.recipient,
+      currency: held.currency,
+      maxAmount: held.amount,
+      decimals: held.decimals,
+      display: held.display,
+      mintedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
+    };
+    await spendLedger(env).mintAllowance(allowance);
+    await spendLedger(env).deleteHeld(heldId);
+    await ledger(env).append("allowance_minted", {
+      agentId: agent.id,
+      allowanceId: allowance.id,
+      origin: allowance.origin,
+      recipient: allowance.recipient,
+      display: allowance.display,
+      expiresAt: allowance.expiresAt
+    });
+    return json({ ok: true, status: "allowance_minted", allowance });
+  }
+
   const summary: ChallengeSummary = {
     origin: held.origin,
     method: held.method,
@@ -515,6 +643,22 @@ export default {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
       return json({ ok: true, outbox: await spendLedger(env).outbox(agent.id) });
+    }
+    // Cross-wake visibility (spec §2.2): a memoryless agent can see its
+    // own pending holds and unspent allowances without asking the
+    // operator what happened while it slept.
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/proposals") {
+      const agent = agentFromBearer(request, env);
+      if (!agent) return errorResponse(401, "unauthorized");
+      const now = new Date().toISOString();
+      const held = (await spendLedger(env).listHeld()).filter(row => row.agentId === agent.id);
+      const allowances = (await spendLedger(env).listAllowances(agent.id)).filter(
+        allowance =>
+          allowance.consumedAt === undefined &&
+          allowance.revokedAt === undefined &&
+          allowance.expiresAt > now
+      );
+      return json({ ok: true, held, allowances });
     }
     return errorResponse(404, "not_found");
   }
@@ -581,6 +725,19 @@ export class Ops extends OpsEntrypoint<Env> {
     }
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/wallet") {
       return handleWallet(this.env);
+    }
+    if (request.method === "GET" && url.pathname === "/gatekeeper/spend/allowances") {
+      return json({ ok: true, allowances: await spendLedger(this.env).listAllowances() });
+    }
+    if (request.method === "POST" && url.pathname === "/gatekeeper/spend/allowance-revoke") {
+      const body = await readJson<{ allowanceId?: string }>(request);
+      if (!body.ok || typeof body.value.allowanceId !== "string") {
+        return errorResponse(400, "invalid_request");
+      }
+      const at = new Date().toISOString();
+      const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
+      await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, done: revoked });
+      return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
     return errorResponse(404, "not_found");
   }

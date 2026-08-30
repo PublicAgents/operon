@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  allowanceMatches,
+  type Allowance,
   checkCaps,
   parseCurrencyMap,
   spendTokenVar,
@@ -131,5 +133,55 @@ describe("tupleKey and spendTokenVar", () => {
 
   it("maps agent ids to env names", () => {
     expect(spendTokenVar("promoter")).toBe("SPEND_TOKEN_PROMOTER");
+  });
+});
+
+describe("allowanceMatches", () => {
+  const NOW = "2026-08-30T12:00:00.000Z";
+  const summary = {
+    origin: "https://cairnwake.com",
+    method: "tempo",
+    recipient: "0x4F7975f4f00872517eb334420B7d5b673fcF2971",
+    currency: "0x20C0000000000000000000000000000000000000",
+    amount: "190200000",
+    decimals: 6,
+    display: "190.2"
+  };
+  const allowance: Allowance = {
+    id: "a1",
+    agentId: "promoter",
+    origin: "https://cairnwake.com",
+    method: "tempo",
+    recipient: "0x4f7975f4f00872517eb334420b7d5b673fcf2971",
+    currency: "0x20c0000000000000000000000000000000000000",
+    maxAmount: "190200000",
+    decimals: 6,
+    display: "190.2",
+    mintedAt: "2026-08-30T00:00:00.000Z",
+    expiresAt: "2026-09-06T00:00:00.000Z"
+  };
+
+  it("matches the approved tuple case-insensitively on addresses, amount at the ceiling", () => {
+    expect(allowanceMatches(allowance, "promoter", summary, NOW)).toBe(true);
+    expect(
+      allowanceMatches(allowance, "promoter", { ...summary, amount: "190199999" }, NOW)
+    ).toBe(true);
+  });
+
+  it("refuses over-ceiling, wrong tuple, wrong currency, wrong agent", () => {
+    expect(allowanceMatches(allowance, "promoter", { ...summary, amount: "190200001" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", { ...summary, recipient: "0xdead" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", { ...summary, origin: "https://evil.com" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", { ...summary, method: "solana" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", { ...summary, currency: "0xother" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "other-agent", summary, NOW)).toBe(false);
+  });
+
+  it("refuses consumed, revoked, and expired allowances", () => {
+    expect(allowanceMatches({ ...allowance, consumedAt: NOW }, "promoter", summary, NOW)).toBe(false);
+    expect(allowanceMatches({ ...allowance, revokedAt: NOW }, "promoter", summary, NOW)).toBe(false);
+    expect(
+      allowanceMatches({ ...allowance, expiresAt: "2026-08-30T11:59:59.000Z" }, "promoter", summary, NOW)
+    ).toBe(false);
   });
 });
