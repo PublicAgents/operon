@@ -82,10 +82,15 @@ const manifests = findManifests()
   .filter(manifest => onlyProject === undefined || manifest.project === onlyProject);
 if (manifests.length === 0) fail(`no project named "${onlyProject}" here`);
 
-/** Hash the wake-container sources: the drain gate (spec 0006 §5). */
+/**
+ * Hash EVERYTHING under packages/container except build outputs: the
+ * drain gate (spec 0006 §5). The Dockerfile pins its installs exactly
+ * so the image is a pure function of these files; the one residual
+ * float is the base image tag, which is why an UNKNOWN live hash
+ * drains rather than skips (fail toward safety, never toward a roll).
+ */
 function containerSourceHash() {
   const hash = createHash("sha256");
-  const dir = join(CHASSIS_ROOT, "packages/container");
   const walk = path => {
     for (const name of readdirSync(path).sort()) {
       if (["node_modules", "dist"].includes(name)) continue;
@@ -94,8 +99,7 @@ function containerSourceHash() {
       else hash.update(name).update(readFileSync(full));
     }
   };
-  walk(join(dir, "src"));
-  hash.update(readFileSync(join(dir, "Dockerfile")));
+  walk(join(CHASSIS_ROOT, "packages/container"));
   return hash.digest("hex").slice(0, 16);
 }
 

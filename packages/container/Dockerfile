@@ -7,7 +7,7 @@ FROM node:24-slim AS build
 WORKDIR /app
 COPY tsconfig.docker.json ./tsconfig.json
 COPY src ./src
-RUN npm install typescript@6 @types/node@24 && npx tsc
+RUN npm install typescript@6.0.3 @types/node@24.13.3 && npx tsc
 
 FROM node:24-slim
 RUN apt-get update \
@@ -23,7 +23,10 @@ RUN curl -fsSL -o /tmp/gitleaks.tar.gz \
   && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
   && rm /tmp/gitleaks.tar.gz \
   && gitleaks version
-RUN npm install -g @anthropic-ai/claude-code
+# Pinned exactly: the image content must be a pure function of these
+# sources, because the fleet deploy's drain gate hashes them to decide
+# whether an image roll (and therefore a wake drain) is needed.
+RUN npm install -g @anthropic-ai/claude-code@2.1.251
 # The mind session runs as this unprivileged user; the entrypoint stays
 # root so the session cannot read the supervisor's /proc environment or
 # argv (see entrypoint.ts, privilege split).
