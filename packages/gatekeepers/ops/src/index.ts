@@ -235,7 +235,7 @@ function toolContext(env: Env, operator: string): ToolContext {
       }
       return payload;
     },
-    async scheduler(method, path) {
+    async scheduler(method, path, options) {
       const target = env.SCHEDULER as Fetcher | undefined;
       if (!target) throw new ToolUnavailableError("binding_unwired: SCHEDULER");
       if (!env.WAKE_TRIGGER_TOKEN) {
@@ -245,8 +245,10 @@ function toolContext(env: Env, operator: string): ToolContext {
         method,
         headers: {
           authorization: `Bearer ${env.WAKE_TRIGGER_TOKEN}`,
-          "x-operon-operator": operator
-        }
+          "x-operon-operator": operator,
+          ...(options?.body !== undefined ? { "content-type": "application/json" } : {})
+        },
+        ...(options?.body !== undefined ? { body: JSON.stringify(options.body) } : {})
       });
       const payload = await responsePayload(response);
       if (!response.ok) {

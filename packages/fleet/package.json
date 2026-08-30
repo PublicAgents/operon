@@ -1,0 +1,25 @@
+{
+  "name": "@operon/fleet",
+  "version": "0.0.0",
+  "description": "The fleet deploy contract (spec 0006): the operon.yaml manifest schema and the chassis-owned wrangler templates it renders. A project's deployment is validated against the pinned chassis and generated from it; the colony workers directory is retired.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "!**/*.tsbuildinfo"],
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "yaml": "^2.6.0"
+  }
+}

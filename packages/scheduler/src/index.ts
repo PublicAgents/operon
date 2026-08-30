@@ -6,6 +6,7 @@ import {
   type LaunchContext
 } from "./launch.js";
 import { WakeContainer } from "./wake-container.js";
+export { FleetControl } from "./fleet-control.js";
 import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };
@@ -24,6 +25,7 @@ export { mindCredentialVar, prepareLaunch, LaunchPreconditionError } from "./lau
 const STALE_AFTER_MS = 45 * 60 * 1000;
 
 interface Env {
+  FLEET_CONTROL: DurableObjectNamespace<import("./fleet-control.js").FleetControl>;
   ROSTER: string;
   WAKE_TRIGGER_TOKEN?: string;
   NOTIFY_URL?: string;
@@ -116,11 +118,26 @@ function launchContext(env: Env): LaunchContext {
   };
 }
 
+function fleetControl(env: Env) {
+  return env.FLEET_CONTROL.get(env.FLEET_CONTROL.idFromName("fleet"));
+}
+
 async function wake(
   env: Env,
   agent: RosterAgent,
   trigger: "cron" | "manual"
 ): Promise<{ status: string; wakeId?: string; detail?: string }> {
+  // The fleet pause (spec 0006 §5): a deploy drain defers NEW wakes and
+  // never touches one in flight. A paused cron fires again at its next
+  // cadence; manual wakes answer with the pause reason.
+  const pauseState = await fleetControl(env).state();
+  if (pauseState.paused) {
+    if (trigger === "manual") {
+      return { status: "paused", detail: `fleet paused: ${pauseState.reason}` };
+    }
+    console.log(`[${agent.id}] cron wake deferred: fleet paused (${pauseState.reason})`);
+    return { status: "paused", detail: pauseState.reason };
+  }
   const wakeId = crypto.randomUUID();
   const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
   try {
@@ -138,6 +155,11 @@ async function wake(
         : `wake ${result.wakeId} still running`;
       await notify(env, `[${agent.id}] wake skipped: ${detail}`);
       return { status: "locked", wakeId: result.wakeId, detail };
+    }
+    if (result.status === "paused") {
+      // The launch-level pause refusal (the registration-adjacent
+      // check); same meaning as the early check above.
+      return { status: "paused", detail: result.detail };
     }
     if (result.status === "disabled") {
       // Deliberate operator state, notified only for manual wakes: a cron
@@ -207,6 +229,30 @@ export default {
       return json(await wake(env, agent, "manual"));
     }
 
+    if (url.pathname === "/pause" && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const body = (await request.json().catch(() => ({}))) as { reason?: string; token?: string };
+      const reason = typeof body.reason === "string" && body.reason.length > 0 ? body.reason : "operator pause";
+      const token = typeof body.token === "string" && body.token.length > 0 ? body.token : "operator";
+      const result = await fleetControl(env).pause(reason.slice(0, 200), token.slice(0, 80));
+      if (!result.ok) {
+        return errorResponse(409, "fleet_already_paused", `held since ${result.at}: ${result.reason}`);
+      }
+      return json({ ok: true, paused: true, reason });
+    }
+    if (url.pathname === "/resume" && request.method === "POST") {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const body = (await request.json().catch(() => ({}))) as { token?: string; force?: boolean };
+      const token = typeof body.token === "string" && body.token.length > 0 ? body.token : "operator";
+      const result = await fleetControl(env).resume(token.slice(0, 80), body.force === true);
+      if (!result.ok) {
+        return errorResponse(409, "pause_held_elsewhere", "another holder's pause; pass force to override");
+      }
+      return json({ ok: true, paused: false, wasPaused: result.wasPaused });
+    }
+
     const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);
     if (toggleMatch && request.method === "POST") {
       const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
@@ -244,7 +290,12 @@ export default {
           };
         })
       );
-      return json({ zone: roster.zone, agents });
+      const pauseState = await fleetControl(env).state();
+      return json({
+        zone: roster.zone,
+        agents,
+        ...(pauseState.paused ? { paused: { at: pauseState.at, reason: pauseState.reason } } : {})
+      });
     }
 
     const wakesMatch = /^\/wakes\/([a-z0-9-]+)$/.exec(url.pathname);

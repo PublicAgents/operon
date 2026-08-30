@@ -120,14 +120,19 @@ The image rollout terminating live containers has cost real wakes
 (unjournaled work, an interrupted negotiation). The fleet deploy makes
 that structurally impossible instead of a timing gamble:
 
-- **Image rolls are content-gated**: the wake image rebuilds and rolls
-  ONLY when the container source between the old and new pin actually
-  changed (content hash). Worker-only deploys roll no containers and
-  can never touch a wake.
-- **When the image must roll, the deploy DRAINS first**: it asks the
-  scheduler to pause new wake starts (deferred crons are ledgered and
-  fire after), waits for the current-wake set to empty, bounded by the
-  colony's maximum wake length, then rolls, then unpauses. The
+- **Every deploy DRAINS**: image rebuilds are not reproducible (base
+  layers and distro packages drift under byte-identical sources), so
+  "this deploy rolls no containers" is unprovable from the repo, and a
+  wrong guess kills wakes. The deploy therefore always pauses new wake
+  starts (a paused cron fires again at its next cadence; nothing in
+  flight is touched), waits for the current-wake set to be empty on
+  two consecutive polls, bounded by the colony's maximum wake length,
+  deploys, and resumes unconditionally, failing loudly if even the
+  resume fails. An idle fleet drains in seconds; a busy one draining
+  is the entire point. The pause is held by a per-deploy token so
+  overlapping deploys refuse each other rather than releasing each
+  other's pause, and the launch path re-checks the pause after
+  registration so no preparing wake can slip past the quiet check. The
   entrypoint's existing SIGTERM grace (persist, then die) remains the
   last line, not the plan.
 - `--force` exists for emergencies, does not wait, and says plainly in
