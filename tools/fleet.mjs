@@ -225,6 +225,7 @@ for (const manifest of manifests) {
   const sourceHash = containerSourceHash();
   const liveHash = await liveContainerHash(manifest);
   const imageChanges = liveHash !== sourceHash;
+  let resumeFailed = false;
   const drainToken = `deploy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   let paused = false;
   if (imageChanges && !noDrain) {
@@ -268,11 +269,20 @@ for (const manifest of manifests) {
     }
   } finally {
     if (paused) {
-      await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
-        () => console.log("  fleet resumed"),
-        error => console.error(`  RESUME FAILED, wakes stay paused: run fleet_resume by hand (${error})`)
+      resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
+        () => (console.log("  fleet resumed"), false),
+        error => (console.error(`  RESUME FAILED: ${error}`), true)
       );
     }
+  }
+  if (resumeFailed) {
+    // A deploy that leaves the fleet refusing wakes is NOT a success,
+    // whatever the workers say: exit nonzero so automation alarms, and
+    // name the recovery.
+    fail(
+      `workers deployed but the fleet is STILL PAUSED (the resume failed).\n` +
+        `Wakes are deferred until you run the fleet_resume tool (force: true) on the ops console or API.`
+    );
   }
   console.log(`\n✓ ${manifest.project}: deploy complete`);
 }

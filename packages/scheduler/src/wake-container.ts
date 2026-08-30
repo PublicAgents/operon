@@ -90,23 +90,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     if (await this.ctx.storage.get<boolean>(OPERATOR_DISABLED)) {
       return { status: "disabled" };
     }
-    // The fleet pause re-checked HERE, adjacent to registration: the
-    // scheduler's early check races a pause that lands during launch
-    // preparation, and a wake that registered nothing yet would be
-    // invisible to the deploy drain's quiet check. Refusing at the
-    // door keeps "no current wakes" and "no wake about to start"
-    // the same fact (spec 0006 §5).
-    const fleet = (this.env as { FLEET_CONTROL?: DurableObjectNamespace }).FLEET_CONTROL;
-    if (fleet) {
-      const state = await (
-        fleet.get(fleet.idFromName("fleet")) as unknown as {
-          state(): Promise<{ paused: boolean; reason?: string }>;
-        }
-      ).state();
-      if (state.paused) {
-        return { status: "paused", detail: state.reason ?? "fleet paused" };
-      }
-    }
+
     const current = await this.ctx.storage.get<WakeRecord>(CURRENT);
     if (current) {
       if (!this.ctx.container?.running) {
@@ -144,6 +128,32 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     await this.ctx.storage.put(CURRENT, record);
     await this.ctx.storage.put(HARD_WALL, args.hardWallMs);
     await this.ctx.storage.put(rowKey(record), record);
+
+    // The fleet-pause check runs AFTER registration, which is what makes
+    // it race-free (spec 0006 §5): once CURRENT is durable, the deploy
+    // drain's quiet poll SEES this wake and waits. So either this read
+    // finds no pause (and a pause taken later observes us), or it finds
+    // one (and we unwind the registration before any container starts).
+    // A check before registration can never close that window, because
+    // the pause can land in the gap.
+    const fleet = (this.env as { FLEET_CONTROL?: DurableObjectNamespace }).FLEET_CONTROL;
+    if (fleet) {
+      const state = await (
+        fleet.get(fleet.idFromName("fleet")) as unknown as {
+          state(): Promise<{ paused: boolean; reason?: string }>;
+        }
+      ).state();
+      if (state.paused) {
+        await this.ctx.storage.delete(CURRENT);
+        await this.ctx.storage.put(rowKey(record), {
+          ...record,
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          reason: `deferred: fleet paused (${state.reason ?? "deploy"})`
+        });
+        return { status: "paused", detail: state.reason ?? "fleet paused" };
+      }
+    }
 
     try {
       // Awaited so an asynchronous rejection is caught here: otherwise the
