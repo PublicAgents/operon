@@ -4,8 +4,8 @@ Status: draft. Extends spec 0005, whose Phase 2 note promised this
 design after living with the Phase 1 console. The goal, in the
 operator's words: starting a new project should boil down to adding a
 domain, adding git repos, and writing the goal and the charters, with
-one Cloudflare account, one chassis version, and one upgrade motion
-for everything.
+one Cloudflare account, one chassis lineage, and one upgrade motion
+per project (independently pinned; see §8).
 
 ## 1. The unit: `.operon/` in any repo
 
@@ -69,7 +69,7 @@ Each project deploys its own full set of workers under its prefix
 (`operon-<project>-gatekeeper-*`), its own D1, its own Durable Object
 namespaces (which follow the workers automatically), its own zone, its
 own Access application at `ops.<zone>`. Projects share an account and
-a chassis version and NOTHING else: no shared DO, no shared database,
+a chassis lineage and NOTHING else: no shared DO, no shared database,
 no shared secret store. The blast radius of any compromise or bug
 stays one project wide. Shared-runtime tenancy (projects inside one
 set of workers) is explicitly out of scope; if the fleet ever grows
