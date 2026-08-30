@@ -118,7 +118,12 @@ adversarially reviewed into robustness:
   consumed is consumed, even if the payment later releases, and a new
   settlement takes a new proposal. The operator can list and REVOKE
   unspent allowances at any time; every mint, consume, revoke, and
-  expiry-lapse is ledgered. Settlement outcomes are judged from the
+  expiry-lapse is ledgered TRANSACTIONALLY: the audit event commits in
+  the same Durable Object turn as the state change it describes, so a
+  transition without its record (or a record without its transition)
+  is unrepresentable, and events drain to the activity ledger as an
+  at-least-once mirror (a duplicate mirrored row is benign, a lost one
+  impossible). Settlement outcomes are judged from the
   receipt the rail returns, never from a client library's happy path
   (a parser error over a mined transaction is outcome_unknown, not
   failure).
