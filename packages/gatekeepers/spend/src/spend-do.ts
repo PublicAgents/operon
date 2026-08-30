@@ -26,6 +26,8 @@ export interface OutboxRow {
   detail?: string;
   /** Set when this attempt spent a one-time allowance (cap-exempt). */
   allowanceId?: string;
+  /** Set on approval-time executions: the hold whose approval paid. */
+  heldId?: string;
 }
 
 export interface HeldPayment {
@@ -389,6 +391,7 @@ export class SpendLedger extends DurableObject {
     | { status: "rejected"; voided: boolean }
     | { status: "already_consumed" }
     | { status: "approval_in_flight" }
+    | { status: "approval_paid" }
     | { status: "not_found" }
   > {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
@@ -397,11 +400,22 @@ export class SpendLedger extends DurableObject {
     // A FRESH claim means an approval is executing right now; rejecting
     // under it would report "rejected" while that payment completes.
     // The claim is respected while young and overridable once stale
-    // (a crashed approval must not make rejection unreachable).
+    // (a crashed approval must not make rejection unreachable). Before
+    // overriding a stale claim, the outbox is the ground truth: an
+    // approval that already RESERVED (however long ago) settled or is
+    // settling, and the rejection concedes rather than recording a
+    // contradiction.
     if (held?.claimed && held.claimedAt !== undefined) {
       const ageMs = Date.parse(at) - Date.parse(held.claimedAt);
       if (Number.isFinite(ageMs) && ageMs < 5 * 60 * 1000) {
         return { status: "approval_in_flight" };
+      }
+      const rows = await this.ctx.storage.list<OutboxRow>({ prefix: "out:", reverse: true, limit: 500 });
+      for (const row of rows.values()) {
+        if (row.heldId === heldId && row.status !== "released") {
+          await this.ctx.storage.delete(`held:${heldId}`);
+          return { status: "approval_paid" };
+        }
       }
     }
     if (allowance?.consumedAt !== undefined) {

@@ -188,6 +188,8 @@ interface PayContext {
   holdPayment?: Omit<HeldPayment, "id" | "queuedAt" | "claimed">;
   /** Approval-time execution of a specific held proposal (see decidePay). */
   forbidAllowanceConsumption?: boolean;
+  /** The hold whose approval is executing; stamped on the outbox row. */
+  approvalHeldId?: string;
 }
 
 /**
@@ -207,6 +209,7 @@ async function executePayment(
   const at = new Date().toISOString();
   const row = {
     agentId: context.agent.id,
+    ...(context.approvalHeldId !== undefined ? { heldId: context.approvalHeldId } : {}),
     url: context.url,
     origin: summary.origin,
     method: summary.method,
@@ -551,6 +554,7 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     await mirrorSpendEvents(env);
     if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
     if (outcome.status === "approval_in_flight") return errorResponse(409, "approval_in_flight");
+    if (outcome.status === "approval_paid") return errorResponse(409, "approval_already_paid");
     if (outcome.status === "already_consumed") return json({ ok: true, status: "already_consumed" });
     return json({ ok: true, status: "rejected" });
   }
@@ -591,7 +595,8 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
       url: held.url,
       maxAmountDisplay: held.maxAmount,
       reason: held.reason,
-      forbidAllowanceConsumption: true
+      forbidAllowanceConsumption: true,
+      approvalHeldId: heldId
     },
     summary
   );
