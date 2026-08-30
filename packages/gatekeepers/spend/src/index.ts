@@ -543,8 +543,21 @@ async function ledgerExpiredAllowances(env: Env, nowIso: string): Promise<void> 
         expiresAt: lapsed.expiresAt
       });
     } catch (error) {
-      await spendLedger(env).unmarkExpiry(lapsed.id).catch(() => undefined);
-      console.error("allowance expiry audit deferred (append failed, claim compensated)", error);
+      try {
+        await spendLedger(env).unmarkExpiry(lapsed.id);
+        console.error("allowance expiry audit deferred (append failed, claim compensated)", error);
+      } catch (unmarkError) {
+        // Double failure: the claim stands but its audit row does not,
+        // and nothing would re-surface it. Escalate to the operator
+        // instead of going silent; the notify names the allowance so
+        // the row can be reconstructed by hand.
+        console.error("expiry audit row LOST for allowance", lapsed.id, error, unmarkError);
+        await notifyOperator(
+          env,
+          `spend audit gap: allowance ${lapsed.id} (${lapsed.display} to ${lapsed.recipient}) lapsed at ${lapsed.expiresAt} but its allowance_expired row could not be written and compensation failed; reconstruct the row from this notice.`,
+          []
+        ).catch(() => undefined);
+      }
     }
   }
 }
@@ -663,7 +676,15 @@ async function mintAllowanceForHeld(
     display: allowance.display,
     expiresAt: allowance.expiresAt
   });
-  await spendLedger(env).mintAllowance(allowance);
+  try {
+    await spendLedger(env).mintAllowance(allowance);
+  } catch (error) {
+    // The intent row exists but no allowance does: unclaim so the
+    // operator's retry can approve again (a duplicate intent row is
+    // benign; a hold stranded in claimed-forever is not).
+    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
+    return errorResponse(500, "allowance_mint_failed", String(error).slice(0, 200));
+  }
   try {
     await spendLedger(env).deleteHeld(heldId);
   } catch (error) {
