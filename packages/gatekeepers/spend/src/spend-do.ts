@@ -118,7 +118,10 @@ export class SpendLedger extends DurableObject {
   // ---- merchant memory -------------------------------------------------
 
   async isApproved(tuple: MerchantTuple): Promise<boolean> {
-    return (await this.ctx.storage.get<boolean>(`tuple:${tupleKey(tuple)}`)) === true;
+    // Legacy grants stored true; hold-provenanced grants store the
+    // granting hold's id. Either is an approval.
+    const value = await this.ctx.storage.get<boolean | string>(`tuple:${tupleKey(tuple)}`);
+    return value === true || typeof value === "string";
   }
 
   async approveTuple(tuple: MerchantTuple): Promise<void> {
@@ -134,10 +137,17 @@ export class SpendLedger extends DurableObject {
   async approveTupleForHold(heldId: string, at: string): Promise<"ok" | "hold_gone"> {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
     if (!held) return "hold_gone";
-    await this.ctx.storage.put(`tuple:${tupleKey(held)}`, true);
-    await this.event("tuple_approved", {
-      agentId: held.agentId, origin: held.origin, recipient: held.recipient
-    }, at);
+    // Provenance: the grant remembers which hold granted it, so a
+    // later rejection of THIS hold (a stale crashed approval) can roll
+    // exactly this grant back without stripping a tuple some earlier,
+    // completed approval legitimately granted.
+    const key = `tuple:${tupleKey(held)}`;
+    if ((await this.ctx.storage.get(key)) === undefined) {
+      await this.ctx.storage.put(key, heldId);
+      await this.event("tuple_approved", {
+        agentId: held.agentId, origin: held.origin, recipient: held.recipient
+      }, at);
+    }
     return "ok";
   }
 
@@ -408,6 +418,19 @@ export class SpendLedger extends DurableObject {
       await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });
       await this.event("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" }, at);
       voided = true;
+    }
+    // Roll back a tuple THIS hold granted (a stale crashed approval
+    // being rejected): the grant's provenance is the hold id, so a
+    // grant from an earlier completed approval is never touched.
+    const tupleSource = held ?? allowance;
+    if (tupleSource) {
+      const key = `tuple:${tupleKey(tupleSource)}`;
+      if ((await this.ctx.storage.get(key)) === heldId) {
+        await this.ctx.storage.delete(key);
+        await this.event("tuple_revoked", {
+          agentId, origin: tupleSource.origin, recipient: tupleSource.recipient, cause: "hold_rejected"
+        }, at);
+      }
     }
     if (held) await this.ctx.storage.delete(`held:${heldId}`);
     await this.event("pay_rejected", { agentId, heldId, origin: held?.origin ?? allowance?.origin ?? null }, at);
