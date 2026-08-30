@@ -592,9 +592,9 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     const outcome = await spendLedger(env).rejectHold(heldId, at);
     if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
     if (outcome.status === "already_consumed") {
-      await ledger(env).append("pay_rejected", {
+      await appendOrEscalate(env, "pay_rejected", {
         agentId: agent.id, heldId, detail: "allowance_already_consumed: the settlement preceded the rejection"
-      });
+      }, `rejection of hold ${heldId} found its allowance already consumed at ${at}`);
       return json({ ok: true, status: "already_consumed" });
     }
     if (outcome.voided) {
@@ -609,7 +609,12 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
         ).catch(() => undefined);
       }
     }
-    await ledger(env).append("pay_rejected", { agentId: agent.id, heldId });
+    await appendOrEscalate(
+      env,
+      "pay_rejected",
+      { agentId: agent.id, heldId },
+      `hold ${heldId} was rejected at ${at}`
+    );
     return json({ ok: true, status: "rejected" });
   }
 
@@ -670,6 +675,30 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   }
   await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
   return response;
+}
+
+/**
+ * Append a ledger row for a transition that is ALREADY durable; a lost
+ * row escalates to the operator with reconstruction detail instead of
+ * failing the completed operation (whose retry would find nothing to
+ * do and no row would ever land).
+ */
+async function appendOrEscalate(
+  env: Env,
+  kind: string,
+  detail: Record<string, unknown>,
+  reconstruction: string
+): Promise<void> {
+  try {
+    await ledger(env).append(kind, detail);
+  } catch (error) {
+    console.error(`${kind} audit row lost`, detail, error);
+    await notifyOperator(
+      env,
+      `spend audit gap: ${reconstruction}, but its ${kind} row could not be written; reconstruct from this notice.`,
+      []
+    ).catch(() => undefined);
+  }
 }
 
 /**
