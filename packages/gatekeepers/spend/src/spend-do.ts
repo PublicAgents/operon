@@ -449,12 +449,17 @@ export class SpendLedger extends DurableObject {
       }
     }
     if (allowance?.consumedAt !== undefined) {
-      if (held) await this.ctx.storage.delete(`held:${heldId}`);
-      await this.event("pay_rejected", {
-        agentId,
-        heldId,
-        detail: "allowance_already_consumed: the settlement preceded the rejection"
-      }, at);
+      // The hold's presence marks the FIRST pass: it is deleted and the
+      // event written together, so a retry after a lost response finds
+      // no hold and answers without appending the decision again.
+      if (held) {
+        await this.ctx.storage.delete(`held:${heldId}`);
+        await this.event("pay_rejected", {
+          agentId,
+          heldId,
+          detail: "allowance_already_consumed: the settlement preceded the rejection"
+        }, at);
+      }
       return { status: "already_consumed" };
     }
     let voided = false;
