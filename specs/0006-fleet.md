@@ -20,6 +20,14 @@ A PROJECT is a repository carrying an `.operon/` directory, the way
                      afterward: the state repo remains the living copy)
 ```
 
+The manifest's first required field is `project:`, the explicit,
+stable project name. It is never derived (a repo basename is neither
+unique nor stable), it seeds every account-level resource name (worker
+prefix `operon-<project>-*`, the D1 database, the Access application),
+and bootstrap refuses to proceed when resources under that prefix
+already exist and belong to a different repo: collisions are a
+hard error at the door, not a surprise at deploy.
+
 A repo may also host SEVERAL projects, as
 `.operon/projects/<name>/{colony.yaml, charters/}`; the deploy CLI
 takes `--project <name>` or acts on every project it finds. Projects
@@ -178,10 +186,17 @@ behind its own single Access application:
   HTTPS with a per-project Access SERVICE TOKEN. Enrollment is a
   config row plus one token, no redeploy; removal is revoking the
   token. Projects are opt-in.
-- It is a PASSTHROUGH, not a validator: it advertises schemas from its
-  own pinned registry, and each project's gateway stays authoritative
-  for its own pin (§9). Per-project gateways remain the precise
-  interface; the fleet gateway is the convenient one.
+- It is a PASSTHROUGH, not a validator, and it does not pretend one
+  schema fits all pins. At enrollment (and on a refresh interval) it
+  DISCOVERS each project's authoritative interface from that
+  project's own `/openapi.json`. Its advertised MCP tool list carries,
+  per tool, the schema from the newest enrolled pin as the working
+  default, and two first-class tools make skew explicit:
+  `fleet_projects` (every enrolled project with its chassis pin) and
+  `fleet_tool_schema {project, tool}` (that project's authoritative
+  schema for the tool). Each project's gateway remains the validation
+  authority for its own pin (§9); per-project gateways remain the
+  precise interface, the fleet gateway the convenient one.
 - Audit identity survives aggregation: the operator's Access identity
   forwards in a header the downstream gateway records in its audit
   rows, trusted because the request arrived on that project's service
