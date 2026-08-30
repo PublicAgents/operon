@@ -213,7 +213,15 @@ export class SpendLedger extends DurableObject {
 
   // ---- one-time allowances (spec 0002 §2.2, the operon#59 shape) -------
 
+  /**
+   * Idempotent, never-overwriting mint: a retry after a lost response
+   * finds the record already present and leaves it EXACTLY as it is.
+   * Overwriting would resurrect a consumed allowance as fresh spending
+   * authority, which is the one thing a retry must never do.
+   */
   async mintAllowance(allowance: Allowance): Promise<void> {
+    const existing = await this.ctx.storage.get<Allowance>(`allow:${allowance.id}`);
+    if (existing) return;
     await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
   }
 

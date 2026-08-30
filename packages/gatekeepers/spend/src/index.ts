@@ -830,16 +830,27 @@ export class Ops extends OpsEntrypoint<Env> {
       }
       const at = new Date().toISOString();
       // Decision doctrine: the intent row lands BEFORE the state
-      // change and the decision refuses when it cannot be audited, so
-      // a revocation can never be durable without its record. A row
-      // whose revocation then loses (not revocable) is an intent that
-      // produced nothing, which the same row documents.
+      // change and the decision refuses when it cannot be audited. The
+      // intent and the outcome are separate rows so the trail reads
+      // true either way: requested with no revoked row means the
+      // revocation lost (already consumed, expired, or gone), and a
+      // revoked row only ever follows an actual revocation.
       try {
-        await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at });
+        await ledger(this.env).append("allowance_revoke_requested", { allowanceId: body.value.allowanceId, at });
       } catch {
         return errorResponse(503, "audit_unavailable");
       }
       const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
+      if (revoked) {
+        await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at }).catch(async error => {
+          console.error("allowance_revoked outcome row lost", body.value.allowanceId, error);
+          await notifyOperator(
+            this.env,
+            `spend audit gap: allowance ${body.value.allowanceId} WAS revoked at ${at} but its allowance_revoked row could not be written; reconstruct from this notice.`,
+            []
+          ).catch(() => undefined);
+        });
+      }
       return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
     return errorResponse(404, "not_found");
