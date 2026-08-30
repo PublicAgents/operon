@@ -84,9 +84,9 @@ if (manifests.length === 0) fail(`no project named "${onlyProject}" here`);
 
 /**
  * Hash EVERYTHING under packages/container except build outputs: the
- * drain gate (spec 0006 §5). The Dockerfile pins its installs exactly
- * so the image is a pure function of these files; the one residual
- * float is the base image tag, which is why an UNKNOWN live hash
+ * drain gate (spec 0006 §5). The Dockerfile pins its installs AND its
+ * base image by digest, so the image is a pure function of the hashed
+ * files and hash equality means no roll; an UNKNOWN live hash still
  * drains rather than skips (fail toward safety, never toward a roll).
  */
 function containerSourceHash() {

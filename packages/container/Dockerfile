@@ -3,13 +3,16 @@
 # in no credentials; everything sensitive arrives per-wake via env from the
 # WakeContainer Durable Object.
 
-FROM node:24-slim AS build
+# Digest-pinned: image content is a pure function of this file and the
+# sources it copies, which is what the fleet deploy's drain gate relies
+# on. Bump the digest deliberately, as a reviewed change.
+FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS build
 WORKDIR /app
 COPY tsconfig.docker.json ./tsconfig.json
 COPY src ./src
 RUN npm install typescript@6.0.3 @types/node@24.13.3 && npx tsc
 
-FROM node:24-slim
+FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates curl python3 \
   && rm -rf /var/lib/apt/lists/*
