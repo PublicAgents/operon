@@ -266,8 +266,19 @@ export class Ops extends OpsEntrypoint<Env> {
     if (pathname === "/gatekeeper/till/wallet") {
       if (!this.env.TILL_RECIPIENT) return errorResponse(503, "till_unconfigured");
       const address = this.env.TILL_RECIPIENT;
+      // Mirror the CHARGE path's chain semantics: the testnet flag
+      // decides the network (mainnet 4217 by default), and
+      // TILL_RPC_CHAIN_ID is an explicit override, not a default. The
+      // 42431 fallback elsewhere is an RPC-transport detail and must
+      // not leak into what network this wallet reports (or which RPC
+      // its balances are read from).
       const parsedChainId = Number(this.env.TILL_RPC_CHAIN_ID);
-      const chainId = Number.isInteger(parsedChainId) && parsedChainId > 0 ? parsedChainId : 42431;
+      const chainId =
+        Number.isInteger(parsedChainId) && parsedChainId > 0
+          ? parsedChainId
+          : this.env.TILL_TESTNET === "true"
+            ? 42431
+            : 4217;
       const apiKey =
         typeof this.env.TEMPO_API_KEY === "string" && this.env.TEMPO_API_KEY.length > 0
           ? this.env.TEMPO_API_KEY
