@@ -561,45 +561,13 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   await ledger(env).append("tuple_approved", { agentId: agent.id, origin: held.origin, recipient: held.recipient });
 
   // An over-cap hold (explicitly above_cap, or a first-merchant hold
-  // whose amount the caps would refuse anyway) settles by ALLOWANCE:
+  // whose amount the per-tx cap plainly refuses) settles by ALLOWANCE:
   // nothing moves at approval, because the held challenge is minutes
   // stale and the wallet may not be funded yet. The agent re-runs the
   // pay; a fresh matching challenge consumes the allowance.
   const maxTx = toBaseUnits(env.SPEND_MAX_TX ?? "0.10", held.decimals) ?? 0n;
-  const dailyCap = toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", held.decimals) ?? 0n;
-  // Remaining budget counts: a held amount that fits the caps on paper
-  // but not today's remaining budget would refuse over_daily_cap at
-  // approval time, so it settles by allowance too.
-  const spentNow = BigInt(await spendLedger(env).spentToday(agent.id, new Date().toISOString()));
-  const overCap = BigInt(held.amount) > maxTx || spentNow + BigInt(held.amount) > dailyCap;
-  if (held.kind === "above_cap" || overCap) {
-    const days = Number(env.SPEND_ALLOWANCE_DAYS);
-    const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;
-    const now = Date.now();
-    const allowance: Allowance = {
-      id: crypto.randomUUID(),
-      agentId: agent.id,
-      origin: held.origin,
-      method: held.method,
-      recipient: held.recipient,
-      currency: held.currency,
-      maxAmount: held.amount,
-      decimals: held.decimals,
-      display: held.display,
-      mintedAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
-    };
-    await spendLedger(env).mintAllowance(allowance);
-    await spendLedger(env).deleteHeld(heldId);
-    await ledger(env).append("allowance_minted", {
-      agentId: agent.id,
-      allowanceId: allowance.id,
-      origin: allowance.origin,
-      recipient: allowance.recipient,
-      display: allowance.display,
-      expiresAt: allowance.expiresAt
-    });
-    return json({ ok: true, status: "allowance_minted", allowance });
+  if (held.kind === "above_cap" || BigInt(held.amount) > maxTx) {
+    return mintAllowanceForHeld(env, agent.id, heldId, held);
   }
 
   const summary: ChallengeSummary = {
@@ -622,10 +590,65 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     } catch (error) {
       console.error("held cleanup failed after payment (claimed, will not re-pay)", error);
     }
-  } else {
-    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
+    return response;
   }
+  // The serialized reservation is the ONLY budget authority: when it
+  // refuses the approval-time execution on a cap (say, the day's budget
+  // moved between the hold and the click), the approval still stands
+  // and settles by allowance instead. No worker-side pre-read can be
+  // current, so the fallback is driven by the outcome, not a forecast.
+  if (response.status === 422) {
+    try {
+      const body = (await response.clone().json()) as { error?: string };
+      if (body.error === "over_tx_cap" || body.error === "over_daily_cap") {
+        return mintAllowanceForHeld(env, agent.id, heldId, held);
+      }
+    } catch {
+      /* unreadable body: fall through to unclaim */
+    }
+  }
+  await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
   return response;
+}
+
+/**
+ * Turn an approved hold into a one-time allowance (spec 0002 §2.2) and
+ * retire the hold. Nothing moves here; the agent settles by re-running
+ * the pay.
+ */
+async function mintAllowanceForHeld(
+  env: Env,
+  agentId: string,
+  heldId: string,
+  held: HeldPayment
+): Promise<Response> {
+  const days = Number(env.SPEND_ALLOWANCE_DAYS);
+  const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;
+  const now = Date.now();
+  const allowance: Allowance = {
+    id: crypto.randomUUID(),
+    agentId,
+    origin: held.origin,
+    method: held.method,
+    recipient: held.recipient,
+    currency: held.currency,
+    maxAmount: held.amount,
+    decimals: held.decimals,
+    display: held.display,
+    mintedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
+  };
+  await spendLedger(env).mintAllowance(allowance);
+  await spendLedger(env).deleteHeld(heldId);
+  await ledger(env).append("allowance_minted", {
+    agentId,
+    allowanceId: allowance.id,
+    origin: allowance.origin,
+    recipient: allowance.recipient,
+    display: allowance.display,
+    expiresAt: allowance.expiresAt
+  });
+  return json({ ok: true, status: "allowance_minted", allowance });
 }
 
 /** Reconcile an ambiguous outbox row (operator ruling). */
