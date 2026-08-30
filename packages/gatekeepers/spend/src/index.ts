@@ -527,6 +527,15 @@ export default {
  * allowlist. Funding the wallet is sending to this address; there is
  * deliberately no other way to touch it.
  */
+/** Exact base-units-to-display formatting: BigInt arithmetic, no float. */
+function formatUnits(raw: string, decimals: number): string {
+  const units = BigInt(raw);
+  const base = 10n ** BigInt(decimals);
+  const whole = units / base;
+  const fraction = (units % base).toString().padStart(decimals, "0").slice(0, 6).replace(/0+$/, "");
+  return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
+}
+
 async function handleWallet(env: Env): Promise<Response> {
   if (!env.MPP_PRIVATE_KEY) return errorResponse(503, "spend_unconfigured");
   const address = privateKeyToAccount(env.MPP_PRIVATE_KEY as `0x${string}`).address;
@@ -572,11 +581,7 @@ async function handleWallet(env: Env): Promise<Response> {
           // Balance stays null: the address is the load-bearing fact.
         }
       }
-      const display =
-        raw === null
-          ? null
-          : `${(Number(raw) / 10 ** decimals).toFixed(Math.min(decimals, 6))}`;
-      return { currency, decimals, raw, display };
+      return { currency, decimals, raw, display: raw === null ? null : formatUnits(raw, decimals) };
     })
   );
   return json({ ok: true, address, chainId, balances });
