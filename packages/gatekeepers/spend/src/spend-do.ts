@@ -275,26 +275,41 @@ export class SpendLedger extends DurableObject {
   }
 
   /**
-   * Rejection cleanup: an allowance that exists for a rejected hold
-   * (a mint whose response was lost before the operator rejected) is
-   * VOIDED, whatever its state short of consumed. Returns true when
-   * one was voided so the caller can ledger it.
+   * Rejection, in ONE serialized turn and with no claim gate: the hold
+   * (claimed or not; a crash mid-approval must not make rejected
+   * authority unreachable) and any allowance minted for it are handled
+   * together, so a racing consumption cannot slip between separate
+   * calls. Outcomes:
+   *
+   * - "rejected": the hold is gone; an active allowance for it, if one
+   *   leaked from a lost mint response, was voided (voided says so).
+   * - "already_consumed": the allowance was spent before the rejection
+   *   arrived; the settlement stood when it happened, the hold is
+   *   retired, and the trail must say consumed, not cleanly rejected.
+   * - "not_found": neither a hold nor an allowance exists for the id.
+   *
+   * An expired allowance is left as it lies: it met its terminal event
+   * and cannot be consumed, and voiding it would give one allowance
+   * two terminal audit voices.
    */
-  async voidAllowanceForHold(heldId: string, at: string): Promise<boolean> {
+  async rejectHold(
+    heldId: string,
+    at: string
+  ): Promise<{ status: "rejected"; voided: boolean } | { status: "already_consumed" } | { status: "not_found" }> {
+    const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${heldId}`);
-    if (
-      !allowance ||
-      allowance.consumedAt !== undefined ||
-      allowance.revokedAt !== undefined ||
-      // An expired allowance already met its terminal event and cannot
-      // be consumed; voiding it would give one allowance two terminal
-      // audit voices (expired AND revoked).
-      allowance.expiresAt <= at
-    ) {
-      return false;
+    if (!held && !allowance) return { status: "not_found" };
+    if (allowance?.consumedAt !== undefined) {
+      if (held) await this.ctx.storage.delete(`held:${heldId}`);
+      return { status: "already_consumed" };
     }
-    await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });
-    return true;
+    let voided = false;
+    if (allowance && allowance.revokedAt === undefined && allowance.expiresAt > at) {
+      await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });
+      voided = true;
+    }
+    if (held) await this.ctx.storage.delete(`held:${heldId}`);
+    return { status: "rejected", voided };
   }
 
   async unmarkExpiry(id: string): Promise<void> {

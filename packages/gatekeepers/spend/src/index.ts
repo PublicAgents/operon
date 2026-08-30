@@ -582,20 +582,25 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   const agent = typeof agentId === "string" ? findAgent(roster, agentId) : undefined;
   if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
 
-  const held = await spendLedger(env).claimHeld(heldId);
-  if (!held) return errorResponse(409, "held_unavailable");
   if (!approve) {
-    // A rejection also voids any allowance already persisted for this
-    // hold (a mint whose response was lost leaves one behind): spending
-    // authority the operator rejected must not remain consumable.
+    // Rejection is one atomic DO turn with NO claim gate: a hold left
+    // claimed by a crashed approval, or an allowance leaked by a lost
+    // mint response, must still be reachable, and a consumption racing
+    // the rejection must be reported as consumed, not papered over as
+    // a clean rejection.
     const at = new Date().toISOString();
-    if (await spendLedger(env).voidAllowanceForHold(heldId, at)) {
+    const outcome = await spendLedger(env).rejectHold(heldId, at);
+    if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
+    if (outcome.status === "already_consumed") {
+      await ledger(env).append("pay_rejected", {
+        agentId: agent.id, heldId, detail: "allowance_already_consumed: the settlement preceded the rejection"
+      });
+      return json({ ok: true, status: "already_consumed" });
+    }
+    if (outcome.voided) {
       try {
         await ledger(env).append("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" });
       } catch (error) {
-        // The void is durable and the rejection must complete either
-        // way; a lost audit row escalates instead of aborting midway
-        // (which would strand the hold undeleted and unledgered).
         console.error("allowance_revoked (hold_rejected) row lost", heldId, error);
         await notifyOperator(
           env,
@@ -604,10 +609,12 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
         ).catch(() => undefined);
       }
     }
-    await spendLedger(env).deleteHeld(heldId);
-    await ledger(env).append("pay_rejected", { agentId: agent.id, heldId, origin: held.origin });
+    await ledger(env).append("pay_rejected", { agentId: agent.id, heldId });
     return json({ ok: true, status: "rejected" });
   }
+
+  const held = await spendLedger(env).claimHeld(heldId);
+  if (!held) return errorResponse(409, "held_unavailable");
   // The approval BINDS the tuple exactly as held (spec §2.2): origin,
   // method, and recipient. A future challenge differing in any of the
   // three is a new hold, not a payable request.
