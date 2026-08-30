@@ -254,7 +254,8 @@ export class SpendLedger extends DurableObject {
         existing.method === payment.method &&
         existing.recipient.toLowerCase() === payment.recipient.toLowerCase() &&
         existing.currency.toLowerCase() === payment.currency.toLowerCase() &&
-        existing.amount === payment.amount
+        existing.amount === payment.amount &&
+        existing.reason === payment.reason
       ) {
         return existing;
       }
@@ -405,17 +406,24 @@ export class SpendLedger extends DurableObject {
     // approval that already RESERVED (however long ago) settled or is
     // settling, and the rejection concedes rather than recording a
     // contradiction.
+    // The reservation pointer is checked UNCONDITIONALLY: an approval
+    // whose payment reserved (paid, in flight, or outcome-unknown, and
+    // whether the hold ended up claimed or unclaimed) settled or may
+    // have settled, and the rejection concedes rather than recording a
+    // contradiction. Only a provably released attempt clears the way.
+    const paidKey = await this.ctx.storage.get<string>(`heldpay:${heldId}`);
+    if (paidKey !== undefined) {
+      const paidRow = await this.ctx.storage.get<OutboxRow>(paidKey);
+      if (paidRow && paidRow.status !== "released") {
+        if (held) await this.ctx.storage.delete(`held:${heldId}`);
+        return { status: "approval_paid" };
+      }
+      await this.ctx.storage.delete(`heldpay:${heldId}`);
+    }
     if (held?.claimed && held.claimedAt !== undefined) {
       const ageMs = Date.parse(at) - Date.parse(held.claimedAt);
       if (Number.isFinite(ageMs) && ageMs < 5 * 60 * 1000) {
         return { status: "approval_in_flight" };
-      }
-      const rows = await this.ctx.storage.list<OutboxRow>({ prefix: "out:", reverse: true, limit: 500 });
-      for (const row of rows.values()) {
-        if (row.heldId === heldId && row.status !== "released") {
-          await this.ctx.storage.delete(`held:${heldId}`);
-          return { status: "approval_paid" };
-        }
       }
     }
     if (allowance?.consumedAt !== undefined) {
@@ -513,7 +521,15 @@ export class SpendLedger extends DurableObject {
     | { outcome: "refused"; problem: CapProblem }
   > {
     const plain = await this.reserve(row, caps);
-    if (plain.ok) return { outcome: "reserved", outboxId: plain.outboxId };
+    if (plain.ok) {
+      if (row.heldId !== undefined) {
+        // Approval-time execution: a durable pointer from the hold to
+        // its reservation, written in the same turn, so a later
+        // rejection finds the payment directly (no bounded scan).
+        await this.ctx.storage.put(`heldpay:${row.heldId}`, `out:${row.at}:${plain.outboxId}`);
+      }
+      return { outcome: "reserved", outboxId: plain.outboxId };
+    }
     if (plain.problem === "over_max_amount") {
       await this.event("pay_refused", { agentId: row.agentId, url: row.url, problem: plain.problem }, row.at);
       return { outcome: "refused", problem: plain.problem };
