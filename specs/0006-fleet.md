@@ -5,7 +5,7 @@ design after living with the Phase 1 console. The goal, in the
 operator's words: starting a new project should boil down to adding a
 domain, adding git repos, and writing the goal and the charters, with
 one Cloudflare account, one chassis lineage, and one upgrade motion
-per project (independently pinned; see §8).
+per project (independently pinned; see §9).
 
 ## 1. The unit: `.operon/` in any repo
 
@@ -25,7 +25,7 @@ A repo may also host SEVERAL projects, as
 takes `--project <name>` or acts on every project it finds. Projects
 sharing a repo share its chassis pin and therefore upgrade together,
 so co-locate projects you want in lockstep and give a project its own
-repo when it should pin independently (the §8 canary pattern needs
+repo when it should pin independently (the §9 canary pattern needs
 that).
 
 The chassis stays a git submodule pinned by the project (the pin is
@@ -160,9 +160,41 @@ always. The rotation-group machinery generalizes for the opted-in
 shared secrets: a group's member list may span project prefixes, so
 one rotation or `secrets sync` writes one value to every declared
 worker through the gateway API, per project against its own pinned
-schema (§8). Values never transit chat or logs, exactly as today.
+schema (§9). Values never transit chat or logs, exactly as today.
 
-## 8. Version skew between projects
+## 8. The fleet gateway: one API and MCP plane
+
+Per-project gateways multiply: an operator's tooling (a local model
+over MCP, scripts, a future dashboard) should not need N connections
+for N projects. The FLEET GATEWAY is one optional aggregator worker
+behind its own single Access application:
+
+- It exposes the SAME registry surface with one change: every tool
+  gains a required `project` argument. One MCP connection, one tool
+  list, all projects; REST mirrors it identically, so parity holds.
+  (Prefixing tool names per project is rejected: it multiplies the
+  tool list by the fleet size.)
+- It resolves `project` to that project's gateway and forwards over
+  HTTPS with a per-project Access SERVICE TOKEN. Enrollment is a
+  config row plus one token, no redeploy; removal is revoking the
+  token. Projects are opt-in.
+- It is a PASSTHROUGH, not a validator: it advertises schemas from its
+  own pinned registry, and each project's gateway stays authoritative
+  for its own pin (§9). Per-project gateways remain the precise
+  interface; the fleet gateway is the convenient one.
+- Audit identity survives aggregation: the operator's Access identity
+  forwards in a header the downstream gateway records in its audit
+  rows, trusted because the request arrived on that project's service
+  token. A decision through the fleet plane ledgers as the operator,
+  at the project, indistinguishable in accountability from a direct
+  call.
+- Blast radius, stated plainly: the fleet gateway holds a service
+  token for every enrolled project, so its compromise is a fleet-wide
+  operator-plane compromise. It sits in the crown-jewel tier beside
+  the Cloudflare token; its per-project tokens are individually
+  revocable, and enrollment being opt-in is the containment.
+
+## 9. Version skew between projects
 
 Projects pin the chassis independently, and the isolation model makes
 that safe: every runtime artifact (workers, D1 schema, DO classes, the
@@ -181,7 +213,7 @@ permitted at all is convention rather than code: the qualified
 `project/agent` naming on shared surfaces, which is stable text with
 no schema to drift.
 
-## 9. Migrating a project between operon instances
+## 10. Migrating a project between operon instances
 
 Durable truth is portable by construction: agent memory is the state
 repo (git), money is on-chain and follows the wallet key (a secret the
@@ -214,7 +246,7 @@ from the same manifest and pin, re-set secrets with the same wallet
 key, import, re-point at the same state repos, re-enable agent by
 agent.
 
-## 10. Out of scope
+## 11. Out of scope
 
 - Shared-runtime tenancy (see §3).
 - Publishing the chassis as an installable package and prebuilt wake
@@ -225,7 +257,7 @@ agent.
   alone, and a gateway picker in the console shell is the most this
   spec blesses.
 
-## 11. Order of work
+## 12. Order of work
 
 1. Manifest schema and template rendering in the chassis; `deploy
    --check` validation against the schema (the livevariant colony
