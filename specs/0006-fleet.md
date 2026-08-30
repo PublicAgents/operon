@@ -145,7 +145,26 @@ prefixes, so one rotation or `secrets sync` writes one value to every
 project's workers through the gateway API. Values never transit chat
 or logs, exactly as today.
 
-## 8. Migrating a project between operon instances
+## 8. Version skew between projects
+
+Projects pin the chassis independently, and the isolation model makes
+that safe: every runtime artifact (workers, D1 schema, DO classes, the
+wake image, the console assets) comes from the project's own pin and
+deploys on its own. Two projects at different versions share an
+account and nothing else, which is what makes CANARY BUMPS the normal
+upgrade motion: bump a low-stakes project first, watch it, then roll
+the rest.
+
+The one discipline lives in fleet-level tooling: **no fleet operation
+assumes a single chassis version.** Cross-project tools (secrets sync,
+cross-prefix rotation, any future fleet dashboard) iterate projects
+and use each project's OWN pinned scripts and manifest schema, never a
+central copy at some other version. The only cross-version coupling
+permitted at all is convention rather than code: the qualified
+`project/agent` naming on shared surfaces, which is stable text with
+no schema to drift.
+
+## 9. Migrating a project between operon instances
 
 Durable truth is portable by construction: agent memory is the state
 repo (git), money is on-chain and follows the wallet key (a secret the
@@ -161,7 +180,7 @@ export D1, stand up the target from the same manifest and pin, re-set
 secrets with the same wallet key, import the vault, re-point at the
 same state repos, re-enable.
 
-## 9. Out of scope
+## 10. Out of scope
 
 - Shared-runtime tenancy (see §3).
 - Publishing the chassis as an installable package and prebuilt wake
@@ -172,7 +191,7 @@ same state repos, re-enable.
   alone, and a gateway picker in the console shell is the most this
   spec blesses.
 
-## 10. Order of work
+## 11. Order of work
 
 1. Manifest schema and template rendering in the chassis; `deploy
    --check` validation against the schema (the livevariant colony
