@@ -282,7 +282,15 @@ export class SpendLedger extends DurableObject {
    */
   async voidAllowanceForHold(heldId: string, at: string): Promise<boolean> {
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${heldId}`);
-    if (!allowance || allowance.consumedAt !== undefined || allowance.revokedAt !== undefined) {
+    if (
+      !allowance ||
+      allowance.consumedAt !== undefined ||
+      allowance.revokedAt !== undefined ||
+      // An expired allowance already met its terminal event and cannot
+      // be consumed; voiding it would give one allowance two terminal
+      // audit voices (expired AND revoked).
+      allowance.expiresAt <= at
+    ) {
       return false;
     }
     await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });

@@ -590,7 +590,19 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     // authority the operator rejected must not remain consumable.
     const at = new Date().toISOString();
     if (await spendLedger(env).voidAllowanceForHold(heldId, at)) {
-      await ledger(env).append("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" });
+      try {
+        await ledger(env).append("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" });
+      } catch (error) {
+        // The void is durable and the rejection must complete either
+        // way; a lost audit row escalates instead of aborting midway
+        // (which would strand the hold undeleted and unledgered).
+        console.error("allowance_revoked (hold_rejected) row lost", heldId, error);
+        await notifyOperator(
+          env,
+          `spend audit gap: allowance ${heldId} was voided by rejecting its hold at ${at} but the allowance_revoked row could not be written; reconstruct from this notice.`,
+          []
+        ).catch(() => undefined);
+      }
     }
     await spendLedger(env).deleteHeld(heldId);
     await ledger(env).append("pay_rejected", { agentId: agent.id, heldId, origin: held.origin });
