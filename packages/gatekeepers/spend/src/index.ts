@@ -527,12 +527,16 @@ export default {
  * allowlist. Funding the wallet is sending to this address; there is
  * deliberately no other way to touch it.
  */
-/** Exact base-units-to-display formatting: BigInt arithmetic, no float. */
+/**
+ * Exact base-units-to-display formatting: BigInt arithmetic, no float,
+ * full precision with only trailing zeros trimmed (truncating would let
+ * a positive high-decimals balance display as zero).
+ */
 function formatUnits(raw: string, decimals: number): string {
   const units = BigInt(raw);
   const base = 10n ** BigInt(decimals);
   const whole = units / base;
-  const fraction = (units % base).toString().padStart(decimals, "0").slice(0, 6).replace(/0+$/, "");
+  const fraction = (units % base).toString().padStart(decimals, "0").replace(/0+$/, "");
   return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
 }
 
