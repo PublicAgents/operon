@@ -144,14 +144,23 @@ which secrets exist:
 
 ## 7. Secrets across the fleet
 
-Secrets classify as FLEET-SHARED (the Cloudflare API token, the Tempo
-API key, a shared Telegram bot token, model credentials where the
-operator chooses to share them) or PER-PROJECT (spend keys, per-agent
-bearers, GitHub tokens, zone-specific values). The rotation-group
-machinery generalizes: a group's member list may span project
-prefixes, so one rotation or `secrets sync` writes one value to every
-project's workers through the gateway API. Values never transit chat
-or logs, exactly as today.
+The DEFAULT posture is per-project values for every secret, because a
+shared value extends that secret's blast radius fleet-wide by
+definition: the §3 isolation claim is about infrastructure state, and
+it cannot protect against a credential the operator has deliberately
+made common. Sharing is therefore an explicit, per-secret opt-in in
+the manifest, reserved for credentials that are inherently
+account-wide anyway or whose duplication the operator judges worse
+than their shared radius. The account-scoped Cloudflare API token is
+the unavoidable case and is named for what it is: the fleet's
+crown-jewel secret, scoped as narrowly as the platform allows and
+first in line for rotation. Everything project-scoped (spend keys,
+per-agent bearers, GitHub tokens, zone values) stays per-project,
+always. The rotation-group machinery generalizes for the opted-in
+shared secrets: a group's member list may span project prefixes, so
+one rotation or `secrets sync` writes one value to every declared
+worker through the gateway API, per project against its own pinned
+schema (§8). Values never transit chat or logs, exactly as today.
 
 ## 8. Version skew between projects
 
@@ -177,16 +186,33 @@ no schema to drift.
 Durable truth is portable by construction: agent memory is the state
 repo (git), money is on-chain and follows the wallet key (a secret the
 operator re-sets), history is chronicle D1 (export and import), and
-secrets are re-set by manifest checklist. Durable Object residue is
-small and enumerable: merchant tuples and allowances fail SAFE when
-lost (merchants re-hold once), ack cursors re-deliver idempotently,
-and wake state is ephemeral. The one real loss is the VAULT
-(agent-stored secrets are unrecoverable by design), so migration gets
-an operator-only sealed vault export and import tool in the registry.
-The runbook: disable agents, drain held items and reconcile unknowns,
-export D1, stand up the target from the same manifest and pin, re-set
-secrets with the same wallet key, import the vault, re-point at the
-same state repos, re-enable.
+secrets are re-set by manifest checklist. Durable Object state is
+enumerable, and the runbook accounts for every consequential piece
+rather than waving at it:
+
+- **Vault** (agent-stored secrets, unrecoverable by design) and
+  **spend state** (merchant tuples, active allowances, daily
+  counters, outbox history): both covered by an operator-only sealed
+  EXPORT and IMPORT tool pair in the registry. Losing tuples and
+  allowances would fail safe (merchants re-hold once), but the tool
+  exists so caps enforcement never resets: imported daily counters
+  mean the migration day cannot double an agent's budget.
+- **Pending work** must be zero at cutover, by the quiesce step:
+  agents disabled, held payments and sends decided, outcome_unknown
+  rows reconciled, in-flight rotations completed or aborted, channel
+  and inbox messages pulled and acked by a final wake. Migration never
+  proceeds with a nonzero pending set.
+- **Disable and kill-switch state** re-asserts from the manifest and
+  the runbook itself (agents come up disabled on the target and are
+  enabled deliberately, one by one).
+- **Ack cursors** re-deliver idempotently if not carried; the spend
+  and vault export carries them anyway since it is already there.
+
+The runbook: disable agents, drain and decide everything pending,
+export D1 plus the sealed vault and spend export, stand up the target
+from the same manifest and pin, re-set secrets with the same wallet
+key, import, re-point at the same state repos, re-enable agent by
+agent.
 
 ## 10. Out of scope
 
