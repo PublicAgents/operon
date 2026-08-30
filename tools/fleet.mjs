@@ -11,11 +11,12 @@
  * the CHASSIS-owned templates into `.operon/build/<project>/`; the
  * colony repo carries no wrangler files.
  *
- * Deploys never kill running wakes (spec 0006 §5): when the scheduler
- * is being deployed and the container source hash differs from what
- * the live scheduler reports, the driver DRAINS first: it disables
- * every enabled agent through the ops gateway, waits for the
- * current-wake set to empty, deploys, then restores. Draining needs
+ * Deploys never kill running wakes (spec 0006 §5): when the container
+ * source hash differs from what the live scheduler reports, the driver
+ * DRAINS first: it PAUSES new wake starts through the ops gateway
+ * (fleet_pause defers and never touches a wake in flight), waits for
+ * the current-wake set to empty, deploys, and resumes in a finally
+ * whatever happens. Draining needs
  * OPERON_OPS_URL plus either an interactive `cloudflared` login or
  * CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET (a service token); a
  * scheduler deploy REFUSES without them unless --no-drain says, in
