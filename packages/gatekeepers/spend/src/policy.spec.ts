@@ -147,9 +147,11 @@ describe("allowanceMatches", () => {
     decimals: 6,
     display: "190.2"
   };
+  const URL_A = "https://cairnwake.com/invoice/prior-audit";
   const allowance: Allowance = {
     id: "a1",
     agentId: "promoter",
+    url: "https://cairnwake.com/invoice/prior-audit",
     origin: "https://cairnwake.com",
     method: "tempo",
     recipient: "0x4f7975f4f00872517eb334420b7d5b673fcf2971",
@@ -162,26 +164,32 @@ describe("allowanceMatches", () => {
   };
 
   it("matches the approved tuple case-insensitively on addresses, amount at the ceiling", () => {
-    expect(allowanceMatches(allowance, "promoter", summary, NOW)).toBe(true);
+    expect(allowanceMatches(allowance, "promoter", URL_A, summary, NOW)).toBe(true);
     expect(
-      allowanceMatches(allowance, "promoter", { ...summary, amount: "190199999" }, NOW)
+      allowanceMatches(allowance, "promoter", URL_A, { ...summary, amount: "190199999" }, NOW)
     ).toBe(true);
   });
 
   it("refuses over-ceiling, wrong tuple, wrong currency, wrong agent", () => {
-    expect(allowanceMatches(allowance, "promoter", { ...summary, amount: "190200001" }, NOW)).toBe(false);
-    expect(allowanceMatches(allowance, "promoter", { ...summary, recipient: "0xdead" }, NOW)).toBe(false);
-    expect(allowanceMatches(allowance, "promoter", { ...summary, origin: "https://evil.com" }, NOW)).toBe(false);
-    expect(allowanceMatches(allowance, "promoter", { ...summary, method: "solana" }, NOW)).toBe(false);
-    expect(allowanceMatches(allowance, "promoter", { ...summary, currency: "0xother" }, NOW)).toBe(false);
-    expect(allowanceMatches(allowance, "other-agent", summary, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", URL_A, { ...summary, amount: "190200001" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", URL_A, { ...summary, recipient: "0xdead" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", URL_A, { ...summary, origin: "https://evil.com" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", URL_A, { ...summary, method: "solana" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "promoter", URL_A, { ...summary, currency: "0xother" }, NOW)).toBe(false);
+    expect(allowanceMatches(allowance, "other-agent", URL_A, summary, NOW)).toBe(false);
+  });
+
+  it("binds to the approved URL: a same-shaped pay at another URL does not match", () => {
+    expect(
+      allowanceMatches(allowance, "promoter", "https://cairnwake.com/invoice/other", summary, NOW)
+    ).toBe(false);
   });
 
   it("refuses consumed, revoked, and expired allowances", () => {
-    expect(allowanceMatches({ ...allowance, consumedAt: NOW }, "promoter", summary, NOW)).toBe(false);
-    expect(allowanceMatches({ ...allowance, revokedAt: NOW }, "promoter", summary, NOW)).toBe(false);
+    expect(allowanceMatches({ ...allowance, consumedAt: NOW }, "promoter", URL_A, summary, NOW)).toBe(false);
+    expect(allowanceMatches({ ...allowance, revokedAt: NOW }, "promoter", URL_A, summary, NOW)).toBe(false);
     expect(
-      allowanceMatches({ ...allowance, expiresAt: "2026-08-30T11:59:59.000Z" }, "promoter", summary, NOW)
+      allowanceMatches({ ...allowance, expiresAt: "2026-08-30T11:59:59.000Z" }, "promoter", URL_A, summary, NOW)
     ).toBe(false);
   });
 });

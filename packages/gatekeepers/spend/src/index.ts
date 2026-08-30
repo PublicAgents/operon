@@ -585,6 +585,13 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   const held = await spendLedger(env).claimHeld(heldId);
   if (!held) return errorResponse(409, "held_unavailable");
   if (!approve) {
+    // A rejection also voids any allowance already persisted for this
+    // hold (a mint whose response was lost leaves one behind): spending
+    // authority the operator rejected must not remain consumable.
+    const at = new Date().toISOString();
+    if (await spendLedger(env).voidAllowanceForHold(heldId, at)) {
+      await ledger(env).append("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" });
+    }
     await spendLedger(env).deleteHeld(heldId);
     await ledger(env).append("pay_rejected", { agentId: agent.id, heldId, origin: held.origin });
     return json({ ok: true, status: "rejected" });
@@ -662,10 +669,11 @@ async function mintAllowanceForHeld(
   const now = Date.now();
   const allowance: Allowance = {
     // The hold's id: one hold mints at most one allowance, and a retry
-    // after a lost response rewrites the SAME record instead of
-    // minting a twin authorization under a fresh random id.
+    // after a lost response finds the SAME record instead of minting a
+    // twin authorization under a fresh random id.
     id: heldId,
     agentId,
+    url: held.url,
     origin: held.origin,
     method: held.method,
     recipient: held.recipient,

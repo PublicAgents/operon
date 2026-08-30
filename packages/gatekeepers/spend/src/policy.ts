@@ -174,6 +174,8 @@ export function summarizeChallenge(
 export interface Allowance {
   id: string;
   agentId: string;
+  /** The exact pay URL the operator approved; consumption binds to it. */
+  url: string;
   origin: string;
   method: string;
   recipient: string;
@@ -200,6 +202,7 @@ export interface Allowance {
 export function allowanceMatches(
   allowance: Allowance,
   agentId: string,
+  url: string,
   summary: ChallengeSummary,
   nowIso: string
 ): boolean {
@@ -208,6 +211,7 @@ export function allowanceMatches(
     allowance.revokedAt === undefined &&
     allowance.expiresAt > nowIso &&
     allowance.agentId === agentId &&
+    allowance.url === url &&
     allowance.origin === summary.origin &&
     allowance.method === summary.method &&
     allowance.recipient.toLowerCase() === summary.recipient.toLowerCase() &&

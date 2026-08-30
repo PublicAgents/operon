@@ -274,6 +274,21 @@ export class SpendLedger extends DurableObject {
     return true;
   }
 
+  /**
+   * Rejection cleanup: an allowance that exists for a rejected hold
+   * (a mint whose response was lost before the operator rejected) is
+   * VOIDED, whatever its state short of consumed. Returns true when
+   * one was voided so the caller can ledger it.
+   */
+  async voidAllowanceForHold(heldId: string, at: string): Promise<boolean> {
+    const allowance = await this.ctx.storage.get<Allowance>(`allow:${heldId}`);
+    if (!allowance || allowance.consumedAt !== undefined || allowance.revokedAt !== undefined) {
+      return false;
+    }
+    await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });
+    return true;
+  }
+
   async unmarkExpiry(id: string): Promise<void> {
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
     if (allowance) {
@@ -339,7 +354,7 @@ export class SpendLedger extends DurableObject {
     if (plain.problem === "over_max_amount") return { outcome: "refused", problem: plain.problem };
 
     for (const allowance of await this.listAllowances(row.agentId)) {
-      if (allowanceMatches(allowance, row.agentId, summary, row.at)) {
+      if (allowanceMatches(allowance, row.agentId, row.url, summary, row.at)) {
         const id = crypto.randomUUID();
         await this.ctx.storage.put(`allow:${allowance.id}`, {
           ...allowance,
