@@ -20,6 +20,14 @@ A PROJECT is a repository carrying an `.operon/` directory, the way
                      afterward: the state repo remains the living copy)
 ```
 
+A repo may also host SEVERAL projects, as
+`.operon/projects/<name>/{colony.yaml, charters/}`; the deploy CLI
+takes `--project <name>` or acts on every project it finds. Projects
+sharing a repo share its chassis pin and therefore upgrade together,
+so co-locate projects you want in lockstep and give a project its own
+repo when it should pin independently (the §8 canary pattern needs
+that).
+
 The chassis stays a git submodule pinned by the project (the pin is
 the deploy gate, as today). The fleet is simply the set of repos that
 carry `.operon/`; there is no central fleet repo. Shared deploy
