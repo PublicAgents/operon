@@ -267,5 +267,7 @@ agent.
 3. Bootstrap script, proven by standing up the operator's next real
    project end to end.
 4. Fleet secrets: cross-prefix rotation groups and `secrets sync`.
-5. Vault export and import tools; the migration runbook documented in
-   DEPLOY.md.
+5. The fleet gateway, once a second real project exists to justify
+   it.
+6. Vault and spend export and import tools; the migration runbook
+   documented in DEPLOY.md.
