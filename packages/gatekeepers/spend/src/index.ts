@@ -186,6 +186,8 @@ interface PayContext {
    * where re-holding would loop.
    */
   holdPayment?: Omit<HeldPayment, "id" | "queuedAt" | "claimed">;
+  /** Approval-time execution of a specific held proposal (see decidePay). */
+  forbidAllowanceConsumption?: boolean;
 }
 
 /**
@@ -233,7 +235,8 @@ async function executePayment(
     summary,
     context.holdPayment && holdMaxBase !== null
       ? { payment: context.holdPayment, holdMax: holdMaxBase.toString() }
-      : null
+      : null,
+    { forbidAllowanceConsumption: context.forbidAllowanceConsumption === true }
   );
   if (decision.outcome === "held") {
     await mirrorSpendEvents(env);
@@ -522,7 +525,7 @@ async function mirrorSpendEvents(env: Env): Promise<void> {
     const events = await spendLedger(env).drainEvents();
     if (events.length === 0) return;
     for (const event of events) {
-      await ledger(env).append(event.kind, { ...event.detail, at: event.at });
+      await ledger(env).append(event.kind, { ...event.detail, at: event.at, eventId: event.id });
     }
     await spendLedger(env).ackEvents(events.map(event => event.id));
   } catch (error) {
@@ -547,6 +550,7 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
     const outcome = await spendLedger(env).rejectHold(heldId, agent.id, at);
     await mirrorSpendEvents(env);
     if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
+    if (outcome.status === "approval_in_flight") return errorResponse(409, "approval_in_flight");
     if (outcome.status === "already_consumed") return json({ ok: true, status: "already_consumed" });
     return json({ ok: true, status: "rejected" });
   }
@@ -580,7 +584,13 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   };
   const response = await executePayment(
     env,
-    { agent, url: held.url, maxAmountDisplay: held.maxAmount, reason: held.reason },
+    {
+      agent,
+      url: held.url,
+      maxAmountDisplay: held.maxAmount,
+      reason: held.reason,
+      forbidAllowanceConsumption: true
+    },
     summary
   );
   if (response.ok) {

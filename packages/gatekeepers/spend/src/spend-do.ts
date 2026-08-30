@@ -43,6 +43,8 @@ export interface HeldPayment {
   reason: string;
   queuedAt: string;
   claimed?: boolean;
+  /** When the claim was taken; a stale claim (crashed approval) is overridable. */
+  claimedAt?: string;
   /**
    * Why it is held: a first payment to a new merchant, or a payment over
    * the caps (spec 0002 §2.2 allowance flow). Missing means "merchant"
@@ -84,10 +86,29 @@ export class SpendLedger extends DurableObject {
     await this.ctx.storage.put(`event:${id}`, { id, kind, detail, at });
   }
 
-  /** Oldest unmirrored events, for the activity-ledger mirror. */
+  /**
+   * Oldest unmirrored events, for the activity-ledger mirror. Draining
+   * takes a short LEASE in the same turn, so two concurrent mirrors
+   * cannot both append the same events; an expired lease (a mirror
+   * that died mid-append) re-surfaces its events. The only remaining
+   * duplicate window is an append that landed whose ack then failed,
+   * and every mirrored row carries the eventId so those are
+   * identifiable.
+   */
   async drainEvents(limit = 50): Promise<SpendEvent[]> {
-    const entries = await this.ctx.storage.list<SpendEvent>({ prefix: "event:", limit });
-    return [...entries.values()];
+    const now = Date.now();
+    const entries = await this.ctx.storage.list<SpendEvent & { leasedUntil?: number }>({
+      prefix: "event:",
+      limit: limit * 2
+    });
+    const drained: SpendEvent[] = [];
+    for (const [key, event] of entries) {
+      if (drained.length >= limit) break;
+      if (event.leasedUntil !== undefined && event.leasedUntil > now) continue;
+      await this.ctx.storage.put(key, { ...event, leasedUntil: now + 30_000 });
+      drained.push(event);
+    }
+    return drained;
   }
 
   /** Ack after the mirror landed; a failed mirror simply drains again. */
@@ -233,13 +254,13 @@ export class SpendLedger extends DurableObject {
   async claimHeld(id: string): Promise<HeldPayment | undefined> {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${id}`);
     if (!held || held.claimed) return undefined;
-    await this.ctx.storage.put(`held:${id}`, { ...held, claimed: true });
+    await this.ctx.storage.put(`held:${id}`, { ...held, claimed: true, claimedAt: new Date().toISOString() });
     return held;
   }
 
   async unclaimHeld(id: string): Promise<void> {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${id}`);
-    if (held) await this.ctx.storage.put(`held:${id}`, { ...held, claimed: false });
+    if (held) await this.ctx.storage.put(`held:${id}`, { ...held, claimed: false, claimedAt: undefined });
   }
 
   async deleteHeld(id: string): Promise<void> {
@@ -338,10 +359,25 @@ export class SpendLedger extends DurableObject {
     heldId: string,
     agentId: string,
     at: string
-  ): Promise<{ status: "rejected"; voided: boolean } | { status: "already_consumed" } | { status: "not_found" }> {
+  ): Promise<
+    | { status: "rejected"; voided: boolean }
+    | { status: "already_consumed" }
+    | { status: "approval_in_flight" }
+    | { status: "not_found" }
+  > {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${heldId}`);
     if (!held && !allowance) return { status: "not_found" };
+    // A FRESH claim means an approval is executing right now; rejecting
+    // under it would report "rejected" while that payment completes.
+    // The claim is respected while young and overridable once stale
+    // (a crashed approval must not make rejection unreachable).
+    if (held?.claimed && held.claimedAt !== undefined) {
+      const ageMs = Date.parse(at) - Date.parse(held.claimedAt);
+      if (Number.isFinite(ageMs) && ageMs < 5 * 60 * 1000) {
+        return { status: "approval_in_flight" };
+      }
+    }
     if (allowance?.consumedAt !== undefined) {
       if (held) await this.ctx.storage.delete(`held:${heldId}`);
       await this.event("pay_rejected", {
@@ -408,7 +444,16 @@ export class SpendLedger extends DurableObject {
     row: Omit<OutboxRow, "id" | "status" | "allowanceId">,
     caps: { maxAmount: string; maxTx: string; dailyCap: string },
     summary: ChallengeSummary,
-    holdOption: { payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">; holdMax: string } | null
+    holdOption: { payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">; holdMax: string } | null,
+    options?: {
+      /**
+       * Approval-time executions of a specific held proposal set this:
+       * they must never silently consume an allowance minted for a
+       * DIFFERENT proposal that happens to share the URL; on a cap
+       * refusal the caller mints this hold's own allowance instead.
+       */
+      forbidAllowanceConsumption?: boolean;
+    }
   ): Promise<
     | { outcome: "reserved"; outboxId: string; allowanceId?: string }
     | { outcome: "held"; held: HeldPayment; deduped: boolean }
@@ -421,7 +466,7 @@ export class SpendLedger extends DurableObject {
       return { outcome: "refused", problem: plain.problem };
     }
 
-    for (const allowance of await this.listAllowances(row.agentId)) {
+    for (const allowance of options?.forbidAllowanceConsumption ? [] : await this.listAllowances(row.agentId)) {
       if (allowanceMatches(allowance, row.agentId, row.url, summary, row.at)) {
         const id = crypto.randomUUID();
         await this.ctx.storage.put(`allow:${allowance.id}`, {
