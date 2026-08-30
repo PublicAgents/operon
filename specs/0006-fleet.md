@@ -84,9 +84,9 @@ manifest against the NEW chassis's requirements:
 Each project deploys its own full set of workers under its prefix
 (`operon-<project>-gatekeeper-*`), its own D1, its own Durable Object
 namespaces (which follow the workers automatically), its own zone, its
-own Access application at `ops.<zone>`. Projects share an account and
-a chassis lineage and NOTHING else: no shared DO, no shared database,
-no shared secret store. The blast radius of any compromise or bug
+own zone. Projects share an account, a chassis lineage, and the
+CONTROL PLANE (§8) and nothing else: no shared DO, no shared
+database, no shared secret store. The blast radius of any compromise or bug
 stays one project wide. Shared-runtime tenancy (projects inside one
 set of workers) is explicitly out of scope; if the fleet ever grows
 projects too small to deserve their own workers, this manifest is the
@@ -100,13 +100,14 @@ a fresh domain into a running project using the account-scoped
 
 1. Create or adopt the zone; DNS records; email routing for the
    agents' addresses.
-2. Create the D1 database (named `operon-<project>`), the Access
-   application for `ops.<zone>`, and the routes the templates expect.
+2. Create the D1 database (named `operon-<project>`) and the routes
+   the templates expect.
 3. Create agent state repos from the charter seeds if they do not
    exist.
 4. Report the secrets the manifest declares but the workers lack, as a
    checklist; the operator sets them via the gateway secrets tools.
-5. Deploy.
+5. Deploy the project, then enroll it in the control plane and
+   redeploy the plane so its bindings exist (§8).
 
 Idempotent: re-running converges and reports, never duplicates.
 
@@ -119,8 +120,9 @@ Idempotent: re-running converges and reports, never duplicates.
   decision buttons carry the project in their callback payloads so a
   press can never route to another project's gatekeeper.
 - Command grammar: an unqualified name (`/tell prior ...`) resolves
-  against the surface's project context (a console instance, a
-  per-project Telegram group or forum topic). The qualified form
+  against the surface's project context (the console's selected
+  project, a per-project Telegram group or forum topic). The qualified
+  form
   (`/tell project/prior ...`) resolves absolutely and is required on
   any surface without a project context.
 - GitHub bot accounts are globally named, so the convention includes
@@ -170,44 +172,47 @@ one rotation or `secrets sync` writes one value to every declared
 worker through the gateway API, per project against its own pinned
 schema (§9). Values never transit chat or logs, exactly as today.
 
-## 8. The fleet gateway: one API and MCP plane
+## 8. The control plane: one console, one API, one MCP, one CLI
 
-Per-project gateways multiply: an operator's tooling (a local model
-over MCP, scripts, a future dashboard) should not need N connections
-for N projects. The FLEET GATEWAY is one optional aggregator worker
-behind its own single Access application:
+There is ONE operator plane for the whole fleet, not one per project.
+The control plane is the ops worker generalized: it already speaks to
+gatekeepers exclusively over binding-only `Ops` entrypoints, so the
+fleet version is the same worker with SERVICE BINDINGS to every
+enrolled project's gatekeepers. No service tokens between planes, no
+per-project Access applications, no per-project consoles: those
+concepts retire.
 
-- It exposes the SAME registry surface with one change: every tool
-  gains a required `project` argument. One MCP connection, one tool
-  list, all projects; REST mirrors it identically, so parity holds.
-  (Prefixing tool names per project is rejected: it multiplies the
-  tool list by the fleet size.)
-- It resolves `project` to that project's gateway and forwards over
-  HTTPS with a per-project Access SERVICE TOKEN. Enrollment is a
-  config row plus one token, no redeploy; removal is revoking the
-  token. Projects are opt-in.
-- It is a PASSTHROUGH, not a validator, and it does not pretend one
-  schema fits all pins. At enrollment (and on a refresh interval) it
-  DISCOVERS each project's authoritative interface from that
-  project's own `/openapi.json`. Its advertised MCP tool list carries,
-  per tool, the schema from the newest enrolled pin as the working
-  default, and two first-class tools make skew explicit:
-  `fleet_projects` (every enrolled project with its chassis pin) and
-  `fleet_tool_schema {project, tool}` (that project's authoritative
-  schema for the tool). Each project's gateway remains the validation
-  authority for its own pin (§9); per-project gateways remain the
-  precise interface, the fleet gateway the convenient one.
-- Audit identity survives aggregation: the operator's Access identity
-  forwards in a header the downstream gateway records in its audit
-  rows, trusted because the request arrived on that project's service
-  token. A decision through the fleet plane ledgers as the operator,
-  at the project, indistinguishable in accountability from a direct
-  call.
-- Blast radius, stated plainly: the fleet gateway holds a service
-  token for every enrolled project, so its compromise is a fleet-wide
-  operator-plane compromise. It sits in the crown-jewel tier beside
-  the Cloudflare token; its per-project tokens are individually
-  revocable, and enrollment being opt-in is the containment.
+- **`project` is a first-class argument on every registry tool.** The
+  control plane's `ToolContext` resolves `(project, gatekeeper)` to
+  the right binding. A configured DEFAULT PROJECT fills the argument
+  when omitted on REST and MCP calls, and preselects the console's
+  project selector; audit rows always record the resolved project
+  explicitly, never the word "default".
+- **One Access application** at the control plane's hostname guards
+  the console, the API, and `/mcp`. One MCP connection and one CLI
+  configuration control the whole fleet. The console gains a project
+  selector in the shell; a selected project is the resolution context
+  for unqualified names (§5), and live surfaces (wake tails, channel)
+  ride the same `/ws/*` binding passthrough as today, per project.
+- **Enrollment is config, deployment is rendered**: the control plane
+  is fleet-level infrastructure with its own small manifest (enrolled
+  projects, the default project, its hostname). Service bindings are
+  declared at deploy time, so enrolling a project re-renders and
+  redeploys the control plane; `operon bootstrap` for a new project
+  ends by doing exactly that. Removal is the same motion in reverse.
+- **Version skew across bindings**: the control plane deploys from its
+  own chassis pin and its registry defines the advertised surface.
+  Gatekeeper `Ops` routes are additive across versions, so the rule is
+  simple: keep the control plane's pin at or ahead of the newest
+  enrolled project, and a tool aimed at an older project that lacks
+  the route fails with a named error naming the project's pin.
+  `fleet_projects` (each enrolled project and its pin) is a registry
+  tool like any other.
+- **Blast radius, stated plainly**: one Access application now grants
+  fleet-wide operator authority, which is the point and the price. The
+  control plane sits in the crown-jewel tier beside the Cloudflare
+  token; per-project containment is that bindings are explicit and
+  removable per project by redeploying the plane.
 
 ## 9. Version skew between projects
 
@@ -268,9 +273,6 @@ agent.
   images; the submodule remains the distribution while operon is not
   public.
 - Cross-project agent interaction of any kind.
-- A unified multi-project console; each project's console stands
-  alone, and a gateway picker in the console shell is the most this
-  spec blesses.
 
 ## 12. Order of work
 
@@ -282,7 +284,8 @@ agent.
 3. Bootstrap script, proven by standing up the operator's next real
    project end to end.
 4. Fleet secrets: cross-prefix rotation groups and `secrets sync`.
-5. The fleet gateway, once a second real project exists to justify
-   it.
+5. The control plane generalization: project argument through the
+   registry, the enrollment manifest and binding rendering, the
+   console selector, the default project.
 6. Vault and spend export and import tools; the migration runbook
    documented in DEPLOY.md.
