@@ -222,6 +222,9 @@ async function executePayment(
   let reservation: { ok: true; outboxId: string } | { ok: false; problem: CapProblem } =
     await spendLedger(env).reserve(row, caps);
   if (!reservation.ok && reservation.problem !== "over_max_amount") {
+    // A payment path that observes allowances also observes their
+    // lapses: expiry is ledgered here, not only on listing surfaces.
+    await ledgerExpiredAllowances(env, at);
     const spent = await spendLedger(env).reserveWithAllowance(row, summary);
     if (spent) {
       await ledger(env).append("allowance_consumed", {
@@ -541,6 +544,7 @@ async function aboveCapWithoutAllowance(
   const spentToday = BigInt(await spendLedger(env).spentToday(agentId, now));
   const overCap = amount > maxTx || spentToday + amount > dailyCap;
   if (!overCap) return "no";
+  await ledgerExpiredAllowances(env, now);
   const covered = (await spendLedger(env).listAllowances(agentId)).some(allowance =>
     allowanceMatches(allowance, agentId, summary, now)
   );
@@ -575,7 +579,11 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   // pay; a fresh matching challenge consumes the allowance.
   const maxTx = toBaseUnits(env.SPEND_MAX_TX ?? "0.10", held.decimals) ?? 0n;
   const dailyCap = toBaseUnits(env.SPEND_DAILY_CAP ?? "1.00", held.decimals) ?? 0n;
-  const overCap = BigInt(held.amount) > maxTx || BigInt(held.amount) > dailyCap;
+  // Remaining budget counts: a held amount that fits the caps on paper
+  // but not today's remaining budget would refuse over_daily_cap at
+  // approval time, so it settles by allowance too.
+  const spentNow = BigInt(await spendLedger(env).spentToday(agent.id, new Date().toISOString()));
+  const overCap = BigInt(held.amount) > maxTx || spentNow + BigInt(held.amount) > dailyCap;
   if (held.kind === "above_cap" || overCap) {
     const days = Number(env.SPEND_ALLOWANCE_DAYS);
     const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;

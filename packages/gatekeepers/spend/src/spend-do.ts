@@ -161,7 +161,9 @@ export class SpendLedger extends DurableObject {
   async hold(payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">, at: string): Promise<HeldPayment> {
     for (const existing of await this.listHeld()) {
       if (
-        !existing.claimed &&
+        // Claimed rows count too: a decision in flight is still THE hold
+        // for this payment, and returning it beats minting a twin whose
+        // separate approval would double the authorization.
         existing.agentId === payment.agentId &&
         existing.origin === payment.origin &&
         existing.method === payment.method &&
