@@ -525,7 +525,7 @@ async function mirrorSpendEvents(env: Env): Promise<void> {
     const events = await spendLedger(env).drainEvents();
     if (events.length === 0) return;
     for (const event of events) {
-      await ledger(env).append(event.kind, { ...event.detail, at: event.at, eventId: event.id });
+      await ledger(env).appendIdempotent(event.kind, { ...event.detail, eventId: event.id }, event.at, event.id);
     }
     await spendLedger(env).ackEvents(events.map(event => event.id));
   } catch (error) {
@@ -558,10 +558,12 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   const held = await spendLedger(env).claimHeld(heldId);
   if (!held) return errorResponse(409, "held_unavailable");
   // The approval BINDS the tuple exactly as held (spec §2.2): origin,
-  // method, and recipient. A future challenge differing in any of the
-  // three is a new hold, not a payable request.
-  await spendLedger(env).approveTuple(held);
-  await ledger(env).append("tuple_approved", { agentId: agent.id, origin: held.origin, recipient: held.recipient });
+  // method, and recipient. The grant revalidates the hold in its own
+  // DO turn (a rejection that raced this approval wins, and the tuple
+  // stays unapproved) and commits with its event.
+  const grant = await spendLedger(env).approveTupleForHold(heldId, new Date().toISOString());
+  await mirrorSpendEvents(env);
+  if (grant === "hold_gone") return errorResponse(409, "rejected_meanwhile");
 
   // An over-cap hold (explicitly above_cap, or a first-merchant hold
   // whose amount the per-tx cap plainly refuses) settles by ALLOWANCE:

@@ -125,6 +125,22 @@ export class SpendLedger extends DurableObject {
     await this.ctx.storage.put(`tuple:${tupleKey(tuple)}`, true);
   }
 
+  /**
+   * Approval's tuple grant, ONE turn with hold revalidation: a
+   * rejection that raced the approval leaves no hold, and the tuple
+   * then stays unapproved instead of authorizing a merchant whose
+   * proposal the operator rejected. The event commits with the grant.
+   */
+  async approveTupleForHold(heldId: string, at: string): Promise<"ok" | "hold_gone"> {
+    const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
+    if (!held) return "hold_gone";
+    await this.ctx.storage.put(`tuple:${tupleKey(held)}`, true);
+    await this.event("tuple_approved", {
+      agentId: held.agentId, origin: held.origin, recipient: held.recipient
+    }, at);
+    return "ok";
+  }
+
   // ---- outbox and reservation -----------------------------------------
 
   /**
