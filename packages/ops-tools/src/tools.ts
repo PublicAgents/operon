@@ -330,6 +330,17 @@ export const TOOLS: readonly ToolDefinition[] = [
       context.ops("SPEND", "GET", "/gatekeeper/spend/outbox")
   },
   {
+    name: "till_wallet",
+    title: "The till's receiving wallet: address, chain, balances",
+    description:
+      "Where SALES revenue lands: the operator-configured receiving address (no key for it exists in the chassis), the till's chain id, and a best-effort on-chain balance per allowed currency (display formatted only for known-decimals tokens; null balances mean the RPC read failed).",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("TILL", "GET", "/gatekeeper/till/wallet")
+  },
+  {
     name: "spend_wallet",
     title: "The spend wallet: address, chain, balances",
     description:

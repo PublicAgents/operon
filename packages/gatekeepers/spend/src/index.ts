@@ -7,7 +7,7 @@ import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
-  type TelegramGatewayBinding, OpsEntrypoint } from "@operon/worker-kit";
+  type TelegramGatewayBinding, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
 import { SpendLedger } from "./spend-do.js";
 import {
   parseCurrencyMap,
@@ -527,19 +527,6 @@ export default {
  * allowlist. Funding the wallet is sending to this address; there is
  * deliberately no other way to touch it.
  */
-/**
- * Exact base-units-to-display formatting: BigInt arithmetic, no float,
- * full precision with only trailing zeros trimmed (truncating would let
- * a positive high-decimals balance display as zero).
- */
-function formatUnits(raw: string, decimals: number): string {
-  const units = BigInt(raw);
-  const base = 10n ** BigInt(decimals);
-  const whole = units / base;
-  const fraction = (units % base).toString().padStart(decimals, "0").replace(/0+$/, "");
-  return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
-}
-
 async function handleWallet(env: Env): Promise<Response> {
   if (!env.MPP_PRIVATE_KEY) return errorResponse(503, "spend_unconfigured");
   const address = privateKeyToAccount(env.MPP_PRIVATE_KEY as `0x${string}`).address;
@@ -559,32 +546,7 @@ async function handleWallet(env: Env): Promise<Response> {
       : null;
   const balances = await Promise.all(
     currencies.map(async ([currency, decimals]) => {
-      let raw: string | null = null;
-      if (rpcUrl && chainId !== null) {
-        try {
-          // balanceOf(address): selector 0x70a08231 + the address left-padded.
-          const data = `0x70a08231000000000000000000000000${address.slice(2).toLowerCase()}`;
-          const response = await fetch(rpcUrl, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
-            },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "eth_call",
-              params: [{ to: currency, data }, "latest"]
-            })
-          });
-          const body = (await response.json()) as { result?: string };
-          if (typeof body.result === "string" && body.result.startsWith("0x")) {
-            raw = BigInt(body.result).toString();
-          }
-        } catch {
-          // Balance stays null: the address is the load-bearing fact.
-        }
-      }
+      const raw = rpcUrl && chainId !== null ? await erc20Balance(rpcUrl, apiKey, currency, address) : null;
       return { currency, decimals, raw, display: raw === null ? null : formatUnits(raw, decimals) };
     })
   );
