@@ -11,18 +11,17 @@
  * the CHASSIS-owned templates into `.operon/build/<project>/`; the
  * colony repo carries no wrangler files.
  *
- * Deploys never kill running wakes (spec 0006 §5): when the container
- * source hash differs from what the live scheduler reports, the driver
- * DRAINS first: it PAUSES new wake starts through the ops gateway
- * (fleet_pause defers and never touches a wake in flight), waits for
- * the current-wake set to empty, deploys, and resumes in a finally
- * whatever happens. Draining needs
+ * Deploys never kill running wakes (spec 0006 §5): every deploy
+ * DRAINS, because image rebuilds are not reproducible and a wrong
+ * "no roll" guess kills wakes. The driver PAUSES new wake starts
+ * through the ops gateway (fleet_pause defers and never touches a
+ * wake in flight), waits for the current-wake set to empty, deploys,
+ * and resumes in a finally whatever happens. Draining needs
  * OPERON_OPS_URL plus either an interactive `cloudflared` login or
  * CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET (a service token); a
  * scheduler deploy REFUSES without them unless --no-drain says, in
  * effect, kill whatever is running.
  */
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -82,27 +81,6 @@ const manifests = findManifests()
   .filter(manifest => onlyProject === undefined || manifest.project === onlyProject);
 if (manifests.length === 0) fail(`no project named "${onlyProject}" here`);
 
-/**
- * Hash EVERYTHING under packages/container except build outputs: the
- * drain gate (spec 0006 §5). The Dockerfile pins its installs AND its
- * base image by digest, so the image is a pure function of the hashed
- * files and hash equality means no roll; an UNKNOWN live hash still
- * drains rather than skips (fail toward safety, never toward a roll).
- */
-function containerSourceHash() {
-  const hash = createHash("sha256");
-  const walk = path => {
-    for (const name of readdirSync(path).sort()) {
-      if (["node_modules", "dist"].includes(name)) continue;
-      const full = join(path, name);
-      if (statSync(full).isDirectory()) walk(full);
-      else hash.update(name).update(readFileSync(full));
-    }
-  };
-  walk(join(CHASSIS_ROOT, "packages/container"));
-  return hash.digest("hex").slice(0, 16);
-}
-
 function run(cmd, args, options = {}) {
   return execFileSync(cmd, args, { cwd: PROJECT_ROOT, encoding: "utf8", ...options });
 }
@@ -130,7 +108,6 @@ function render(manifest, { resolveIds }) {
   mkdirSync(buildDir, { recursive: true });
   const options = {
     chassisDir: "../../../operon",
-    containerSourceHash: containerSourceHash(),
     ...(resolveIds ? { d1DatabaseId: resolveD1Id(manifest), siteStoreKvId: resolveKvId(manifest) } : {})
   };
   const workers = renderWorkers(manifest, options);
@@ -184,16 +161,6 @@ async function waitForQuiet(manifest) {
   }
 }
 
-async function liveContainerHash(manifest) {
-  try {
-    const { agents, containerHash } = await opsCall(manifest, "agents-list");
-    void agents;
-    return containerHash ?? null;
-  } catch {
-    return null;
-  }
-}
-
 for (const manifest of manifests) {
   console.log(`\n=== project ${manifest.project} (${manifest.roster.zone}) ===`);
   const enabled = manifest.roster.agents.filter(agent => agent.enabled);
@@ -226,34 +193,29 @@ for (const manifest of manifests) {
     }
   }
 
-  const sourceHash = containerSourceHash();
-  const liveHash = await liveContainerHash(manifest);
-  const imageChanges = liveHash !== sourceHash;
-  let resumeFailed = false;
+  // Every deploy drains (spec 0006 §5): image rebuilds are not
+  // reproducible (base layers and distro packages drift under identical
+  // sources), so "this deploy rolls no containers" is unprovable from
+  // the repo, and a wrong guess kills wakes. Draining an idle fleet
+  // costs seconds; draining a busy one is the entire point.
   const drainToken = `deploy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  let resumeFailed = false;
   let paused = false;
-  if (imageChanges && !noDrain) {
-    if (liveHash === null) {
-      console.log("live container hash unknown (first fleet deploy or gateway unreachable); draining to be safe");
-    } else {
-      console.log(`container source changed (${liveHash} -> ${sourceHash}); draining before the image rolls`);
-    }
+  if (!noDrain) {
     try {
-      await opsCall(manifest, "fleet-pause", { reason: "deploy: wake image rolling", token: drainToken });
+      await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
       paused = true;
       console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
     } catch (error) {
       fail(
         `cannot pause the fleet (${String(error.message ?? error).slice(0, 200)})\n` +
-          `Deploying would roll the wake image and kill running wakes.\n` +
+          `Deploying may roll the wake image and kill running wakes.\n` +
           `Provide ops access (OPERON_OPS_URL + CF_ACCESS_CLIENT_ID/SECRET or cloudflared login),\n` +
           `wait if another deploy holds the pause, or pass --no-drain to kill whatever is running.`
       );
     }
-  } else if (!imageChanges) {
-    console.log(`container source unchanged (${sourceHash}); no image roll, no drain needed`);
   } else {
-    console.log("--no-drain: proceeding without draining; running wakes may be killed by the image roll");
+    console.log("--no-drain: proceeding without draining; running wakes may be killed by an image roll");
   }
 
   // Everything after a successful pause runs under one try: whatever

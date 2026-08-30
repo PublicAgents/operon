@@ -19,8 +19,6 @@ export interface RenderOptions {
   d1DatabaseId?: string;
   /** Site-store KV namespace id; same placeholder rule. */
   siteStoreKvId?: string;
-  /** Container source hash injected as a scheduler var for drain gating (deploy-time). */
-  containerSourceHash?: string;
 }
 
 export interface RenderedWorker {
@@ -305,10 +303,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           VAULT_URL: `https://${gkHost("vault-gk")}`,
           CHRONICLE_URL: `https://${gkHost("chronicle-gk")}`,
           X_URL: `https://${gkHost("x-gk")}`,
-          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {}),
-          ...(options.containerSourceHash !== undefined
-            ? { CONTAINER_SRC_HASH: options.containerSourceHash }
-            : {})
+          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {})
         }
       }
     },

@@ -25,8 +25,6 @@ export { mindCredentialVar, prepareLaunch, LaunchPreconditionError } from "./lau
 const STALE_AFTER_MS = 45 * 60 * 1000;
 
 interface Env {
-  /** Injected by the fleet deploy: the wake-image source hash (drain gating). */
-  CONTAINER_SRC_HASH?: string;
   FLEET_CONTROL: DurableObjectNamespace<import("./fleet-control.js").FleetControl>;
   ROSTER: string;
   WAKE_TRIGGER_TOKEN?: string;
@@ -292,17 +290,11 @@ export default {
           };
         })
       );
-      // The container source hash the fleet deploy injected (spec 0006
-      // §5): the drain gate compares it to the sources it is about to
-      // deploy, so an unchanged image rolls nothing and skips draining.
       const pauseState = await fleetControl(env).state();
       return json({
         zone: roster.zone,
         agents,
-        ...(pauseState.paused ? { paused: { at: pauseState.at, reason: pauseState.reason } } : {}),
-        ...(typeof env.CONTAINER_SRC_HASH === "string" && env.CONTAINER_SRC_HASH.length > 0
-          ? { containerHash: env.CONTAINER_SRC_HASH }
-          : {})
+        ...(pauseState.paused ? { paused: { at: pauseState.at, reason: pauseState.reason } } : {})
       });
     }
 
