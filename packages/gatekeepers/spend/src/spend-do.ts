@@ -55,7 +55,45 @@ function day(at: string): string {
   return at.slice(0, 10);
 }
 
+/**
+ * A transactional audit event: written in the SAME DO turn as the state
+ * change it describes, so a transition without its event (or an event
+ * without its transition) is physically unrepresentable. Events drain
+ * to the activity ledger as an at-least-once mirror (drainEvents +
+ * ackEvents); until acked they are the durable audit truth here.
+ */
+export interface SpendEvent {
+  id: string;
+  kind: string;
+  detail: Record<string, string | number | boolean | null>;
+  at: string;
+}
+
 export class SpendLedger extends DurableObject {
+  private eventSeq = 0;
+
+  /** Same-turn audit write; every state mutation calls this alongside its puts. */
+  private async event(
+    kind: string,
+    detail: Record<string, string | number | boolean | null>,
+    at: string
+  ): Promise<void> {
+    // Monotonic within the turn; the timestamp prefix orders across turns.
+    this.eventSeq += 1;
+    const id = `${at}#${this.eventSeq.toString().padStart(4, "0")}#${crypto.randomUUID().slice(0, 8)}`;
+    await this.ctx.storage.put(`event:${id}`, { id, kind, detail, at });
+  }
+
+  /** Oldest unmirrored events, for the activity-ledger mirror. */
+  async drainEvents(limit = 50): Promise<SpendEvent[]> {
+    const entries = await this.ctx.storage.list<SpendEvent>({ prefix: "event:", limit });
+    return [...entries.values()];
+  }
+
+  /** Ack after the mirror landed; a failed mirror simply drains again. */
+  async ackEvents(ids: string[]): Promise<void> {
+    for (const id of ids) await this.ctx.storage.delete(`event:${id}`);
+  }
   // ---- merchant memory -------------------------------------------------
 
   async isApproved(tuple: MerchantTuple): Promise<boolean> {
@@ -226,6 +264,14 @@ export class SpendLedger extends DurableObject {
     const existing = await this.ctx.storage.get<Allowance>(`allow:${allowance.id}`);
     if (existing) return;
     await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
+    await this.event("allowance_minted", {
+      agentId: allowance.agentId,
+      allowanceId: allowance.id,
+      origin: allowance.origin,
+      recipient: allowance.recipient,
+      display: allowance.display,
+      expiresAt: allowance.expiresAt
+    }, allowance.mintedAt);
   }
 
   /** Base units already reserved or spent by this agent today. */
@@ -234,44 +280,28 @@ export class SpendLedger extends DurableObject {
   }
 
   /**
-   * Allowances that lapsed by expiry and are not yet audit-ledgered.
-   * Read-only: the caller appends the ledger rows first and acks with
-   * markExpiryLedgered after they land, so a failed append re-surfaces
-   * the lapse next sweep (at-least-once; a duplicate audit row is
-   * benign, a lost one is not).
+   * Mark lapsed allowances expired and write each allowance_expired
+   * event in the SAME turn as the mark: the terminal state and its
+   * audit event commit together, and the mirror drains them later.
    */
-  async lapsedUnledgered(nowIso: string): Promise<Allowance[]> {
-    return (await this.listAllowances()).filter(
-      allowance =>
+  async sweepExpired(nowIso: string): Promise<void> {
+    for (const allowance of await this.listAllowances()) {
+      if (
         allowance.consumedAt === undefined &&
         allowance.revokedAt === undefined &&
         allowance.expiresAt <= nowIso &&
         !(allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
-    );
-  }
-
-  /**
-   * Atomically CLAIM one allowance's expiry for audit: re-verifies in
-   * the DO's serialized turn that it is still unconsumed, unrevoked,
-   * expired, and unclaimed (a payment that consumed it between the
-   * caller's read and this claim wins, and no allowance_expired row is
-   * written for a consumed allowance). Returns false when the claim
-   * loses; unmarkExpiry is the compensation when the caller's ledger
-   * append fails after a successful claim.
-   */
-  async claimExpiry(id: string, nowIso: string): Promise<boolean> {
-    const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
-    if (
-      !allowance ||
-      allowance.consumedAt !== undefined ||
-      allowance.revokedAt !== undefined ||
-      allowance.expiresAt > nowIso ||
-      (allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
-    ) {
-      return false;
+      ) {
+        await this.ctx.storage.put(`allow:${allowance.id}`, { ...allowance, expiryLedgered: true });
+        await this.event("allowance_expired", {
+          agentId: allowance.agentId,
+          allowanceId: allowance.id,
+          origin: allowance.origin,
+          display: allowance.display,
+          expiresAt: allowance.expiresAt
+        }, nowIso);
+      }
     }
-    await this.ctx.storage.put(`allow:${id}`, { ...allowance, expiryLedgered: true });
-    return true;
   }
 
   /**
@@ -294,6 +324,7 @@ export class SpendLedger extends DurableObject {
    */
   async rejectHold(
     heldId: string,
+    agentId: string,
     at: string
   ): Promise<{ status: "rejected"; voided: boolean } | { status: "already_consumed" } | { status: "not_found" }> {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
@@ -301,24 +332,22 @@ export class SpendLedger extends DurableObject {
     if (!held && !allowance) return { status: "not_found" };
     if (allowance?.consumedAt !== undefined) {
       if (held) await this.ctx.storage.delete(`held:${heldId}`);
+      await this.event("pay_rejected", {
+        agentId,
+        heldId,
+        detail: "allowance_already_consumed: the settlement preceded the rejection"
+      }, at);
       return { status: "already_consumed" };
     }
     let voided = false;
     if (allowance && allowance.revokedAt === undefined && allowance.expiresAt > at) {
       await this.ctx.storage.put(`allow:${heldId}`, { ...allowance, revokedAt: at });
+      await this.event("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" }, at);
       voided = true;
     }
     if (held) await this.ctx.storage.delete(`held:${heldId}`);
+    await this.event("pay_rejected", { agentId, heldId, origin: held?.origin ?? allowance?.origin ?? null }, at);
     return { status: "rejected", voided };
-  }
-
-  async unmarkExpiry(id: string): Promise<void> {
-    const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
-    if (allowance) {
-      const copy = { ...allowance } as Allowance & { expiryLedgered?: boolean };
-      delete copy.expiryLedgered;
-      await this.ctx.storage.put(`allow:${id}`, copy);
-    }
   }
 
   async listAllowances(agentId?: string): Promise<Allowance[]> {
@@ -344,6 +373,7 @@ export class SpendLedger extends DurableObject {
       return false;
     }
     await this.ctx.storage.put(`allow:${id}`, { ...allowance, revokedAt: at });
+    await this.event("allowance_revoked", { allowanceId: id, at }, at);
     return true;
   }
 
@@ -374,7 +404,10 @@ export class SpendLedger extends DurableObject {
   > {
     const plain = await this.reserve(row, caps);
     if (plain.ok) return { outcome: "reserved", outboxId: plain.outboxId };
-    if (plain.problem === "over_max_amount") return { outcome: "refused", problem: plain.problem };
+    if (plain.problem === "over_max_amount") {
+      await this.event("pay_refused", { agentId: row.agentId, url: row.url, problem: plain.problem }, row.at);
+      return { outcome: "refused", problem: plain.problem };
+    }
 
     for (const allowance of await this.listAllowances(row.agentId)) {
       if (allowanceMatches(allowance, row.agentId, row.url, summary, row.at)) {
@@ -390,14 +423,27 @@ export class SpendLedger extends DurableObject {
           allowanceId: allowance.id,
           ...row
         });
+        await this.event("allowance_consumed", {
+          agentId: row.agentId,
+          allowanceId: allowance.id,
+          outboxId: id,
+          origin: summary.origin,
+          display: summary.display
+        }, row.at);
         return { outcome: "reserved", outboxId: id, allowanceId: allowance.id };
       }
     }
 
     if (holdOption && BigInt(row.amount) <= BigInt(holdOption.holdMax)) {
       const { held, deduped } = await this.hold(holdOption.payment, row.at);
+      if (!deduped) {
+        await this.event("pay_held", {
+          agentId: row.agentId, url: row.url, origin: summary.origin, heldId: held.id, kind: held.kind ?? "above_cap"
+        }, row.at);
+      }
       return { outcome: "held", held, deduped };
     }
+    await this.event("pay_refused", { agentId: row.agentId, url: row.url, problem: plain.problem }, row.at);
     return { outcome: "refused", problem: plain.problem };
   }
 }

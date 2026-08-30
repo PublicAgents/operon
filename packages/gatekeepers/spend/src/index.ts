@@ -223,7 +223,7 @@ async function executePayment(
   // (spec 0002 §2.2): no worker-side classification can go stale between
   // reading the budget and reserving against it. Expiry lapses observed
   // by this payment path are ledgered first (at-least-once).
-  await ledgerExpiredAllowances(env, at);
+  await spendLedger(env).sweepExpired(at);
   const holdMaxBase = context.holdPayment && env.SPEND_HOLD_MAX
     ? toBaseUnits(env.SPEND_HOLD_MAX, summary.decimals)
     : null;
@@ -236,10 +236,8 @@ async function executePayment(
       : null
   );
   if (decision.outcome === "held") {
+    await mirrorSpendEvents(env);
     if (!decision.deduped) {
-      await ledger(env).append("pay_held", {
-        agentId: context.agent.id, url: context.url, origin: summary.origin, heldId: decision.held.id, kind: "above_cap"
-      });
       await notifyOperator(
         env,
         `[${context.agent.id}] ABOVE-CAP payment to ${summary.origin} HELD: ${summary.display} (${summary.method}) to ${summary.recipient}\nApproval mints a one-time allowance; the agent settles by re-running the pay.\nReason: ${context.reason}`,
@@ -252,30 +250,10 @@ async function executePayment(
     return json({ ok: true, status: "held_for_approval", heldId: decision.held.id, challenge: summary });
   }
   if (decision.outcome === "refused") {
-    await ledger(env).append("pay_refused", { agentId: context.agent.id, url: context.url, problem: decision.problem });
+    await mirrorSpendEvents(env);
     return errorResponse(422, decision.problem);
   }
-  if (decision.allowanceId !== undefined) {
-    try {
-      await ledger(env).append("allowance_consumed", {
-        agentId: context.agent.id,
-        allowanceId: decision.allowanceId,
-        outboxId: decision.outboxId,
-        origin: summary.origin,
-        display: summary.display
-      });
-    } catch (error) {
-      // The consumption is already durable in the DO (and the outbox
-      // row documents the attempt); a lost companion event escalates
-      // to the operator rather than failing the payment or vanishing.
-      console.error("allowance_consumed audit row lost", decision.allowanceId, error);
-      await notifyOperator(
-        env,
-        `spend audit gap: allowance ${decision.allowanceId} was consumed by outbox ${decision.outboxId} (${summary.display} to ${summary.recipient}) but its allowance_consumed row could not be written; reconstruct from this notice.`,
-        []
-      ).catch(() => undefined);
-    }
-  }
+  await mirrorSpendEvents(env);
   const reservation = { ok: true as const, outboxId: decision.outboxId };
 
   if (!env.MPP_PRIVATE_KEY) {
@@ -532,45 +510,23 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
 }
 
 /**
- * Ledger allowances that lapsed by expiry, at-least-once: the rows are
- * appended FIRST and the DO acks each after it lands, so a failed
- * append re-surfaces the lapse instead of silently marking it swept
- * (spec §2.2: every state transition of a standing authorization
- * leaves an audit record; a duplicate row is benign, a lost one not).
+ * Mirror the SpendLedger's transactional audit events into the activity
+ * ledger, at-least-once: each event was committed in the SAME DO turn
+ * as the state change it describes, so a transition without its record
+ * is unrepresentable; the mirror only moves records, acking each batch
+ * after it lands (a failed mirror drains again on the next call, and a
+ * duplicate mirrored row after a failed ack is benign).
  */
-async function ledgerExpiredAllowances(env: Env, nowIso: string): Promise<void> {
-  for (const lapsed of await spendLedger(env).lapsedUnledgered(nowIso)) {
-    // The claim re-verifies atomically in the DO: a payment that
-    // consumed this allowance since the read wins, and no expired row
-    // is written for it. On a failed append the claim is compensated
-    // so the lapse re-surfaces (at-least-once), and expiry audit never
-    // blocks the payment path it runs on.
-    if (!(await spendLedger(env).claimExpiry(lapsed.id, nowIso))) continue;
-    try {
-      await ledger(env).append("allowance_expired", {
-        agentId: lapsed.agentId,
-        allowanceId: lapsed.id,
-        origin: lapsed.origin,
-        display: lapsed.display,
-        expiresAt: lapsed.expiresAt
-      });
-    } catch (error) {
-      try {
-        await spendLedger(env).unmarkExpiry(lapsed.id);
-        console.error("allowance expiry audit deferred (append failed, claim compensated)", error);
-      } catch (unmarkError) {
-        // Double failure: the claim stands but its audit row does not,
-        // and nothing would re-surface it. Escalate to the operator
-        // instead of going silent; the notify names the allowance so
-        // the row can be reconstructed by hand.
-        console.error("expiry audit row LOST for allowance", lapsed.id, error, unmarkError);
-        await notifyOperator(
-          env,
-          `spend audit gap: allowance ${lapsed.id} (${lapsed.display} to ${lapsed.recipient}) lapsed at ${lapsed.expiresAt} but its allowance_expired row could not be written and compensation failed; reconstruct the row from this notice.`,
-          []
-        ).catch(() => undefined);
-      }
+async function mirrorSpendEvents(env: Env): Promise<void> {
+  try {
+    const events = await spendLedger(env).drainEvents();
+    if (events.length === 0) return;
+    for (const event of events) {
+      await ledger(env).append(event.kind, { ...event.detail, at: event.at });
     }
+    await spendLedger(env).ackEvents(events.map(event => event.id));
+  } catch (error) {
+    console.error("spend event mirror deferred", error);
   }
 }
 
@@ -583,38 +539,15 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
   if (!agent || typeof heldId !== "string") return errorResponse(400, "invalid_request");
 
   if (!approve) {
-    // Rejection is one atomic DO turn with NO claim gate: a hold left
-    // claimed by a crashed approval, or an allowance leaked by a lost
-    // mint response, must still be reachable, and a consumption racing
-    // the rejection must be reported as consumed, not papered over as
-    // a clean rejection.
+    // Rejection is one atomic DO turn with NO claim gate: the hold
+    // (claimed or not), any allowance minted for it, and every audit
+    // event commit together; a consumption racing the rejection reports
+    // already_consumed instead of a clean rejection.
     const at = new Date().toISOString();
-    const outcome = await spendLedger(env).rejectHold(heldId, at);
+    const outcome = await spendLedger(env).rejectHold(heldId, agent.id, at);
+    await mirrorSpendEvents(env);
     if (outcome.status === "not_found") return errorResponse(409, "held_unavailable");
-    if (outcome.status === "already_consumed") {
-      await appendOrEscalate(env, "pay_rejected", {
-        agentId: agent.id, heldId, detail: "allowance_already_consumed: the settlement preceded the rejection"
-      }, `rejection of hold ${heldId} found its allowance already consumed at ${at}`);
-      return json({ ok: true, status: "already_consumed" });
-    }
-    if (outcome.voided) {
-      try {
-        await ledger(env).append("allowance_revoked", { allowanceId: heldId, at, cause: "hold_rejected" });
-      } catch (error) {
-        console.error("allowance_revoked (hold_rejected) row lost", heldId, error);
-        await notifyOperator(
-          env,
-          `spend audit gap: allowance ${heldId} was voided by rejecting its hold at ${at} but the allowance_revoked row could not be written; reconstruct from this notice.`,
-          []
-        ).catch(() => undefined);
-      }
-    }
-    await appendOrEscalate(
-      env,
-      "pay_rejected",
-      { agentId: agent.id, heldId },
-      `hold ${heldId} was rejected at ${at}`
-    );
+    if (outcome.status === "already_consumed") return json({ ok: true, status: "already_consumed" });
     return json({ ok: true, status: "rejected" });
   }
 
@@ -678,30 +611,6 @@ async function handleDecision(request: Request, env: Env, approve: boolean): Pro
 }
 
 /**
- * Append a ledger row for a transition that is ALREADY durable; a lost
- * row escalates to the operator with reconstruction detail instead of
- * failing the completed operation (whose retry would find nothing to
- * do and no row would ever land).
- */
-async function appendOrEscalate(
-  env: Env,
-  kind: string,
-  detail: Record<string, unknown>,
-  reconstruction: string
-): Promise<void> {
-  try {
-    await ledger(env).append(kind, detail);
-  } catch (error) {
-    console.error(`${kind} audit row lost`, detail, error);
-    await notifyOperator(
-      env,
-      `spend audit gap: ${reconstruction}, but its ${kind} row could not be written; reconstruct from this notice.`,
-      []
-    ).catch(() => undefined);
-  }
-}
-
-/**
  * Turn an approved hold into a one-time allowance (spec 0002 §2.2) and
  * retire the hold. Nothing moves here; the agent settles by re-running
  * the pay.
@@ -732,50 +641,19 @@ async function mintAllowanceForHeld(
     mintedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
   };
-  // Audit doctrine (spec 0003): the DECISION writes its intent row
-  // FIRST and refuses on audit failure, and the intent and the outcome
-  // are separate rows so the trail reads true either way: a requested
-  // row with no minted row means the mint failed and the operator
-  // retried; a minted row only ever follows a durable allowance.
-  try {
-    await ledger(env).append("allowance_mint_requested", {
-      agentId,
-      allowanceId: allowance.id,
-      origin: allowance.origin,
-      recipient: allowance.recipient,
-      display: allowance.display,
-      expiresAt: allowance.expiresAt
-    });
-  } catch {
-    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
-    return errorResponse(503, "audit_unavailable");
-  }
+  // The mint and its allowance_minted event commit in one DO turn (the
+  // transactional event log), so the record cannot lie in either
+  // direction; the mirror drains it to the activity ledger after.
   try {
     await spendLedger(env).mintAllowance(allowance);
   } catch (error) {
-    // The request row exists but no allowance does, which is exactly
-    // what the trail says: unclaim so the operator's retry can approve
-    // again (a hold stranded in claimed-forever is not acceptable).
+    // No allowance and no event: unclaim so the operator's retry can
+    // approve again. A mint that committed but lost its response is
+    // idempotent on retry and never re-recorded.
     await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
     return errorResponse(500, "allowance_mint_failed", String(error).slice(0, 200));
   }
-  try {
-    await ledger(env).append("allowance_minted", {
-      agentId,
-      allowanceId: allowance.id,
-      origin: allowance.origin,
-      recipient: allowance.recipient,
-      display: allowance.display,
-      expiresAt: allowance.expiresAt
-    });
-  } catch (error) {
-    console.error("allowance_minted outcome row lost", allowance.id, error);
-    await notifyOperator(
-      env,
-      `spend audit gap: allowance ${allowance.id} (${allowance.display} to ${allowance.recipient}) WAS minted but its allowance_minted row could not be written; the allowance_mint_requested row and this notice document it.`,
-      []
-    ).catch(() => undefined);
-  }
+  await mirrorSpendEvents(env);
   try {
     await spendLedger(env).deleteHeld(heldId);
   } catch (error) {
@@ -819,7 +697,8 @@ export default {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
       const now = new Date().toISOString();
-      await ledgerExpiredAllowances(env, now);
+      await spendLedger(env).sweepExpired(now);
+      await mirrorSpendEvents(env);
       const held = (await spendLedger(env).listHeld()).filter(row => row.agentId === agent.id);
       const allowances = (await spendLedger(env).listAllowances(agent.id)).filter(
         allowance =>
@@ -896,7 +775,8 @@ export class Ops extends OpsEntrypoint<Env> {
       return handleWallet(this.env);
     }
     if (request.method === "GET" && url.pathname === "/gatekeeper/spend/allowances") {
-      await ledgerExpiredAllowances(this.env, new Date().toISOString());
+      await spendLedger(this.env).sweepExpired(new Date().toISOString());
+      await mirrorSpendEvents(this.env);
       return json({ ok: true, allowances: await spendLedger(this.env).listAllowances() });
     }
     if (request.method === "POST" && url.pathname === "/gatekeeper/spend/allowance-revoke") {
@@ -905,30 +785,11 @@ export class Ops extends OpsEntrypoint<Env> {
         return errorResponse(400, "invalid_request");
       }
       const at = new Date().toISOString();
-      // Decision doctrine: the intent row lands BEFORE the state
-      // change and the decision refuses when it cannot be audited. The
-      // intent and the outcome are separate rows so the trail reads
-      // true either way: requested with no revoked row means the
-      // revocation lost (already consumed, expired, or gone), and a
-      // revoked row only ever follows an actual revocation.
-      try {
-        await ledger(this.env).append("allowance_revoke_requested", { allowanceId: body.value.allowanceId, at });
-      } catch {
-        return errorResponse(503, "audit_unavailable");
-      }
+      // The revocation and its allowance_revoked event commit in one
+      // DO turn; the mirror drains it. A refused revocation (consumed,
+      // expired, gone) writes nothing, which is the truth.
       const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
-      if (revoked) {
-        try {
-          await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at });
-        } catch (error) {
-          console.error("allowance_revoked outcome row lost", body.value.allowanceId, error);
-          await notifyOperator(
-            this.env,
-            `spend audit gap: allowance ${body.value.allowanceId} WAS revoked at ${at} but its allowance_revoked row could not be written; reconstruct from this notice.`,
-            []
-          ).catch(() => undefined);
-        }
-      }
+      await mirrorSpendEvents(this.env);
       return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
     return errorResponse(404, "not_found");
