@@ -25,6 +25,12 @@ interface TillState {
   limits: { maxPrice: string; maxOffers: number };
 }
 
+interface WalletState {
+  address: string;
+  chainId: number | null;
+  balances: { currency: string; decimals: number; raw: string | null; display: string | null }[];
+}
+
 function Currency({ value }: { value: string }) {
   return (
     <code title={value}>{value.startsWith("0x") ? `${value.slice(0, 8)}…` : value}</code>
@@ -33,6 +39,7 @@ function Currency({ value }: { value: string }) {
 
 export function TillPage() {
   const state = useTool<TillState>("till_offers", {}, { pollMs: 30_000 });
+  const wallet = useTool<WalletState>("spend_wallet", {}, { pollMs: 60_000 });
   const ledger = useTool<LedgerRow[]>("ledger_recent", { gatekeeper: "till" });
   const offers = state.data?.offers ?? [];
   return (
@@ -47,6 +54,41 @@ export function TillPage() {
         ) : null}
         <button onClick={() => { state.refresh(); ledger.refresh(); }}>refresh</button>
       </header>
+      <div className="approval-block">
+        <h2>spend wallet</h2>
+        <ErrorNote error={wallet.error} />
+        <LoadingGate loading={wallet.loading} hasData={wallet.data !== undefined}>
+          {wallet.data ? (
+            <table>
+              <tbody>
+                <tr>
+                  <td>address</td>
+                  <td>
+                    <code>{wallet.data.address}</code>{" "}
+                    <button onClick={() => { void navigator.clipboard.writeText(wallet.data?.address ?? ""); }}>
+                      copy
+                    </button>
+                  </td>
+                </tr>
+                <tr>
+                  <td>chain</td>
+                  <td>
+                    <code>{wallet.data.chainId ?? "unconfigured"}</code>
+                  </td>
+                </tr>
+                {wallet.data.balances.map(balance => (
+                  <tr key={balance.currency}>
+                    <td>
+                      <Currency value={balance.currency} />
+                    </td>
+                    <td>{balance.display ?? "balance unavailable"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </LoadingGate>
+      </div>
       <ErrorNote error={state.error} />
       <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       <div className="approval-block">
