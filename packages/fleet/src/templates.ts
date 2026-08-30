@@ -261,6 +261,16 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ],
         durable_objects: { bindings: [{ name: "WAKE_CONTAINER", class_name: "WakeContainer" }] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["WakeContainer"] }],
+        // The wake_finished mirror writes chronicle rows directly; the
+        // binding is named CHRONICLE_DB because CHRONICLE is the
+        // chronicle gatekeeper's service binding above.
+        d1_databases: [
+          {
+            binding: "CHRONICLE_DB",
+            database_name: manifest.resources.d1Name,
+            database_id: options.d1DatabaseId ?? D1_PLACEHOLDER
+          }
+        ],
         services: [
           service("GITHUB_GATEKEEPER", "gatekeeper-github"),
           service("TELEGRAM", "gatekeeper-telegram"),

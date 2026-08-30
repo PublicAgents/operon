@@ -172,7 +172,17 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       const d1 = byKey[key].d1_databases;
       if (key === "gatekeeper-browser") {
         expect(d1).toBeUndefined();
-      } else if (key !== "scheduler") {
+      } else if (key === "scheduler") {
+        // The wake_finished mirror binding: CHRONICLE_DB, no migrations
+        // dir (the chronicle gatekeeper owns schema migrations).
+        expect(d1).toEqual([
+          {
+            binding: "CHRONICLE_DB",
+            database_name: "operon-chronicle",
+            database_id: "2dade210-aa9f-463d-903c-b4e4a29ee337"
+          }
+        ]);
+      } else {
         expect(d1).toEqual([
           {
             binding: "CHRONICLE",
