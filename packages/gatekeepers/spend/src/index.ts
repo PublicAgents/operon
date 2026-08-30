@@ -641,23 +641,24 @@ async function mintAllowanceForHeld(
     mintedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
   };
-  // The mint and its allowance_minted event commit in one DO turn (the
-  // transactional event log), so the record cannot lie in either
-  // direction; the mirror drains it to the activity ledger after.
+  // The hold revalidation, the mint, its allowance_minted event, and
+  // the hold's retirement commit in one DO turn (the transactional
+  // event log): a rejection that raced this approval leaves no hold,
+  // and the mint then refuses instead of creating authority for a
+  // rejected payment.
+  let outcome: "minted" | "exists" | "hold_gone";
   try {
-    await spendLedger(env).mintAllowance(allowance);
+    outcome = await spendLedger(env).mintForHold(allowance);
   } catch (error) {
-    // No allowance and no event: unclaim so the operator's retry can
-    // approve again. A mint that committed but lost its response is
-    // idempotent on retry and never re-recorded.
+    // Nothing committed: unclaim so the operator's retry can approve
+    // again. A mint that committed but lost its response answers
+    // "exists" on retry and is never re-recorded.
     await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
     return errorResponse(500, "allowance_mint_failed", String(error).slice(0, 200));
   }
   await mirrorSpendEvents(env);
-  try {
-    await spendLedger(env).deleteHeld(heldId);
-  } catch (error) {
-    console.error("held cleanup failed after mint (claimed, cannot re-approve)", error);
+  if (outcome === "hold_gone") {
+    return errorResponse(409, "rejected_meanwhile");
   }
   return json({ ok: true, status: "allowance_minted", allowance });
 }

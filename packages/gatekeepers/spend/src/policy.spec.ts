@@ -185,6 +185,12 @@ describe("allowanceMatches", () => {
     ).toBe(false);
   });
 
+  it("refuses an allowance whose expiry is already on the record, whatever the timestamp", () => {
+    expect(
+      allowanceMatches({ ...allowance, expiryLedgered: true }, "promoter", URL_A, summary, NOW)
+    ).toBe(false);
+  });
+
   it("refuses consumed, revoked, and expired allowances", () => {
     expect(allowanceMatches({ ...allowance, consumedAt: NOW }, "promoter", URL_A, summary, NOW)).toBe(false);
     expect(allowanceMatches({ ...allowance, revokedAt: NOW }, "promoter", URL_A, summary, NOW)).toBe(false);

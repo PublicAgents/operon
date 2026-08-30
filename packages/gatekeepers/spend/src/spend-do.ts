@@ -260,9 +260,19 @@ export class SpendLedger extends DurableObject {
    * Overwriting would resurrect a consumed allowance as fresh spending
    * authority, which is the one thing a retry must never do.
    */
-  async mintAllowance(allowance: Allowance): Promise<void> {
+  /**
+   * Approval's mint, ONE turn: revalidate that the source hold still
+   * exists (a gate-free rejection may have raced the in-flight
+   * approval and retired it; minting then would create authority for a
+   * rejected payment), write the allowance with its event, and retire
+   * the hold together. Idempotent: a retry after a lost response finds
+   * the allowance and reports "exists" without re-recording.
+   */
+  async mintForHold(allowance: Allowance): Promise<"minted" | "exists" | "hold_gone"> {
     const existing = await this.ctx.storage.get<Allowance>(`allow:${allowance.id}`);
-    if (existing) return;
+    if (existing) return "exists";
+    const held = await this.ctx.storage.get<HeldPayment>(`held:${allowance.id}`);
+    if (!held) return "hold_gone";
     await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
     await this.event("allowance_minted", {
       agentId: allowance.agentId,
@@ -272,6 +282,8 @@ export class SpendLedger extends DurableObject {
       display: allowance.display,
       expiresAt: allowance.expiresAt
     }, allowance.mintedAt);
+    await this.ctx.storage.delete(`held:${allowance.id}`);
+    return "minted";
   }
 
   /** Base units already reserved or spent by this agent today. */
@@ -290,7 +302,7 @@ export class SpendLedger extends DurableObject {
         allowance.consumedAt === undefined &&
         allowance.revokedAt === undefined &&
         allowance.expiresAt <= nowIso &&
-        !(allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
+        allowance.expiryLedgered !== true
       ) {
         await this.ctx.storage.put(`allow:${allowance.id}`, { ...allowance, expiryLedgered: true });
         await this.event("allowance_expired", {

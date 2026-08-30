@@ -191,6 +191,13 @@ export interface Allowance {
   outboxId?: string;
   /** Set when the operator revoked it unspent. */
   revokedAt?: string;
+  /**
+   * Set when the expiry lapse was recorded (terminal). Matching refuses
+   * it independently of timestamps: a payment carrying a pre-expiry
+   * timestamp must not consume an allowance whose expiry is already on
+   * the record.
+   */
+  expiryLedgered?: boolean;
 }
 
 /**
@@ -209,6 +216,7 @@ export function allowanceMatches(
   return (
     allowance.consumedAt === undefined &&
     allowance.revokedAt === undefined &&
+    allowance.expiryLedgered !== true &&
     allowance.expiresAt > nowIso &&
     allowance.agentId === agentId &&
     allowance.url === url &&
