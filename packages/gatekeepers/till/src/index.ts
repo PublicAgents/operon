@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
+import { durableStore, TillStore } from "./replay-store.js";
+export { TillStore };
 import { TillCatalog } from "./catalog-do.js";
 import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
 
@@ -20,6 +22,7 @@ export * from "./gates.js";
  */
 
 interface Env {
+  TILL_STORE: DurableObjectNamespace<import("./replay-store.js").TillStore>;
   ROSTER: string;
   /** Colony ceilings (vars): the agent prices; the operator bounds. */
   TILL_MAX_PRICE?: string;
@@ -189,6 +192,12 @@ app.all("*", async c => {
     methods: [
       tempo.charge({
         testnet: env.TILL_TESTNET === "true",
+        // The SHARED replay store (operon#67): without it mppx falls
+        // back to a per-isolate memory store and a replayed credential
+        // hitting another isolate is re-served 200 instead of 402
+        // invalid-challenge (already-used), the one scored failure on
+        // conformance cert ea57e4fe.
+        store: durableStore(env.TILL_STORE.get(env.TILL_STORE.idFromName("till"))) as never,
         ...(typeof env.TEMPO_API_KEY === "string" && env.TEMPO_API_KEY.length > 0
           ? { relay: { apiKey: env.TEMPO_API_KEY } }
           : typeof env.TILL_RPC_URL === "string" && env.TILL_RPC_URL.length > 0
@@ -215,13 +224,18 @@ app.all("*", async c => {
   });
   const out = result instanceof Response ? result : c.res;
   if (out.status !== 402) {
+    // The settlement reference rides the receipt row (operon#67's
+    // secondary finding): a revenue ledger whose rows carry their
+    // on-chain reference cannot silently overcount.
+    const reference = out.headers.get("Payment-Receipt");
     await ledger(env).append("receipt", {
       agentId: offer.agentId,
       host: offer.host,
       path: offer.path,
       price: offer.price,
       currency: offer.currency,
-      status: out.status
+      status: out.status,
+      ...(reference !== null ? { reference: reference.slice(0, 500) } : {})
     });
   }
   return out;

@@ -11,10 +11,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "CATALOG", "class_name": "TillCatalog" },
-      { "name": "LEDGER", "class_name": "Ledger" }
+      { "name": "LEDGER", "class_name": "Ledger" },
+      { "name": "TILL_STORE", "class_name": "TillStore" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TillCatalog", "Ledger"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TillCatalog", "Ledger"] },
+    { "tag": "v2", "new_sqlite_classes": ["TillStore"] }
+  ],
   "services": [{ "binding": "DEPLOY", "service": "operon-gatekeeper-deploy" }],
   "vars": {
     // ROSTER injected at deploy. Ceilings are colony config the agent

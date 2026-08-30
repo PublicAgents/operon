@@ -106,6 +106,10 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(byKey["gatekeeper-spend"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }
     ]);
+    expect(byKey["gatekeeper-till"].migrations).toEqual([
+      { tag: "v1", new_sqlite_classes: ["TillCatalog", "Ledger"] },
+      { tag: "v2", new_sqlite_classes: ["TillStore"] }
+    ]);
     expect(byKey["scheduler"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["WakeContainer"] },
       { tag: "v2", new_sqlite_classes: ["FleetControl"] }
