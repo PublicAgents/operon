@@ -222,7 +222,13 @@ for (const manifest of manifests) {
   // fails (the quiet wait included), the finally resumes THIS deploy's
   // pause by token, so no failure mode leaves the fleet refusing wakes
   // and no overlapping deploy gets its pause released from under it.
+  // One deterministic exit path: the deploy error is CAUGHT and
+  // recorded (never left to propagate past the reporting below), the
+  // resume always runs when a pause was taken, and the final report
+  // names every failure that occurred, the stuck-pause recovery first
+  // because it is the one that costs wakes every hour it is missed.
   const rosterVar = JSON.stringify({ zone: manifest.roster.zone, agents: manifest.roster.agents });
+  let deployError = null;
   try {
     if (paused) await waitForQuiet(manifest);
     for (const key of DEPLOY_ORDER) {
@@ -233,32 +239,22 @@ for (const manifest of manifests) {
         { cwd: PROJECT_ROOT, stdio: "inherit" }
       );
     }
-  } finally {
-    if (paused) {
-      resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
-        () => (console.log("  fleet resumed"), false),
-        error => (
-          // Full recovery instructions HERE, inside the finally: when
-          // the deploy itself also threw, its exception propagates past
-          // the post-loop check and this is the only line the operator
-          // sees about the stuck pause.
-          console.error(
-            `  RESUME FAILED, the fleet is STILL PAUSED and wakes are deferred.\n` +
-              `  Recover with the fleet_resume tool (force: true) on the ops console or API.\n` +
-              `  (${error})`
-          ),
-          true
-        )
-      );
-    }
+  } catch (error) {
+    deployError = error;
   }
-  if (resumeFailed) {
-    // A deploy that leaves the fleet refusing wakes is NOT a success,
-    // whatever the workers say: exit nonzero so automation alarms, and
-    // name the recovery.
+  if (paused) {
+    resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
+      () => (console.log("  fleet resumed"), false),
+      error => (console.error(`  resume error: ${error}`), true)
+    );
+  }
+  if (resumeFailed || deployError) {
     fail(
-      `workers deployed but the fleet is STILL PAUSED (the resume failed).\n` +
-        `Wakes are deferred until you run the fleet_resume tool (force: true) on the ops console or API.`
+      (resumeFailed
+        ? `the fleet is STILL PAUSED (the resume failed) and wakes are deferred.\n` +
+          `Recover with the fleet_resume tool (force: true) on the ops console or API.\n`
+        : "") +
+        (deployError ? `deploy failed: ${String(deployError.message ?? deployError).slice(0, 300)}` : "")
     );
   }
   console.log(`\n✓ ${manifest.project}: deploy complete`);
