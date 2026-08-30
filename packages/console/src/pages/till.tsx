@@ -28,7 +28,50 @@ interface TillState {
 interface WalletState {
   address: string;
   chainId: number | null;
-  balances: { currency: string; decimals: number; raw: string | null; display: string | null }[];
+  balances: { currency: string; decimals: number | null; raw: string | null; display: string | null }[];
+}
+
+function WalletBlock({ title, note, wallet }: { title: string; note: string; wallet: ReturnType<typeof useTool<WalletState>> }) {
+  return (
+    <div className="approval-block">
+      <h2>{title}</h2>
+      <span className="sub">{note}</span>
+      <ErrorNote error={wallet.error} />
+      <LoadingGate loading={wallet.loading} hasData={wallet.data !== undefined}>
+        {wallet.data ? (
+          <table>
+            <tbody>
+              <tr>
+                <td>address</td>
+                <td>
+                  <code>{wallet.data.address}</code>{" "}
+                  <button onClick={() => { void navigator.clipboard.writeText(wallet.data?.address ?? ""); }}>
+                    copy
+                  </button>
+                </td>
+              </tr>
+              <tr>
+                <td>chain</td>
+                <td>
+                  <code>{wallet.data.chainId ?? "unconfigured"}</code>
+                </td>
+              </tr>
+              {wallet.data.balances.map(balance => (
+                <tr key={balance.currency}>
+                  <td>
+                    <Currency value={balance.currency} />
+                  </td>
+                  <td>
+                    {balance.display ?? (balance.raw !== null ? `${balance.raw} base units` : "balance unavailable")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
+      </LoadingGate>
+    </div>
+  );
 }
 
 function Currency({ value }: { value: string }) {
@@ -40,6 +83,7 @@ function Currency({ value }: { value: string }) {
 export function TillPage() {
   const state = useTool<TillState>("till_offers", {}, { pollMs: 30_000 });
   const wallet = useTool<WalletState>("spend_wallet", {}, { pollMs: 60_000 });
+  const receiving = useTool<WalletState>("till_wallet", {}, { pollMs: 60_000 });
   const ledger = useTool<LedgerRow[]>("ledger_recent", { gatekeeper: "till" });
   const offers = state.data?.offers ?? [];
   return (
@@ -54,41 +98,16 @@ export function TillPage() {
         ) : null}
         <button onClick={() => { state.refresh(); ledger.refresh(); }}>refresh</button>
       </header>
-      <div className="approval-block">
-        <h2>spend wallet</h2>
-        <ErrorNote error={wallet.error} />
-        <LoadingGate loading={wallet.loading} hasData={wallet.data !== undefined}>
-          {wallet.data ? (
-            <table>
-              <tbody>
-                <tr>
-                  <td>address</td>
-                  <td>
-                    <code>{wallet.data.address}</code>{" "}
-                    <button onClick={() => { void navigator.clipboard.writeText(wallet.data?.address ?? ""); }}>
-                      copy
-                    </button>
-                  </td>
-                </tr>
-                <tr>
-                  <td>chain</td>
-                  <td>
-                    <code>{wallet.data.chainId ?? "unconfigured"}</code>
-                  </td>
-                </tr>
-                {wallet.data.balances.map(balance => (
-                  <tr key={balance.currency}>
-                    <td>
-                      <Currency value={balance.currency} />
-                    </td>
-                    <td>{balance.display ?? "balance unavailable"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : null}
-        </LoadingGate>
-      </div>
+      <WalletBlock
+        title="spend wallet (outgoing)"
+        note="the gateway pays from this address; fund it by sending here"
+        wallet={wallet}
+      />
+      <WalletBlock
+        title="receiving wallet (sales revenue)"
+        note="operator custody; till receipts settle to this address"
+        wallet={receiving}
+      />
       <ErrorNote error={state.error} />
       <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
       <div className="approval-block">

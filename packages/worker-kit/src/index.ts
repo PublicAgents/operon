@@ -37,3 +37,4 @@ export {
   type GithubApi,
   type CommitResult
 } from "./git-data.js";
+export { formatUnits, erc20Balance } from "./wallet.js";

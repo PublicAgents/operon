@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
 import { TillCatalog } from "./catalog-do.js";
 import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
 
@@ -232,6 +232,16 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 /** The operator's binding-only view of the till ledger (spec 0003 step 3). */
+/**
+ * Display decimals for currencies the colony knows on sight. The till's
+ * currency list carries no decimals (it is an allowlist of identifiers),
+ * so display formatting exists only for mapped tokens; everything else
+ * reports raw base units and a null display.
+ */
+const KNOWN_DECIMALS = new Map<string, number>([
+  ["0x20c0000000000000000000000000000000000000", 6]
+]);
+
 export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
@@ -247,6 +257,43 @@ export class Ops extends OpsEntrypoint<Env> {
         offers: await catalog(this.env).listAll(),
         limits: limits(this.env)
       });
+    }
+    // The RECEIVING wallet: where sales revenue lands. The address is
+    // operator-configured colony custody (TILL_RECIPIENT); no key for it
+    // exists anywhere in the chassis. Balances are best-effort chain
+    // reads per allowed currency; decimals are known only for currencies
+    // in the display map, others report raw base units.
+    if (pathname === "/gatekeeper/till/wallet") {
+      if (!this.env.TILL_RECIPIENT) return errorResponse(503, "till_unconfigured");
+      const address = this.env.TILL_RECIPIENT;
+      const parsedChainId = Number(this.env.TILL_RPC_CHAIN_ID);
+      const chainId = Number.isInteger(parsedChainId) && parsedChainId > 0 ? parsedChainId : 42431;
+      const apiKey =
+        typeof this.env.TEMPO_API_KEY === "string" && this.env.TEMPO_API_KEY.length > 0
+          ? this.env.TEMPO_API_KEY
+          : null;
+      const rpcUrl = apiKey
+        ? `https://api.tempo.xyz/rpc/${chainId}`
+        : typeof this.env.TILL_RPC_URL === "string" && this.env.TILL_RPC_URL.length > 0
+          ? this.env.TILL_RPC_URL
+          : null;
+      const currencies = (this.env.TILL_CURRENCIES ?? "")
+        .split(",")
+        .map(entry => entry.trim())
+        .filter(entry => entry.length > 0);
+      const balances = await Promise.all(
+        currencies.map(async currency => {
+          const raw = rpcUrl ? await erc20Balance(rpcUrl, apiKey, currency, address) : null;
+          const decimals = KNOWN_DECIMALS.get(currency.toLowerCase()) ?? null;
+          return {
+            currency,
+            decimals,
+            raw,
+            display: raw !== null && decimals !== null ? formatUnits(raw, decimals) : null
+          };
+        })
+      );
+      return json({ ok: true, address, chainId, balances });
     }
     return errorResponse(404, "not_found");
   }
