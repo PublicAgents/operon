@@ -1,0 +1,259 @@
+#!/usr/bin/env node
+/**
+ * The fleet deploy driver (spec 0006): run from a project repo root.
+ *
+ *   node operon/tools/fleet.mjs check   [--project <name>]
+ *   node operon/tools/fleet.mjs render  [--project <name>]
+ *   node operon/tools/fleet.mjs deploy  [--project <name>] [--no-drain]
+ *
+ * The manifest is `.operon/operon.yaml` (single project) or
+ * `.operon/projects/<name>/operon.yaml` (several). Configs render from
+ * the CHASSIS-owned templates into `.operon/build/<project>/`; the
+ * colony repo carries no wrangler files.
+ *
+ * Deploys never kill running wakes (spec 0006 §5): when the scheduler
+ * is being deployed and the container source hash differs from what
+ * the live scheduler reports, the driver DRAINS first: it disables
+ * every enabled agent through the ops gateway, waits for the
+ * current-wake set to empty, deploys, then restores. Draining needs
+ * OPERON_OPS_URL plus either an interactive `cloudflared` login or
+ * CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET (a service token); a
+ * scheduler deploy REFUSES without them unless --no-drain says, in
+ * effect, kill whatever is running.
+ */
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PROJECT_ROOT = process.cwd();
+
+function fail(message) {
+  console.error(`\n✗ ${message}\n`);
+  process.exit(1);
+}
+
+async function loadFleet() {
+  const entry = join(CHASSIS_ROOT, "packages/fleet/dist/index.js");
+  try {
+    return await import(entry);
+  } catch {
+    fail(`cannot import the chassis fleet package from ${entry}\nBuild the submodule first (npm run build:chassis).`);
+  }
+}
+
+const [, , command, ...rest] = process.argv;
+if (!["check", "render", "deploy"].includes(command ?? "")) {
+  fail("usage: fleet.mjs <check|render|deploy> [--project <name>] [--no-drain]");
+}
+const projectFlagIndex = rest.indexOf("--project");
+const onlyProject = projectFlagIndex >= 0 ? rest[projectFlagIndex + 1] : undefined;
+const noDrain = rest.includes("--no-drain");
+
+const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loadFleet();
+
+/** Locate every manifest in the repo (spec 0006 §1 layouts). */
+function findManifests() {
+  const single = join(PROJECT_ROOT, ".operon/operon.yaml");
+  const multiDir = join(PROJECT_ROOT, ".operon/projects");
+  const found = [];
+  if (existsSync(single)) found.push({ path: single, directoryName: undefined });
+  if (existsSync(multiDir)) {
+    for (const name of readdirSync(multiDir)) {
+      const path = join(multiDir, name, "operon.yaml");
+      if (existsSync(path)) found.push({ path, directoryName: name });
+    }
+  }
+  if (found.length === 0) fail("no .operon/operon.yaml or .operon/projects/*/operon.yaml found here");
+  return found;
+}
+
+const manifests = findManifests()
+  .map(({ path, directoryName }) => {
+    try {
+      return parseManifest(readFileSync(path, "utf8"), { directoryName });
+    } catch (error) {
+      fail(String(error.message ?? error));
+    }
+  })
+  .filter(manifest => onlyProject === undefined || manifest.project === onlyProject);
+if (manifests.length === 0) fail(`no project named "${onlyProject}" here`);
+
+/** Hash the wake-container sources: the drain gate (spec 0006 §5). */
+function containerSourceHash() {
+  const hash = createHash("sha256");
+  const dir = join(CHASSIS_ROOT, "packages/container");
+  const walk = path => {
+    for (const name of readdirSync(path).sort()) {
+      if (["node_modules", "dist"].includes(name)) continue;
+      const full = join(path, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else hash.update(name).update(readFileSync(full));
+    }
+  };
+  walk(join(dir, "src"));
+  hash.update(readFileSync(join(dir, "Dockerfile")));
+  return hash.digest("hex").slice(0, 16);
+}
+
+function run(cmd, args, options = {}) {
+  return execFileSync(cmd, args, { cwd: PROJECT_ROOT, encoding: "utf8", ...options });
+}
+
+function resolveD1Id(manifest) {
+  const listed = JSON.parse(run("npx", ["wrangler", "d1", "list", "--json"]));
+  const match = listed.find(db => db.name === manifest.resources.d1Name);
+  if (!match) fail(`D1 database "${manifest.resources.d1Name}" does not exist in the account; run bootstrap first`);
+  return match.uuid;
+}
+
+function resolveKvId(manifest) {
+  if (manifest.resources.siteStoreKvId) return manifest.resources.siteStoreKvId;
+  const listed = JSON.parse(run("npx", ["wrangler", "kv", "namespace", "list"]));
+  const title = `${manifest.workerPrefix}-site`;
+  const match = listed.find(ns => ns.title === title);
+  if (!match) {
+    fail(`KV namespace titled "${title}" does not exist and resources.siteStoreKvId is unset; run bootstrap or set the id`);
+  }
+  return match.id;
+}
+
+function render(manifest, { resolveIds }) {
+  const buildDir = join(PROJECT_ROOT, ".operon/build", manifest.project);
+  mkdirSync(buildDir, { recursive: true });
+  const options = {
+    chassisDir: "../../../operon",
+    containerSourceHash: containerSourceHash(),
+    ...(resolveIds ? { d1DatabaseId: resolveD1Id(manifest), siteStoreKvId: resolveKvId(manifest) } : {})
+  };
+  const workers = renderWorkers(manifest, options);
+  for (const worker of workers) {
+    writeFileSync(join(buildDir, worker.filename), JSON.stringify(worker.config, null, 2) + "\n");
+  }
+  return { buildDir, workers };
+}
+
+async function opsCall(manifest, tool, body) {
+  const opsUrl = process.env.OPERON_OPS_URL ?? `https://ops.${manifest.roster.zone}`;
+  const headers = { "content-type": "application/json", "x-operon-console": "1" };
+  if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = process.env.CF_ACCESS_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = process.env.CF_ACCESS_CLIENT_SECRET;
+  } else {
+    const token = run("cloudflared", ["access", "token", "-app", opsUrl]).trim();
+    headers["cf-access-token"] = token;
+  }
+  const response = await fetch(`${opsUrl}/api/v1/${tool}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body ?? {})
+  });
+  if (!response.ok) throw new Error(`${tool} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  return response.json();
+}
+
+/** Spec 0006 §5: pause new wakes, wait for the current set to empty. */
+async function drain(manifest) {
+  const { agents } = await opsCall(manifest, "agents-list");
+  const toRestore = agents.filter(agent => agent.enabled && !agent.disabled).map(agent => agent.id);
+  for (const id of toRestore) {
+    await opsCall(manifest, "agent-disable", { agentId: id });
+    console.log(`  drained: ${id} paused (re-enabled after deploy)`);
+  }
+  const deadline = Date.now() + 45 * 60 * 1000;
+  for (;;) {
+    const { agents: now } = await opsCall(manifest, "agents-list");
+    const running = now.filter(agent => agent.currentWake).map(agent => agent.id);
+    if (running.length === 0) break;
+    if (Date.now() > deadline) fail(`drain timed out; still running: ${running.join(", ")}`);
+    console.log(`  waiting for wakes to finish: ${running.join(", ")}`);
+    await new Promise(resolve => setTimeout(resolve, 30_000));
+  }
+  return toRestore;
+}
+
+async function liveContainerHash(manifest) {
+  try {
+    const { agents, containerHash } = await opsCall(manifest, "agents-list");
+    void agents;
+    return containerHash ?? null;
+  } catch {
+    return null;
+  }
+}
+
+for (const manifest of manifests) {
+  console.log(`\n=== project ${manifest.project} (${manifest.roster.zone}) ===`);
+  const enabled = manifest.roster.agents.filter(agent => agent.enabled);
+  console.log(`roster: ${manifest.roster.agents.length} agent(s), ${enabled.length} enabled`);
+
+  if (command === "check") {
+    // Validation happened at parse; render without ids proves the
+    // templates accept this manifest. Cron coverage is correct by
+    // construction now: the triggers derive from the roster itself.
+    render(manifest, { resolveIds: false });
+    console.log(`✓ ${manifest.project}: manifest valid against this chassis; configs render`);
+    continue;
+  }
+
+  if (command === "render") {
+    const { buildDir } = render(manifest, { resolveIds: true });
+    console.log(`✓ rendered into ${buildDir}`);
+    continue;
+  }
+
+  // deploy
+  const consoleIndex = join(CHASSIS_ROOT, "packages/console/dist/index.html");
+  if (!existsSync(consoleIndex)) {
+    fail("the console build is missing; run build:chassis first (deploying without it ships a blank console)");
+  }
+  const { buildDir, workers } = render(manifest, { resolveIds: true });
+  for (const worker of workers) {
+    if (JSON.stringify(worker.config).includes(D1_PLACEHOLDER)) {
+      fail(`${worker.key} still carries an unresolved resource id`);
+    }
+  }
+
+  const sourceHash = containerSourceHash();
+  const liveHash = await liveContainerHash(manifest);
+  const imageChanges = liveHash !== sourceHash;
+  let toRestore = [];
+  if (imageChanges && !noDrain) {
+    if (liveHash === null) {
+      console.log("live container hash unknown (first fleet deploy or gateway unreachable); draining to be safe");
+    } else {
+      console.log(`container source changed (${liveHash} -> ${sourceHash}); draining before the image rolls`);
+    }
+    try {
+      toRestore = await drain(manifest);
+    } catch (error) {
+      fail(
+        `cannot drain (${String(error.message ?? error).slice(0, 200)})\n` +
+          `Deploying the scheduler would roll the wake image and kill running wakes.\n` +
+          `Provide ops access (OPERON_OPS_URL + CF_ACCESS_CLIENT_ID/SECRET or cloudflared login),\n` +
+          `or pass --no-drain to proceed anyway, killing whatever is running.`
+      );
+    }
+  } else if (!imageChanges) {
+    console.log(`container source unchanged (${sourceHash}); no image roll, no drain needed`);
+  } else {
+    console.log("--no-drain: proceeding without draining; running wakes may be killed by the image roll");
+  }
+
+  const rosterVar = JSON.stringify({ zone: manifest.roster.zone, agents: manifest.roster.agents });
+  for (const key of DEPLOY_ORDER) {
+    console.log(`\n→ deploying ${manifest.project}/${key}`);
+    execFileSync("npx", ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`], {
+      cwd: PROJECT_ROOT,
+      stdio: "inherit"
+    });
+  }
+
+  for (const id of toRestore) {
+    await opsCall(manifest, "agent-enable", { agentId: id });
+    console.log(`  restored: ${id} enabled`);
+  }
+  console.log(`\n✓ ${manifest.project}: deploy complete`);
+}
