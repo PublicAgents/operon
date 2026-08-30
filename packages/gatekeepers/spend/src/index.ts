@@ -256,13 +256,25 @@ async function executePayment(
     return errorResponse(422, decision.problem);
   }
   if (decision.allowanceId !== undefined) {
-    await ledger(env).append("allowance_consumed", {
-      agentId: context.agent.id,
-      allowanceId: decision.allowanceId,
-      outboxId: decision.outboxId,
-      origin: summary.origin,
-      display: summary.display
-    });
+    try {
+      await ledger(env).append("allowance_consumed", {
+        agentId: context.agent.id,
+        allowanceId: decision.allowanceId,
+        outboxId: decision.outboxId,
+        origin: summary.origin,
+        display: summary.display
+      });
+    } catch (error) {
+      // The consumption is already durable in the DO (and the outbox
+      // row documents the attempt); a lost companion event escalates
+      // to the operator rather than failing the payment or vanishing.
+      console.error("allowance_consumed audit row lost", decision.allowanceId, error);
+      await notifyOperator(
+        env,
+        `spend audit gap: allowance ${decision.allowanceId} was consumed by outbox ${decision.outboxId} (${summary.display} to ${summary.recipient}) but its allowance_consumed row could not be written; reconstruct from this notice.`,
+        []
+      ).catch(() => undefined);
+    }
   }
   const reservation = { ok: true as const, outboxId: decision.outboxId };
 
@@ -649,7 +661,10 @@ async function mintAllowanceForHeld(
   const expiryDays = Number.isInteger(days) && days > 0 ? days : 7;
   const now = Date.now();
   const allowance: Allowance = {
-    id: crypto.randomUUID(),
+    // The hold's id: one hold mints at most one allowance, and a retry
+    // after a lost response rewrites the SAME record instead of
+    // minting a twin authorization under a fresh random id.
+    id: heldId,
     agentId,
     origin: held.origin,
     method: held.method,
@@ -814,8 +829,17 @@ export class Ops extends OpsEntrypoint<Env> {
         return errorResponse(400, "invalid_request");
       }
       const at = new Date().toISOString();
+      // Decision doctrine: the intent row lands BEFORE the state
+      // change and the decision refuses when it cannot be audited, so
+      // a revocation can never be durable without its record. A row
+      // whose revocation then loses (not revocable) is an intent that
+      // produced nothing, which the same row documents.
+      try {
+        await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, at });
+      } catch {
+        return errorResponse(503, "audit_unavailable");
+      }
       const revoked = await spendLedger(this.env).revokeAllowance(body.value.allowanceId, at);
-      await ledger(this.env).append("allowance_revoked", { allowanceId: body.value.allowanceId, done: revoked });
       return revoked ? json({ ok: true }) : errorResponse(404, "allowance_not_revocable");
     }
     return errorResponse(404, "not_found");
