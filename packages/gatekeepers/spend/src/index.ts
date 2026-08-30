@@ -648,8 +648,13 @@ async function mintAllowanceForHeld(
     mintedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
   };
-  await spendLedger(env).mintAllowance(allowance);
-  await spendLedger(env).deleteHeld(heldId);
+  // Audit doctrine (spec 0003): the DECISION writes its intent row
+  // FIRST and refuses on audit failure, so an allowance can never exist
+  // without its allowance_minted record. If the mint itself then fails,
+  // the row describes an intent that produced nothing and the operator
+  // retries (the hold stays claimed, so nothing double-approves); a
+  // duplicate intent row on retry is benign, an unaudited standing
+  // authorization is not.
   await ledger(env).append("allowance_minted", {
     agentId,
     allowanceId: allowance.id,
@@ -658,6 +663,12 @@ async function mintAllowanceForHeld(
     display: allowance.display,
     expiresAt: allowance.expiresAt
   });
+  await spendLedger(env).mintAllowance(allowance);
+  try {
+    await spendLedger(env).deleteHeld(heldId);
+  } catch (error) {
+    console.error("held cleanup failed after mint (claimed, cannot re-approve)", error);
+  }
   return json({ ok: true, status: "allowance_minted", allowance });
 }
 
