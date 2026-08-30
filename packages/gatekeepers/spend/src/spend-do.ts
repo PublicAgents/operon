@@ -151,7 +151,27 @@ export class SpendLedger extends DurableObject {
 
   // ---- holds (the email Gatekeeper's claim pattern, verbatim) ----------
 
+  /**
+   * Hold a payment for the operator, DEDUPLICATED: an unclaimed pending
+   * hold for the same (agent, origin, method, recipient, currency,
+   * amount) is returned instead of creating a twin, so a repeated pay
+   * across wakes cannot queue two approvals that would mint two
+   * allowances. Serialized by the DO, so the check-then-put is atomic.
+   */
   async hold(payment: Omit<HeldPayment, "id" | "queuedAt" | "claimed">, at: string): Promise<HeldPayment> {
+    for (const existing of await this.listHeld()) {
+      if (
+        !existing.claimed &&
+        existing.agentId === payment.agentId &&
+        existing.origin === payment.origin &&
+        existing.method === payment.method &&
+        existing.recipient.toLowerCase() === payment.recipient.toLowerCase() &&
+        existing.currency.toLowerCase() === payment.currency.toLowerCase() &&
+        existing.amount === payment.amount
+      ) {
+        return existing;
+      }
+    }
     const held: HeldPayment = { id: crypto.randomUUID(), queuedAt: at, ...payment };
     await this.ctx.storage.put(`held:${held.id}`, held);
     return held;
@@ -183,6 +203,32 @@ export class SpendLedger extends DurableObject {
 
   async mintAllowance(allowance: Allowance): Promise<void> {
     await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
+  }
+
+  /** Base units already reserved or spent by this agent today. */
+  async spentToday(agentId: string, at: string): Promise<string> {
+    return (await this.ctx.storage.get<string>(`spent:${agentId}:${day(at)}`)) ?? "0";
+  }
+
+  /**
+   * Mark allowances that lapsed by expiry and return the NEWLY lapsed
+   * ones exactly once, so the caller can ledger the transition (spec
+   * §2.2: every mint, consume, revoke, and expiry-lapse is ledgered).
+   */
+  async sweepExpired(nowIso: string): Promise<Allowance[]> {
+    const lapsed: Allowance[] = [];
+    for (const allowance of await this.listAllowances()) {
+      if (
+        allowance.consumedAt === undefined &&
+        allowance.revokedAt === undefined &&
+        allowance.expiresAt <= nowIso &&
+        !(allowance as Allowance & { expiryLedgered?: boolean }).expiryLedgered
+      ) {
+        await this.ctx.storage.put(`allow:${allowance.id}`, { ...allowance, expiryLedgered: true });
+        lapsed.push(allowance);
+      }
+    }
+    return lapsed;
   }
 
   async listAllowances(agentId?: string): Promise<Allowance[]> {
