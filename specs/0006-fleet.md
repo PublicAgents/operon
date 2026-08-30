@@ -14,7 +14,7 @@ A PROJECT is a repository carrying an `.operon/` directory, the way
 
 ```
 .operon/
-  colony.yaml        the manifest: everything colony-specific
+  operon.yaml        the manifest: everything project-specific
   charters/          seed charters, one per agent (copied into the
                      agent's state repo at bootstrap, authored there
                      afterward: the state repo remains the living copy)
@@ -29,7 +29,7 @@ already exist and belong to a different repo: collisions are a
 hard error at the door, not a surprise at deploy.
 
 A repo may also host SEVERAL projects, as
-`.operon/projects/<name>/{colony.yaml, charters/}`; the deploy CLI
+`.operon/projects/<name>/{operon.yaml, charters/}`; the deploy CLI
 takes `--project <name>` or acts on every project it finds. Projects
 sharing a repo share its chassis pin and therefore upgrade together,
 so co-locate projects you want in lockstep and give a project its own
@@ -56,7 +56,7 @@ split inverts:
   the same reviewed diff. Migration tags in particular live here,
   because they track code history and a colony must never be able to
   forget one.
-- **The project owns `colony.yaml`**: zone, account id, worker name
+- **The project owns `operon.yaml`**: zone, account id, worker name
   prefix, policy values (caps, currencies, hold ceiling, allowance
   days), optional features (telegram), the agent list, and per-agent
   settings (state repo, hosts, cadence, model, doors). Nothing else.
@@ -217,18 +217,19 @@ concepts retire.
 ## 9. Version skew between projects
 
 Projects pin the chassis independently, and the isolation model makes
-that safe: every runtime artifact (workers, D1 schema, DO classes, the
-wake image, the console assets) comes from the project's own pin and
-deploys on its own. Two projects at different versions share an
-account and nothing else, which is what makes CANARY BUMPS the normal
-upgrade motion: bump a low-stakes project first, watch it, then roll
-the rest.
+that safe: every project runtime artifact (workers, D1 schema, DO
+classes, the wake image) comes from the project's own pin and deploys
+on its own; the console ships with the control plane at ITS pin (§8).
+Projects at different versions interact with nothing but the control
+plane, which is what makes CANARY BUMPS the normal upgrade motion:
+bump the control plane first, then a low-stakes project, watch it,
+then roll the rest.
 
 The one discipline lives in fleet-level tooling: **no fleet operation
-assumes a single chassis version.** Cross-project tools (secrets sync,
-cross-prefix rotation, any future fleet dashboard) iterate projects
-and use each project's OWN pinned scripts and manifest schema, never a
-central copy at some other version. The only cross-version coupling
+assumes a single chassis version.** Cross-project tooling (secrets
+sync, cross-prefix rotation, the control plane itself per §8) iterates
+projects and respects each project's OWN pinned scripts and manifest
+schema, never a central copy at some other version. The only cross-version coupling
 permitted at all is convention rather than code: the qualified
 `project/agent` naming on shared surfaces, which is stable text with
 no schema to drift.
