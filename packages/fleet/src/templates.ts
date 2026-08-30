@@ -223,8 +223,17 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...chronicleD1,
         routes: tillRoutes,
         services: [service("DEPLOY", "gatekeeper-deploy")],
-        durable_objects: { bindings: [{ name: "CATALOG", class_name: "TillCatalog" }, ledger] },
-        migrations: [{ tag: "v1", new_sqlite_classes: ["TillCatalog", "Ledger"] }],
+        durable_objects: {
+          bindings: [
+            { name: "CATALOG", class_name: "TillCatalog" },
+            ledger,
+            { name: "TILL_STORE", class_name: "TillStore" }
+          ]
+        },
+        migrations: [
+          { tag: "v1", new_sqlite_classes: ["TillCatalog", "Ledger"] },
+          { tag: "v2", new_sqlite_classes: ["TillStore"] }
+        ],
         vars: policyVars(manifest, "till")
       }
     },
