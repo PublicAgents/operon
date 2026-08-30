@@ -144,11 +144,18 @@ export class SpendLedger extends DurableObject {
     // exactly this grant back without stripping a tuple some earlier,
     // completed approval legitimately granted.
     const key = `tuple:${tupleKey(held)}`;
-    if ((await this.ctx.storage.get(key)) === undefined) {
+    const existing = await this.ctx.storage.get<boolean | string>(key);
+    if (existing === undefined) {
       await this.ctx.storage.put(key, heldId);
       await this.event("tuple_approved", {
         agentId: held.agentId, origin: held.origin, recipient: held.recipient
       }, at);
+    } else if (typeof existing === "string" && existing !== heldId) {
+      // A SECOND independent approval of the same merchant: the grant
+      // is now backed by two operator decisions and becomes permanent,
+      // so rejecting the first hold can no longer strip authorization
+      // this approval also legitimized.
+      await this.ctx.storage.put(key, true);
     }
     return "ok";
   }
@@ -406,6 +413,13 @@ export class SpendLedger extends DurableObject {
     const held = await this.ctx.storage.get<HeldPayment>(`held:${heldId}`);
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${heldId}`);
     if (!held && !allowance) return { status: "not_found" };
+    // A retry of a rejection whose response was lost finds the hold
+    // gone and its allowance already revoked: the rejection happened,
+    // and answering so without a second pay_rejected event keeps the
+    // trail single-voiced.
+    if (!held && allowance?.revokedAt !== undefined) {
+      return { status: "rejected", voided: false };
+    }
     // A FRESH claim means an approval is executing right now; rejecting
     // under it would report "rejected" while that payment completes.
     // The claim is respected while young and overridable once stale
