@@ -154,24 +154,23 @@ async function opsCall(manifest, tool, body) {
   return response.json();
 }
 
-/** Spec 0006 §5: pause new wakes, wait for the current set to empty. */
+/**
+ * Spec 0006 §5: PAUSE new wake starts (fleet_pause defers, it never
+ * touches a wake in flight; the kill switch is a different tool for a
+ * different job), then wait for the current-wake set to empty.
+ */
 async function drain(manifest) {
-  const { agents } = await opsCall(manifest, "agents-list");
-  const toRestore = agents.filter(agent => agent.enabled && !agent.disabled).map(agent => agent.id);
-  for (const id of toRestore) {
-    await opsCall(manifest, "agent-disable", { agentId: id });
-    console.log(`  drained: ${id} paused (re-enabled after deploy)`);
-  }
+  await opsCall(manifest, "fleet-pause", { reason: "deploy: wake image rolling" });
+  console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
   const deadline = Date.now() + 45 * 60 * 1000;
   for (;;) {
     const { agents: now } = await opsCall(manifest, "agents-list");
     const running = now.filter(agent => agent.currentWake).map(agent => agent.id);
-    if (running.length === 0) break;
+    if (running.length === 0) return;
     if (Date.now() > deadline) fail(`drain timed out; still running: ${running.join(", ")}`);
     console.log(`  waiting for wakes to finish: ${running.join(", ")}`);
     await new Promise(resolve => setTimeout(resolve, 30_000));
   }
-  return toRestore;
 }
 
 async function liveContainerHash(manifest) {
@@ -219,7 +218,7 @@ for (const manifest of manifests) {
   const sourceHash = containerSourceHash();
   const liveHash = await liveContainerHash(manifest);
   const imageChanges = liveHash !== sourceHash;
-  let toRestore = [];
+  let paused = false;
   if (imageChanges && !noDrain) {
     if (liveHash === null) {
       console.log("live container hash unknown (first fleet deploy or gateway unreachable); draining to be safe");
@@ -227,7 +226,8 @@ for (const manifest of manifests) {
       console.log(`container source changed (${liveHash} -> ${sourceHash}); draining before the image rolls`);
     }
     try {
-      toRestore = await drain(manifest);
+      await drain(manifest);
+      paused = true;
     } catch (error) {
       fail(
         `cannot drain (${String(error.message ?? error).slice(0, 200)})\n` +
@@ -243,17 +243,24 @@ for (const manifest of manifests) {
   }
 
   const rosterVar = JSON.stringify({ zone: manifest.roster.zone, agents: manifest.roster.agents });
-  for (const key of DEPLOY_ORDER) {
-    console.log(`\n→ deploying ${manifest.project}/${key}`);
-    execFileSync("npx", ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`], {
-      cwd: PROJECT_ROOT,
-      stdio: "inherit"
-    });
-  }
-
-  for (const id of toRestore) {
-    await opsCall(manifest, "agent-enable", { agentId: id });
-    console.log(`  restored: ${id} enabled`);
+  try {
+    for (const key of DEPLOY_ORDER) {
+      console.log(`\n→ deploying ${manifest.project}/${key}`);
+      execFileSync(
+        "npx",
+        ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`],
+        { cwd: PROJECT_ROOT, stdio: "inherit" }
+      );
+    }
+  } finally {
+    // The resume is unconditional once paused: a failed deploy must
+    // never leave the fleet silently refusing wakes.
+    if (paused) {
+      await opsCall(manifest, "fleet-resume").then(
+        () => console.log("  fleet resumed"),
+        error => console.error(`  RESUME FAILED, wakes stay paused: run fleet_resume by hand (${error})`)
+      );
+    }
   }
   console.log(`\n✓ ${manifest.project}: deploy complete`);
 }

@@ -106,6 +106,10 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(byKey["gatekeeper-spend"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }
     ]);
+    expect(byKey["scheduler"].migrations).toEqual([
+      { tag: "v1", new_sqlite_classes: ["WakeContainer"] },
+      { tag: "v2", new_sqlite_classes: ["FleetControl"] }
+    ]);
   });
 
   it("wires the ops gateway's full binding set with Ops entrypoints and the assets block", () => {
