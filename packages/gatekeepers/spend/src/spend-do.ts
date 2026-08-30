@@ -250,10 +250,20 @@ export class SpendLedger extends DurableObject {
     return agentId ? all.filter(allowance => allowance.agentId === agentId) : all;
   }
 
-  /** Operator revocation of an UNSPENT allowance. */
+  /**
+   * Operator revocation of an UNSPENT, UNEXPIRED allowance. An expired
+   * one is not revocable: it already lapsed, and refusing here keeps
+   * the audit trail single-voiced (one allowance, one terminal event,
+   * never both allowance_revoked and allowance_expired).
+   */
   async revokeAllowance(id: string, at: string): Promise<boolean> {
     const allowance = await this.ctx.storage.get<Allowance>(`allow:${id}`);
-    if (!allowance || allowance.consumedAt !== undefined || allowance.revokedAt !== undefined) {
+    if (
+      !allowance ||
+      allowance.consumedAt !== undefined ||
+      allowance.revokedAt !== undefined ||
+      allowance.expiresAt <= at
+    ) {
       return false;
     }
     await this.ctx.storage.put(`allow:${id}`, { ...allowance, revokedAt: at });
