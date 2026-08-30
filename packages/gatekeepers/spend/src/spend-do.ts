@@ -158,8 +158,11 @@ export class SpendLedger extends DurableObject {
       if (
         // Claimed rows count too: a decision in flight is still THE hold
         // for this payment, and reporting it beats minting a twin whose
-        // separate approval would double the authorization.
+        // separate approval would double the authorization. The URL is
+        // part of the identity: two invoices that merely share a
+        // recipient and a price are two proposals, not one.
         existing.agentId === payment.agentId &&
+        existing.url === payment.url &&
         existing.origin === payment.origin &&
         existing.method === payment.method &&
         existing.recipient.toLowerCase() === payment.recipient.toLowerCase() &&
