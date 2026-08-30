@@ -323,6 +323,14 @@ export class SpendLedger extends DurableObject {
     if (existing) return "exists";
     const held = await this.ctx.storage.get<HeldPayment>(`held:${allowance.id}`);
     if (!held) return "hold_gone";
+    // The approval is completing: promote a grant this hold made from
+    // provenanced to PERMANENT, so a later rejection replay can never
+    // strip a tuple whose approval finished (or that a second approval
+    // also legitimized).
+    const grantKey = `tuple:${tupleKey(held)}`;
+    if ((await this.ctx.storage.get(grantKey)) === allowance.id) {
+      await this.ctx.storage.put(grantKey, true);
+    }
     await this.ctx.storage.put(`allow:${allowance.id}`, allowance);
     await this.event("allowance_minted", {
       agentId: allowance.agentId,
@@ -520,13 +528,28 @@ export class SpendLedger extends DurableObject {
     | { outcome: "held"; held: HeldPayment; deduped: boolean }
     | { outcome: "refused"; problem: CapProblem }
   > {
+    // An approval-time execution revalidates its hold IN THIS TURN: a
+    // rejection that already retired the hold wins, and the zombie
+    // approval reserves nothing.
+    if (row.heldId !== undefined) {
+      const sourceHold = await this.ctx.storage.get<HeldPayment>(`held:${row.heldId}`);
+      if (!sourceHold) {
+        await this.event("pay_refused", { agentId: row.agentId, url: row.url, problem: "hold_gone" }, row.at);
+        return { outcome: "refused", problem: "over_max_amount" };
+      }
+    }
     const plain = await this.reserve(row, caps);
     if (plain.ok) {
       if (row.heldId !== undefined) {
         // Approval-time execution: a durable pointer from the hold to
         // its reservation, written in the same turn, so a later
-        // rejection finds the payment directly (no bounded scan).
+        // rejection finds the payment directly (no bounded scan). The
+        // tuple grant this approval made becomes permanent with it.
         await this.ctx.storage.put(`heldpay:${row.heldId}`, `out:${row.at}:${plain.outboxId}`);
+        const grantKey = `tuple:${tupleKey({ origin: row.origin, method: row.method, recipient: row.recipient })}`;
+        if ((await this.ctx.storage.get(grantKey)) === row.heldId) {
+          await this.ctx.storage.put(grantKey, true);
+        }
       }
       return { outcome: "reserved", outboxId: plain.outboxId };
     }
@@ -535,8 +558,12 @@ export class SpendLedger extends DurableObject {
       return { outcome: "refused", problem: plain.problem };
     }
 
+    // Expiry is judged by the DO's own clock at decision time, never
+    // the caller's pre-await timestamp: a payment delayed on its way
+    // here cannot consume an allowance that lapsed in transit.
+    const decisionNow = new Date().toISOString();
     for (const allowance of options?.forbidAllowanceConsumption ? [] : await this.listAllowances(row.agentId)) {
-      if (allowanceMatches(allowance, row.agentId, row.url, summary, row.at)) {
+      if (allowanceMatches(allowance, row.agentId, row.url, summary, decisionNow)) {
         const id = crypto.randomUUID();
         await this.ctx.storage.put(`allow:${allowance.id}`, {
           ...allowance,
