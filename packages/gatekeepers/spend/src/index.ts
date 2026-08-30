@@ -697,28 +697,48 @@ async function mintAllowanceForHeld(
     expiresAt: new Date(now + expiryDays * 24 * 60 * 60 * 1000).toISOString()
   };
   // Audit doctrine (spec 0003): the DECISION writes its intent row
-  // FIRST and refuses on audit failure, so an allowance can never exist
-  // without its allowance_minted record. If the mint itself then fails,
-  // the row describes an intent that produced nothing and the operator
-  // retries (the hold stays claimed, so nothing double-approves); a
-  // duplicate intent row on retry is benign, an unaudited standing
-  // authorization is not.
-  await ledger(env).append("allowance_minted", {
-    agentId,
-    allowanceId: allowance.id,
-    origin: allowance.origin,
-    recipient: allowance.recipient,
-    display: allowance.display,
-    expiresAt: allowance.expiresAt
-  });
+  // FIRST and refuses on audit failure, and the intent and the outcome
+  // are separate rows so the trail reads true either way: a requested
+  // row with no minted row means the mint failed and the operator
+  // retried; a minted row only ever follows a durable allowance.
+  try {
+    await ledger(env).append("allowance_mint_requested", {
+      agentId,
+      allowanceId: allowance.id,
+      origin: allowance.origin,
+      recipient: allowance.recipient,
+      display: allowance.display,
+      expiresAt: allowance.expiresAt
+    });
+  } catch {
+    await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
+    return errorResponse(503, "audit_unavailable");
+  }
   try {
     await spendLedger(env).mintAllowance(allowance);
   } catch (error) {
-    // The intent row exists but no allowance does: unclaim so the
-    // operator's retry can approve again (a duplicate intent row is
-    // benign; a hold stranded in claimed-forever is not).
+    // The request row exists but no allowance does, which is exactly
+    // what the trail says: unclaim so the operator's retry can approve
+    // again (a hold stranded in claimed-forever is not acceptable).
     await spendLedger(env).unclaimHeld(heldId).catch(() => undefined);
     return errorResponse(500, "allowance_mint_failed", String(error).slice(0, 200));
+  }
+  try {
+    await ledger(env).append("allowance_minted", {
+      agentId,
+      allowanceId: allowance.id,
+      origin: allowance.origin,
+      recipient: allowance.recipient,
+      display: allowance.display,
+      expiresAt: allowance.expiresAt
+    });
+  } catch (error) {
+    console.error("allowance_minted outcome row lost", allowance.id, error);
+    await notifyOperator(
+      env,
+      `spend audit gap: allowance ${allowance.id} (${allowance.display} to ${allowance.recipient}) WAS minted but its allowance_minted row could not be written; the allowance_mint_requested row and this notice document it.`,
+      []
+    ).catch(() => undefined);
   }
   try {
     await spendLedger(env).deleteHeld(heldId);
