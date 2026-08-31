@@ -17,17 +17,22 @@ export interface AskDelivered {
 }
 
 /**
- * Record a delivery as shown and answer how much of it was new. Seeding
- * with what landed at wake start (and ignoring the count) is the same
- * operation: the mind has already been handed those, and they are not
- * news that arrived while it worked.
+ * Record a delivery as shown and answer WHICH asks were new. Ids rather
+ * than a count, because the pending announcement is buffered until a
+ * caller is there to hear it: two operator actions on the same ask
+ * while nobody was listening are still one ask to mention, and a
+ * counter could not tell that apart from two asks.
+ *
+ * Seeding with what landed at wake start (ignoring the result) is the
+ * same operation: the mind has already been handed those, and they are
+ * not news that arrived while it worked.
  */
-export function countNewAsks(delivered: AskDelivered[], shown: Map<string, number>): number {
-  let fresh = 0;
+export function newAsks(delivered: AskDelivered[], shown: Map<string, number>): string[] {
+  const fresh: string[] = [];
   for (const row of delivered) {
     if (row.throughSeq <= (shown.get(row.id) ?? 0)) continue;
     shown.set(row.id, row.throughSeq);
-    fresh += 1;
+    fresh.push(row.id);
   }
   return fresh;
 }

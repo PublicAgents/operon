@@ -88,7 +88,8 @@ export interface Announcements {
   mail: number;
   dms: number;
   channel: boolean;
-  asks: number;
+  /** Ids of asks the operator acted on, deduplicated while buffered. */
+  asks: string[];
 }
 
 interface JsonResult {
@@ -246,13 +247,20 @@ export class Porch {
         // buffer simply waits for the next pull.
         if (request.destroyed) return fail(499, "caller_gone");
         const pulled = this.context.drainAnnouncements();
-        const fresh = Boolean(pulled.mail || pulled.dms || pulled.channel || pulled.asks);
+        const fresh = Boolean(
+          pulled.mail || pulled.dms || pulled.channel || pulled.asks.length
+        );
         const recredit = this.context.recreditAnnouncements;
         return {
           ...ok({
-            ...pulled,
+            mail: pulled.mail,
+            dms: pulled.dms,
+            channel: pulled.channel,
+            // The wire says how MANY asks moved; the ids are internal
+            // bookkeeping, and the notice never carries what was said.
+            asks: pulled.asks.length,
             note: fresh
-              ? pulled.asks > 0
+              ? pulled.asks.length > 0
                 ? "new input landed in inbox/ and operator/ (your operator acted on an ask: see operator/asks.md)"
                 : "new input landed in inbox/ and operator/channel.md"
               : "nothing new since the last delivery"

@@ -66,7 +66,7 @@ async function startPorch(
   wakeConfig: WakeConfig,
   denylist: string[] = [],
   pullFresh?: () => Promise<void>,
-  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean; asks: number }
+  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean; asks: string[] }
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
@@ -421,7 +421,7 @@ describe("the living help and the mid-wake pull", () => {
     // other truthfully hears nothing new; a later pull with an empty
     // buffer also hears nothing new.
     let calls = 0;
-    const buffer = { mail: 0, dms: 0, channel: false };
+    const buffer = { mail: 0, dms: 0, channel: false, asks: [] as string[] };
     let shared: Promise<void> | null = null;
     const { url } = await startPorch(
       config(),
@@ -436,10 +436,11 @@ describe("the living help and the mid-wake pull", () => {
         return shared;
       },
       () => {
-        const out = { ...buffer };
+        const out = { ...buffer, asks: [...buffer.asks] };
         buffer.mail = 0;
         buffer.dms = 0;
         buffer.channel = false;
+        buffer.asks = [];
         return out;
       }
     );

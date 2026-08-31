@@ -12,7 +12,7 @@ import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
 import type { AskLimits } from "./skills.js";
-import { countNewAsks, type AskDelivered } from "./asks-delivery.js";
+import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
@@ -879,7 +879,7 @@ async function main(): Promise<number> {
   // with the wake-start delivery, which is not news that arrived "while
   // you worked".
   const shownAsks = new Map<string, number>();
-  countNewAsks(asksAtStart.delivered, shownAsks);
+  newAsks(asksAtStart.delivered, shownAsks);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -916,22 +916,24 @@ async function main(): Promise<number> {
       return inFlightPull;
     },
     drainAnnouncements() {
-      const out = { ...unannounced };
+      const out = { ...unannounced, asks: [...unannounced.asks] };
       unannounced.mail = 0;
       unannounced.dms = 0;
       unannounced.channel = false;
-      unannounced.asks = 0;
+      unannounced.asks.clear();
       return out;
     },
     recreditAnnouncements(counts) {
       unannounced.mail += counts.mail;
       unannounced.dms += counts.dms;
       unannounced.channel = unannounced.channel || counts.channel;
-      unannounced.asks += counts.asks;
+      for (const id of counts.asks) unannounced.asks.add(id);
     }
   });
   let inFlightPull: Promise<void> | null = null;
-  const unannounced = { mail: 0, dms: 0, channel: false, asks: 0 };
+  // Asks are buffered as IDS, not a count: several operator actions on
+  // one ask while nobody was listening are still one ask to mention.
+  const unannounced = { mail: 0, dms: 0, channel: false, asks: new Set<string>() };
   async function doPullFresh(): Promise<void> {
     const before = ackState.inboxIds.size;
     for (const id of await pullInbox(config, chassisWritten, denylist)) {
@@ -954,7 +956,7 @@ async function main(): Promise<number> {
     }
     const asks = await pullAsks(config, chassisWritten, denylist);
     if (asks.deliveryId) ackState.asksDelivery = asks.deliveryId;
-    unannounced.asks += countNewAsks(asks.delivered, shownAsks);
+    for (const id of newAsks(asks.delivered, shownAsks)) unannounced.asks.add(id);
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
