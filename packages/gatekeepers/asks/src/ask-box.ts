@@ -173,7 +173,13 @@ export class AskBox extends DurableObject {
     const rows: { id: string; title: string; state: AskState; entries: AskThreadEntry[] }[] = [];
     for (const ask of await this.list({ agentId })) {
       const entries = unreadForAgent(ask);
-      if (entries.length > 0) rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
+      if (entries.length === 0) continue;
+      rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
+      // Record what was handed over, so a later ack can be bounded by
+      // it. This is the only honest ceiling: the thread length at ack
+      // time may already include entries this read never returned.
+      const offered = Math.max(ask.agentOfferedSeq ?? 0, entries[entries.length - 1].seq);
+      if (offered !== (ask.agentOfferedSeq ?? 0)) await this.save({ ...ask, agentOfferedSeq: offered });
     }
     return rows;
   }
@@ -187,11 +193,12 @@ export class AskBox extends DurableObject {
     for (const cursor of cursors) {
       const ask = await this.load(cursor.askId);
       if (!ask || ask.agentId !== agentId) continue;
-      // Clamped to entries that EXIST: an ack past the end of the
-      // thread (a faulty porch, or a caller inventing a number) would
-      // otherwise hide every future reply behind a cursor nothing can
-      // reach.
-      const next = Math.min(Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq), ask.thread.length);
+      // Clamped to what this ask actually HANDED OVER, never to the
+      // thread's current length: an operator entry written between the
+      // read and the ack must survive an over-large cursor, and an
+      // invented number must not reach past delivery at all.
+      const ceiling = ask.agentOfferedSeq ?? 0;
+      const next = Math.min(Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq), ceiling);
       if (next !== (ask.agentSeenSeq ?? 0)) await this.save({ ...ask, agentSeenSeq: next });
     }
   }

@@ -76,6 +76,12 @@ export interface Ask {
   updatedAt: string;
   /** The last thread entry the agent was handed; later ones are unread. */
   agentSeenSeq?: number;
+  /**
+   * The highest entry sequence this ask has ever RETURNED to the
+   * agent. An ack can never advance past it, so an over-large cursor
+   * cannot swallow an entry that was written after the read.
+   */
+  agentOfferedSeq?: number;
   thread: AskThreadEntry[];
 }
 

@@ -106,3 +106,25 @@ describe("unreadForAgent", () => {
     expect(unreadForAgent(seen)).toEqual([sameMs]);
   });
 });
+
+describe("the delivery cursor's ceiling", () => {
+  // The invariant ackUnread enforces, stated as arithmetic so the
+  // reasoning survives the implementation: an ack advances to what was
+  // offered, never past it, and never backwards.
+  const advance = (seen: number, through: number, offered: number) =>
+    Math.min(Math.max(seen, through), offered);
+
+  it("advances to what was handed over", () => {
+    expect(advance(0, 3, 3)).toBe(3);
+  });
+
+  it("cannot advance past what was handed over, however large the ack", () => {
+    // The operator wrote entry 4 after the read returned 1..3.
+    expect(advance(0, 9_999, 3)).toBe(3);
+  });
+
+  it("never moves backwards on a stale or replayed ack", () => {
+    expect(advance(5, 2, 8)).toBe(5);
+    expect(advance(5, 5, 8)).toBe(5);
+  });
+});
