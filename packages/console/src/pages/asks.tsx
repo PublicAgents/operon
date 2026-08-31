@@ -66,20 +66,40 @@ const LABEL: Record<AskState, string> = {
 };
 
 /**
- * A refused decision, said in operator terms. The 409 body also carries
- * a thread tail; it is deliberately not rendered here, because this
- * notice sits next to the decision buttons and only gatekeeper facts
- * belong that close to them. The refreshed card below shows the thread.
+ * A refusal is remembered as FACTS, never as a rendered sentence: what
+ * the operator attempted, and the state the card was showing when they
+ * attempted it. The notice is written at render time against the ask as
+ * it stands right now, so a card that keeps polling can never end up
+ * claiming the ask moved somewhere it has since moved on from.
  */
-function conflictMessage(error: unknown): string {
-  if (!(error instanceof ApiError)) return "the decision did not go through; try again";
-  const body = error.body as { error?: unknown; state?: unknown } | null;
-  const state = typeof body?.state === "string" ? body.state : undefined;
-  if (body?.error === "ask_terminal") return `this ask is already ${state ?? "settled"}; it cannot move`;
-  if (body?.error === "ask_state_moved") {
-    return `the ask moved to ${state ?? "another state"} while you were reading it; nothing was overwritten`;
+interface Refusal {
+  attempted: AskState | "reply";
+  /** The state the card rendered when the attempt was made. */
+  from: AskState;
+  /** Only for failures that are not the gatekeeper refusing a transition. */
+  raw?: string;
+}
+
+function refusalFrom(error: unknown, attempted: Refusal["attempted"], from: AskState): Refusal {
+  if (error instanceof ApiError) {
+    const body = error.body as { error?: unknown } | null;
+    // The 409 body also carries a thread tail. It is deliberately not
+    // read here: this notice sits next to the decision buttons, and
+    // only gatekeeper facts belong that close to them (spec 0005 §8).
+    if (body?.error === "ask_state_moved" || body?.error === "ask_terminal") {
+      return { attempted, from };
+    }
+    return { attempted, from, raw: error.message };
   }
-  return error.message;
+  return { attempted, from, raw: "the request did not go through" };
+}
+
+/** Written against the CURRENT ask, so it stays true however it moved. */
+function refusalMessage(refusal: Refusal, ask: Ask): string {
+  const what = refusal.attempted === "reply" ? "your reply" : `marking this ${LABEL[refusal.attempted]}`;
+  if (refusal.raw !== undefined) return `${what} was refused: ${refusal.raw}`;
+  if (ask.state === refusal.from) return `${what} was refused; the ask is still ${ask.state}`;
+  return `${what} was refused: the ask is now ${ask.state}, and nothing was overwritten`;
 }
 
 function Thread({ entries }: { entries: ThreadEntry[] }) {
@@ -107,11 +127,11 @@ function Thread({ entries }: { entries: ThreadEntry[] }) {
 function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
   const [reply, setReply] = useState("");
   const [note, setNote] = useState("");
-  const [conflict, setConflict] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const settled = ask.state === "closed" || ask.state === "retracted";
 
   async function decide(decision: AskState) {
-    setConflict(null);
+    setRefusal(null);
     try {
       // expectedState is what THIS view rendered: if the ask moved
       // since (the agent retracted it, another tab decided), the
@@ -126,7 +146,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
       setNote("");
       refresh();
     } catch (error) {
-      setConflict(conflictMessage(error));
+      setRefusal(refusalFrom(error, decision, ask.state));
       refresh();
     }
   }
@@ -155,7 +175,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
         </p>
       ) : null}
       <Thread entries={ask.thread} />
-      {conflict ? <ErrorNote error={conflict} /> : null}
+      {refusal ? <ErrorNote error={refusalMessage(refusal, ask)} /> : null}
       {settled ? (
         <p className="sub">settled; replies still land in the thread</p>
       ) : (
@@ -203,12 +223,12 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
         <button
           disabled={reply.trim().length === 0}
           onClick={async () => {
-            setConflict(null);
+            setRefusal(null);
             try {
               await callTool("ask_reply", { askId: ask.id, text: reply.trim() });
               setReply("");
             } catch (error) {
-              setConflict(conflictMessage(error));
+              setRefusal(refusalFrom(error, "reply", ask.state));
             }
             refresh();
           }}
