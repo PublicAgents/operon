@@ -132,7 +132,11 @@ async function opsCall(manifest, tool, body) {
     headers,
     body: JSON.stringify(body ?? {})
   });
-  if (!response.ok) throw new Error(`${tool} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  if (!response.ok) {
+    const error = new Error(`${tool} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 
@@ -203,7 +207,22 @@ for (const manifest of manifests) {
   let paused = false;
   if (!noDrain) {
     try {
-      await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
+      // Another deploy (CI and a laptop can both be pushed at once)
+      // holds the pause: QUEUE behind it rather than failing, since
+      // both deploys are legitimate and the loser would otherwise have
+      // to be re-run by hand. Bounded, so a genuinely stuck pause
+      // still surfaces instead of hanging forever.
+      const queueDeadline = Date.now() + 10 * 60 * 1000;
+      for (;;) {
+        try {
+          await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
+          break;
+        } catch (error) {
+          if (error.status !== 409 || Date.now() > queueDeadline) throw error;
+          console.log("  another deploy holds the fleet pause; waiting for it to finish");
+          await new Promise(resolve => setTimeout(resolve, 20_000));
+        }
+      }
       paused = true;
       console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
     } catch (error) {
