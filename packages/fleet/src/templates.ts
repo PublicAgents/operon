@@ -31,7 +31,16 @@ export interface RenderedWorker {
 
 export const D1_PLACEHOLDER = "UNRESOLVED-RESOLVE-AT-DEPLOY";
 
-/** Deploy order: leaves first, then scheduler, telegram, ops LAST (spec 0003). */
+/**
+ * Deploy order: leaves first, then scheduler, telegram, ops LAST (spec
+ * 0003). A Worker must exist before another binds it, so a binding pair
+ * that points both ways cannot be created from nothing in one pass. Two
+ * such cycles exist (scheduler <-> telegram, scheduler <-> asks) and
+ * this order is the STEADY-STATE one: the second side of each cycle
+ * resolves against the Worker already in the account. Bootstrapping a
+ * brand new colony needs the deploy run twice, which is what the
+ * bootstrap step of spec 0006 will own.
+ */
 export const DEPLOY_ORDER = [
   "gatekeeper-github",
   "gatekeeper-pr",
@@ -43,8 +52,9 @@ export const DEPLOY_ORDER = [
   "gatekeeper-x",
   "gatekeeper-till",
   "gatekeeper-browser",
-  "scheduler",
+  // Before the scheduler, which binds it for the agent's ask door.
   "gatekeeper-asks",
+  "scheduler",
   "gatekeeper-telegram",
   "gatekeeper-ops"
 ] as const;

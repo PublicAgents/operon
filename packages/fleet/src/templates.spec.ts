@@ -70,6 +70,12 @@ const byKey = Object.fromEntries(rendered.map(worker => [worker.key, worker.conf
 describe("renderWorkers reproduces the livevariant colony", () => {
   it("renders every worker in the chassis deploy order (ops last)", () => {
     expect(rendered.map(worker => worker.key)).toEqual([...DEPLOY_ORDER]);
+    // A Worker must exist before another binds it: everything the
+    // scheduler binds by service is deployed before the scheduler,
+    // except the two cycles the order comment names.
+    const order = (key: string) => DEPLOY_ORDER.indexOf(key as (typeof DEPLOY_ORDER)[number]);
+    expect(order("gatekeeper-asks")).toBeLessThan(order("scheduler"));
+    expect(order("gatekeeper-email")).toBeLessThan(order("gatekeeper-asks"));
     expect(rendered[rendered.length - 1].key).toBe("gatekeeper-ops");
   });
 
@@ -88,8 +94,11 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" },
       { binding: "SCHEDULER_WAKE", service: "operon-scheduler", entrypoint: "WakeQuery" }
     ]);
-    // Deployed AFTER the scheduler, whose WakeQuery it binds.
-    expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeGreaterThan(
+    // Deployed BEFORE the scheduler, which binds it for the agent's ask
+    // door. The reverse edge (its own SCHEDULER_WAKE binding) is the
+    // cycle the deploy order deliberately resolves against the Worker
+    // already in the account.
+    expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeLessThan(
       rendered.findIndex(w => w.key === "scheduler")
     );
     expect(byKey["scheduler"].vars.ASKS_URL).toBe("https://asks-gk.livevariant.ai");
