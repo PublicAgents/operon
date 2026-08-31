@@ -12,6 +12,7 @@ import { LedgersPage } from "./pages/ledgers.js";
 import { MessagesPage } from "./pages/messages.js";
 import { NotificationsPage } from "./pages/notifications.js";
 import { SecretsPage } from "./pages/secrets.js";
+import { AsksPage } from "./pages/asks.js";
 import { TillPage } from "./pages/till.js";
 import { WakesPage } from "./pages/wakes.js";
 import { WakeTailPage } from "./pages/wake-tail.js";
@@ -27,6 +28,7 @@ const NAV: { to: string; label: string }[] = [
   { to: "/agents", label: "Agents" },
   { to: "/channel", label: "Channel" },
   { to: "/approvals", label: "Approvals" },
+  { to: "/asks", label: "Asks" },
   { to: "/wakes", label: "Wakes" },
   { to: "/events", label: "Events" },
   { to: "/messages", label: "Messages" },
@@ -72,6 +74,7 @@ function Shell() {
           <Route path="/events" element={<EventsPage />} />
           <Route path="/messages" element={<MessagesPage />} />
           <Route path="/ledgers" element={<LedgersPage />} />
+          <Route path="/asks" element={<AsksPage />} />
           <Route path="/till" element={<TillPage />} />
           <Route path="/web" element={<WebSessionsPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />

@@ -271,3 +271,40 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .held-card.held-email { flex-direction: column; align-items: stretch; }
 .held-card.held-email .held-actions { align-self: flex-end; }
 .held-body { padding: 8px 12px; margin: 4px 0; max-height: 360px; overflow: auto; }
+
+/* Asks (spec 0007): the thread reads as a conversation, and agent
+   text stays visually marked as untrusted wherever it appears. */
+.ask-body {
+  margin: 0.5rem 0;
+  white-space: pre-wrap;
+}
+.ask-thread {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  border-left: 2px solid var(--line);
+}
+.ask-thread li {
+  padding: 0.35rem 0 0.35rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.ask-thread li.from-operator {
+  border-left: 2px solid var(--accent);
+  margin-left: -2px;
+}
+.ask-thread .operator-text {
+  white-space: pre-wrap;
+}
+.ask-note,
+.ask-reply {
+  display: block;
+  margin: 0.5rem 0;
+}
+.ask-note textarea,
+.ask-reply textarea {
+  width: 100%;
+  font: inherit;
+}
