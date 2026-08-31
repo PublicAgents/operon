@@ -59,6 +59,9 @@
     },
     {
       "path": "./packages/fleet"
+    },
+    {
+      "path": "./packages/gatekeepers/asks"
     }
   ]
 }

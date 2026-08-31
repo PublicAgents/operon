@@ -1,0 +1,19 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-asks",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "ASKS", "class_name": "AskBox" },
+      { "name": "LEDGER", "class_name": "Ledger" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AskBox", "Ledger"] }]
+  // ROSTER injected at deploy; the fleet templates own the real
+  // deployment config (spec 0006 §2). This file is the dev target.
+  // Secrets:
+  //   ASKS_TOKEN_<AGENTID>  per-agent bearers (identity from the bearer)
+  //   NOTIFY_TOKEN          telegram Gatekeeper bearer, for the notify copy
+}

@@ -1,0 +1,47 @@
+{
+  "name": "@operon/gatekeeper-asks",
+  "version": "0.0.0",
+  "description": "The asks Gatekeeper (spec 0007): the operator's decision queue. An ask is the agent's formal request for operator attention, durable and threaded, so an answer survives the wake that asked for it. Holds no outward credential: its bounds are the per-agent bearer, the roster, size caps, and a ceiling on new asks per wake.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@operon/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "includedScripts": [],
+    "targets": {
+      "dev": {
+        "command": "wrangler dev",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "dependsOn": [
+          "^build"
+        ],
+        "continuous": true
+      }
+    }
+  },
+  "dependencies": {
+    "@operon/core": "0.0.0",
+    "@operon/worker-kit": "0.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "wrangler": "^4.118.0"
+  }
+}

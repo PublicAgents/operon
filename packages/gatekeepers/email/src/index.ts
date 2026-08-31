@@ -1,5 +1,6 @@
 import { findAgent, parseRoster } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
@@ -389,6 +390,46 @@ export default {
  * (which the wake container also holds) also stops a compromised wake
  * from approving its own held email.
  */
+/**
+ * The operator's own mail path (spec 0007 §7), binding-only: another
+ * Gatekeeper hands this one a message FOR THE OPERATOR and it goes to
+ * OPERATOR_EMAIL. It is deliberately outside the agent's outbound
+ * policy: the operator is not a stranger, so there is no first-contact
+ * hold, and a notification must not consume the agent's daily send
+ * budget or be silently dropped when that budget is spent. It is
+ * still ledgered, and the caller carries its own volume backstop.
+ */
+export class OperatorMail extends WorkerEntrypoint<Env> {
+  async notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{
+    ok: boolean;
+    detail?: string;
+  }> {
+    // No fallback to a colony catch-all here: a notification the
+    // operator never configured an address for should say so, not
+    // vanish into a mailbox nobody reads.
+    const to = this.env.OPERATOR_EMAIL;
+    if (!to || to.length === 0) return { ok: false, detail: "operator_email_unset" };
+    const from = { email: `${input.agentId}@${this.env.EMAIL_DOMAIN}`, name: input.agentId };
+    try {
+      await this.env.EMAIL.send({
+        to,
+        from,
+        subject: input.subject,
+        text: input.text
+      });
+    } catch (error) {
+      return { ok: false, detail: String(error).slice(0, 200) };
+    }
+    try {
+      await ledger(this.env).append("operator_mail", { agentId: input.agentId, subject: input.subject });
+    } catch (error) {
+      // The mail is sent; a missing ledger row must not unsend it.
+      console.error("operator mail ledger append failed", error);
+    }
+    return { ok: true };
+  }
+}
+
 export class Ops extends OpsEntrypoint<Env> {
   protected handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
