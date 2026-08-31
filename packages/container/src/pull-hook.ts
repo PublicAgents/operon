@@ -2,8 +2,9 @@
  * The mid-wake input notifier: a Claude Code PostToolUse hook the
  * entrypoint installs for claude-code minds. Hook stdout is injected
  * into the running session as context, so the mind hears about new
- * email, DMs, and operator messages WHILE it works on other things,
- * instead of only when it remembers to run `operon pull` itself.
+ * email, DMs, operator messages, and answered asks WHILE it works on
+ * other things, instead of only when it remembers to run `operon pull`
+ * itself.
  *
  * Throttled (a busy wake fires the hook on every tool call; only one
  * real check runs per window) and quiet by default (no output means no
@@ -31,6 +32,8 @@ export interface PullCounts {
   mail: number;
   dms: number;
   channel: boolean;
+  /** Asks the operator acted on since the mind last read them. */
+  asks?: number;
 }
 
 /**
@@ -52,6 +55,14 @@ export function composeNotice(
   }
   if (counts.channel) {
     parts.push("the operator channel updated: operator/channel.md has [NEW] entries");
+  }
+  // An answer to an ask is the one arrival the mind may be BLOCKED on,
+  // so it is named separately rather than folded into a message count.
+  if (counts.asks && counts.asks > 0) {
+    parts.push(
+      `your operator acted on ${counts.asks} of your ask(s): operator/asks.md ` +
+        "(this may unblock work you parked)"
+    );
   }
   const remainingMinutes =
     remainingMs === null ? null : Math.max(0, Math.floor(remainingMs / 60_000));

@@ -15,11 +15,27 @@ function mark(live: unknown): string {
   return live ? "" : "   [NOT WIRED this wake]";
 }
 
+export interface AskLimits {
+  perWake: number;
+  perDay: number;
+}
+
 export function renderSkills(
   config: WakeConfig,
-  caps: Record<string, unknown>
+  caps: Record<string, unknown>,
+  /**
+   * This colony's real ask ceilings, as the asks Gatekeeper stated them
+   * at wake start. Absent when that door is not wired or did not
+   * answer, and then the guide says a ceiling exists without inventing
+   * a number: a wrong number here is worse than no number, because the
+   * mind would plan against it.
+   */
+  askLimits?: AskLimits
 ): string {
   void config; // reserved: future per-colony guidance (hosts, PR targets)
+  const askCeiling = askLimits
+    ? `at most ${askLimits.perWake} per wake, ${askLimits.perDay} per day`
+    : "there is a per-wake ceiling; the door names it if you reach it";
   return `operon: the doors out of this wake (fresh guidance; re-run any time)
 
 WHEN TO REACH FOR WHAT
@@ -32,8 +48,14 @@ WHEN TO REACH FOR WHAT
     or double-acked.
   A delivered line was redacted (sign-up link, code)? -> operon email
     original <id> / operon channel original <id>.
-  Tell the operator something or ask a question -> operon notify (they
-    may answer MID-WAKE: pull before you sleep if you asked).
+  Tell the operator something -> operon notify (they may answer
+    MID-WAKE: pull before you sleep if you asked).
+  BLOCKED on a human decision (permission, a judgment call, a thing only
+    they can do)? -> operon ask. Unlike a notify, an ask is durable and
+    threaded: it waits in the operator's queue with its own state, and
+    their answer reaches you at wake start or on operon pull, however
+    many wakes later. Post it wherever it also belongs (a GitHub issue,
+    an email) AND file the ask, so the decision has one home.
   Browse or sign in somewhere -> the browser MCP tools (already
     connected to session "default"); operon web password mints a
     door-side password you never see; operon web sessions shows where
@@ -92,6 +114,24 @@ PUBLISHING AND MONEY
   operon pay proposals                   your pending holds and unspent
                                          allowances, across wakes: check here
                                          BEFORE re-asking the operator${mark(caps.pay)}
+
+ASKS (a decision you need from your operator, durable across wakes)
+  operon ask <decision|request|question> --title <t> --body <b> [--link <url>]
+                                         file it in the operator's queue: a
+                                         decision (allow or decline), a request
+                                         (something only they can do), or a
+                                         question. State what you will do with
+                                         each answer, and what you are doing
+                                         meanwhile. ${askCeiling}, so
+                                         consolidate rather than file ten
+                                         small ones${mark(caps.ask)}
+  operon ask list                        your asks, their state, and operator
+                                         replies you have not read yet${mark(caps.ask)}
+  operon ask reply <id> --text <t>       add to the thread (or pipe on stdin)${mark(caps.ask)}
+  operon ask retract <id> [--reason <r>] withdraw one you no longer need
+                                         answered: do this rather than leave
+                                         a stale ask sitting in their queue${mark(caps.ask)}
+  operon ask close <id> [--note <n>]     you got what you needed${mark(caps.ask)}
 
 SECRETS THAT SURVIVE WAKES (never the repo; hard rule 7)
   operon vault set <label> --value <v>   store/update (or pipe value on stdin)${mark(caps.vault)}

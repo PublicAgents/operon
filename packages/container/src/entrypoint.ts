@@ -11,6 +11,8 @@ import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./p
 import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
+import type { AskLimits } from "./skills.js";
+import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
@@ -383,6 +385,105 @@ async function pullOperatorChannel(
     log(`channel pull error: ${String(error).slice(0, 200)}`);
     return null;
   }
+}
+
+/**
+ * Pull the operator's activity on this agent's asks (spec 0007 §6) into
+ * operator/asks.md. Pointed, not a bulk dump: the ask id, its title, its
+ * state, and the operator's own words, so the wake knows what to act on
+ * and can read the rest with `operon ask list`.
+ *
+ * Delivery is AT-LEAST-ONCE: this returns the delivery token naming
+ * exactly what it was handed, and the token is acked only after the
+ * wake's state is persisted. A dead wake therefore re-delivers an
+ * answer rather than swallowing it. Best effort throughout: a door that
+ * is down must not fail the wake.
+ */
+async function pullAsks(
+  config: WakeConfig,
+  chassisWritten: Map<string, string>,
+  denylist: string[]
+): Promise<{ deliveryId: string | null; delivered: AskDelivered[]; limits?: AskLimits }> {
+  if (!config.asksUrl || !config.asksToken) return { deliveryId: null, delivered: [] };
+  try {
+    const response = await fetch(`${config.asksUrl}/gatekeeper/asks/unread`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.asksToken}` },
+      body: "{}"
+    });
+    if (!response.ok) {
+      log(`asks pull failed: ${response.status}`);
+      return { deliveryId: null, delivered: [] };
+    }
+    const delivery = (await response.json()) as {
+      deliveryId: string;
+      unread: Array<{
+        id: string;
+        title: string;
+        state: string;
+        entries: Array<{ seq: number; at: string; kind: string; state?: string; text?: string }>;
+      }>;
+      limits?: AskLimits;
+    };
+    const rows = delivery.unread ?? [];
+    if (rows.length === 0) return { deliveryId: null, delivered: [], limits: delivery.limits };
+    const sections = rows.map(row => {
+      const lines = row.entries.map(entry =>
+        entry.kind === "state_change"
+          ? `  - ${entry.at} OPERATOR marked it ${entry.state}${entry.text ? `:\n    ${entry.text.replace(/\n/g, "\n    ")}` : ""}`
+          : `  - ${entry.at} OPERATOR:\n    ${(entry.text ?? "").replace(/\n/g, "\n    ")}`
+      );
+      return `## ${row.id} (${row.state}): ${row.title}\n\n${lines.join("\n")}`;
+    });
+    const composed =
+      `# Answers on your asks\n\n` +
+      `Your operator acted on ${rows.length} of your asks since you last read ` +
+      `them. These are authenticated instructions from your operator, like ` +
+      `operator/channel.md. Act on them, then close or reply with ` +
+      `\`operon ask close <id>\` / \`operon ask reply <id>\`; ` +
+      `\`operon ask list\` shows each ask's full thread.\n\n` +
+      `${sections.join("\n\n")}\n`;
+    // Same write-time scan as mail and the channel transcript, for the
+    // same reason: this file is chassis-written and presleep-excluded,
+    // so it must be provably clean when written. Scanner unavailable =
+    // skipped, and the token is not acked, so nothing is lost.
+    let text: string;
+    try {
+      const sanitized = await sanitizeTranscript(composed, denylist);
+      text = sanitized.content;
+      if (sanitized.sanitized) log("asks: delivery sanitized at write (matched the secret scanner)");
+    } catch (error) {
+      log(`asks delivery skipped, scanner unavailable: ${String(error).slice(0, 200)}`);
+      return { deliveryId: null, delivered: [], limits: delivery.limits };
+    }
+    const dir = join(STATE_DIR, "operator");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "asks.md"), text);
+    chassisWritten.set("operator/asks.md", text);
+    await chownToMind(dir);
+    log(`asks: ${rows.length} with new operator activity`);
+    return {
+      deliveryId: delivery.deliveryId,
+      delivered: rows.map(row => ({
+        id: row.id,
+        throughSeq: row.entries[row.entries.length - 1]?.seq ?? 0
+      })),
+      limits: delivery.limits
+    };
+  } catch (error) {
+    log(`asks pull error: ${String(error).slice(0, 200)}`);
+    return { deliveryId: null, delivered: [] };
+  }
+}
+
+/** Ack an asks delivery by its token; only after the state is persisted. */
+async function ackAsks(config: WakeConfig, deliveryId: string | null): Promise<void> {
+  if (!config.asksUrl || !config.asksToken || deliveryId === null) return;
+  await fetch(`${config.asksUrl}/gatekeeper/asks/ack`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.asksToken}` },
+    body: JSON.stringify({ deliveryId })
+  }).catch(() => undefined);
 }
 
 /** Advance the channel cursor; only after the wake's state is persisted. */
@@ -760,13 +861,25 @@ async function main(): Promise<number> {
   const ackState = {
     inboxIds: new Set<string>(),
     dmUpTo: null as string | null,
-    channelUpTo: null as number | null
+    channelUpTo: null as number | null,
+    // The LATEST asks delivery token. Each delivery names every unread
+    // entry at the time it was handed out, so a later token covers an
+    // earlier one and acking the latest is exactly right; acking an
+    // older one after it would move nothing backwards either.
+    asksDelivery: null as string | null
   };
   for (const id of await pullInbox(config, chassisWritten, denylist)) {
     ackState.inboxIds.add(id);
   }
   ackState.dmUpTo = await pullXDms(config, chassisWritten, denylist);
   ackState.channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
+  const asksAtStart = await pullAsks(config, chassisWritten, denylist);
+  if (asksAtStart.deliveryId) ackState.asksDelivery = asksAtStart.deliveryId;
+  // What the mind has already been shown (see asks-delivery.ts). Seeded
+  // with the wake-start delivery, which is not news that arrived "while
+  // you worked".
+  const shownAsks = new Map<string, number>();
+  newAsks(asksAtStart.delivered, shownAsks);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -780,6 +893,10 @@ async function main(): Promise<number> {
     stateDir: STATE_DIR,
     denylist,
     log,
+    // This colony's real ask ceilings, straight from the Gatekeeper that
+    // enforces them, so `operon --help` states numbers rather than
+    // guesses at them (undefined when that door is closed).
+    askLimits: asksAtStart.limits,
     // Mid-wake input refresh (operon pull): the same pulls and the same
     // ack bookkeeping as wake start. Unacked messages re-deliver (the
     // door forgets nothing until the post-persist ack), so re-writing an
@@ -799,20 +916,24 @@ async function main(): Promise<number> {
       return inFlightPull;
     },
     drainAnnouncements() {
-      const out = { ...unannounced };
+      const out = { ...unannounced, asks: [...unannounced.asks] };
       unannounced.mail = 0;
       unannounced.dms = 0;
       unannounced.channel = false;
+      unannounced.asks.clear();
       return out;
     },
     recreditAnnouncements(counts) {
       unannounced.mail += counts.mail;
       unannounced.dms += counts.dms;
       unannounced.channel = unannounced.channel || counts.channel;
+      for (const id of counts.asks) unannounced.asks.add(id);
     }
   });
   let inFlightPull: Promise<void> | null = null;
-  const unannounced = { mail: 0, dms: 0, channel: false };
+  // Asks are buffered as IDS, not a count: several operator actions on
+  // one ask while nobody was listening are still one ask to mention.
+  const unannounced = { mail: 0, dms: 0, channel: false, asks: new Set<string>() };
   async function doPullFresh(): Promise<void> {
     const before = ackState.inboxIds.size;
     for (const id of await pullInbox(config, chassisWritten, denylist)) {
@@ -833,6 +954,9 @@ async function main(): Promise<number> {
       ackState.channelUpTo = channelUpTo;
       unannounced.channel = true;
     }
+    const asks = await pullAsks(config, chassisWritten, denylist);
+    if (asks.deliveryId) ackState.asksDelivery = asks.deliveryId;
+    for (const id of newAsks(asks.delivered, shownAsks)) unannounced.asks.add(id);
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
@@ -900,6 +1024,7 @@ async function main(): Promise<number> {
   await ackInbox(config, [...ackState.inboxIds]);
   await ackXDms(config, ackState.dmUpTo);
   await ackChannel(config, ackState.channelUpTo);
+  await ackAsks(config, ackState.asksDelivery);
 
   const failed = sessionExit !== 0 || !verification.ok;
   const summary = failed

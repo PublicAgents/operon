@@ -182,7 +182,14 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       image: `${CHASSIS}/packages/container/Dockerfile`,
       max_instances: 4
     });
-    expect(scheduler.services).toHaveLength(12);
+    // The asks Gatekeeper is bound as ASKS_GK: the umbilical routes the
+    // agent's ask door through it, and the name stays clear of the DO
+    // binding the asks Worker itself calls ASKS.
+    expect(scheduler.services).toContainEqual({
+      binding: "ASKS_GK",
+      service: "operon-gatekeeper-asks"
+    });
+    expect(scheduler.services).toHaveLength(13);
   });
 
   it("merges policy over chassis defaults and derives NOTIFY_URL and EMAIL_DOMAIN", () => {

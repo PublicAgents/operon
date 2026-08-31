@@ -325,7 +325,11 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           service("SPEND", "gatekeeper-spend"),
           service("VAULT", "gatekeeper-vault"),
           service("X", "gatekeeper-x"),
-          service("BROWSER", "gatekeeper-browser")
+          service("BROWSER", "gatekeeper-browser"),
+          // ASKS_GK, not ASKS: the asks Gatekeeper's own Durable Object
+          // binding already owns that name inside its Worker, and a
+          // reader moving between the two should not have to wonder.
+          service("ASKS_GK", "gatekeeper-asks")
         ],
         vars: {
           ...policyVars(manifest, "scheduler"),

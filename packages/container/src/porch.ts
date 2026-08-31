@@ -8,7 +8,7 @@ import { join, relative } from "node:path";
 import { runGitleaks } from "./gitleaks.js";
 import { linesNotIn, scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
-import { renderSkills } from "./skills.js";
+import { renderSkills, type AskLimits } from "./skills.js";
 
 /**
  * The porch: a loopback-only HTTP server the entrypoint runs for the
@@ -76,9 +76,20 @@ export interface PorchContext {
    * still-connected caller. Absent in tests that wire no doors.
    */
   pullFresh?(): Promise<void>;
-  drainAnnouncements?(): { mail: number; dms: number; channel: boolean };
+  drainAnnouncements?(): Announcements;
   /** Put a drained-but-undelivered announcement back for the next pull. */
-  recreditAnnouncements?(counts: { mail: number; dms: number; channel: boolean }): void;
+  recreditAnnouncements?(counts: Announcements): void;
+  /** This colony's ask ceilings, for the living guide (spec 0007 §3). */
+  askLimits?: AskLimits;
+}
+
+/** What one pull found: counts the mind can act on, not a status dump. */
+export interface Announcements {
+  mail: number;
+  dms: number;
+  channel: boolean;
+  /** Ids of asks the operator acted on, deduplicated while buffered. */
+  asks: string[];
 }
 
 interface JsonResult {
@@ -97,6 +108,15 @@ function ok(body: Record<string, unknown> = {}): JsonResult {
   return { status: 200, body: { ok: true, ...body } };
 }
 
+/** A Gatekeeper body, passed through when it parses and quoted when it does not. */
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { detail: text.slice(0, 300) };
+  }
+}
+
 function fail(status: number, error: string, detail?: string): JsonResult {
   return { status, body: { ok: false, error, ...(detail ? { detail } : {}) } };
 }
@@ -111,6 +131,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     till: Boolean(config.tillUrl && config.tillToken),
     pay: Boolean(config.spendUrl && config.spendToken),
     vault: Boolean(config.vaultUrl && config.vaultToken),
+    ask: Boolean(config.asksUrl && config.asksToken),
     x: Boolean(config.xUrl && config.xToken),
     web: Boolean(config.webUrl && config.webToken),
     hosts: config.hosts,
@@ -206,7 +227,13 @@ export class Porch {
       // config, so `operon --help` can never describe a different
       // chassis than the one answering.
       if (request.method === "GET" && url.pathname === "/help") {
-        return ok({ help: renderSkills(this.context.config, capabilities(this.context.config)) });
+        return ok({
+          help: renderSkills(
+            this.context.config,
+            capabilities(this.context.config),
+            this.context.askLimits
+          )
+        });
       }
       if (request.method === "POST" && url.pathname === "/pull") {
         if (!this.context.pullFresh || !this.context.drainAnnouncements) {
@@ -220,13 +247,22 @@ export class Porch {
         // buffer simply waits for the next pull.
         if (request.destroyed) return fail(499, "caller_gone");
         const pulled = this.context.drainAnnouncements();
-        const fresh = Boolean(pulled.mail || pulled.dms || pulled.channel);
+        const fresh = Boolean(
+          pulled.mail || pulled.dms || pulled.channel || pulled.asks.length
+        );
         const recredit = this.context.recreditAnnouncements;
         return {
           ...ok({
-            ...pulled,
+            mail: pulled.mail,
+            dms: pulled.dms,
+            channel: pulled.channel,
+            // The wire says how MANY asks moved; the ids are internal
+            // bookkeeping, and the notice never carries what was said.
+            asks: pulled.asks.length,
             note: fresh
-              ? "new input landed in inbox/ and operator/channel.md"
+              ? pulled.asks.length > 0
+                ? "new input landed in inbox/ and operator/ (your operator acted on an ask: see operator/asks.md)"
+                : "new input landed in inbox/ and operator/channel.md"
               : "nothing new since the last delivery"
           }),
           ...(fresh && recredit ? { undeliverable: () => recredit(pulled) } : {})
@@ -261,6 +297,15 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/web/close") return await this.webClose(body);
       if (request.method === "POST" && url.pathname === "/web/password") return await this.webPassword(body);
       if (request.method === "POST" && url.pathname === "/x/dm") return await this.xDm(body);
+      if (request.method === "POST" && url.pathname === "/ask/create") return await this.askCreate(body);
+      if (request.method === "POST" && url.pathname === "/ask/list") return await this.asksCall("list", {});
+      if (request.method === "POST" && url.pathname === "/ask/reply") return await this.askReply(body);
+      if (request.method === "POST" && url.pathname === "/ask/retract") {
+        return await this.askTransition("retract", body);
+      }
+      if (request.method === "POST" && url.pathname === "/ask/close") {
+        return await this.askTransition("close", body);
+      }
       return fail(404, "unknown_door", url.pathname);
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
@@ -704,6 +749,71 @@ export class Porch {
 
   private async tillSales(): Promise<JsonResult> {
     return this.tillCall("sales", {});
+  }
+
+  /** POST to the asks Gatekeeper with this agent's OWN bearer. */
+  private async asksCall(door: string, payload: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    if (!config.asksUrl || !config.asksToken) return fail(503, "ask_not_wired");
+    const response = await fetch(`${config.asksUrl}/gatekeeper/asks/${door}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.asksToken}` },
+      body: JSON.stringify(payload)
+    });
+    const resultText = (await response.text()).slice(0, 200_000);
+    if (!response.ok) {
+      // The Gatekeeper's refusals are the interesting ones here (a cap
+      // reached, an ask that moved), so its body is passed through
+      // rather than flattened into a porch error string.
+      return {
+        status: response.status,
+        body: { ok: false, error: `ask_${door}_rejected`, gatekeeper: safeJson(resultText) }
+      };
+    }
+    return ok({ gatekeeper: JSON.parse(resultText) });
+  }
+
+  /**
+   * Open an ask: the agent's formal request for operator attention
+   * (spec 0007). Everything the operator will read is swept first, in
+   * the same place every outbound field is swept. An ask is the one
+   * door whose whole purpose is to put agent text in front of a human
+   * who is about to decide something, so a leaked credential here would
+   * be read attentively rather than skimmed.
+   */
+  private async askCreate(body: Record<string, unknown>): Promise<JsonResult> {
+    const { title, kind } = body;
+    const text = body.body;
+    const links = Array.isArray(body.links) ? body.links.filter(l => typeof l === "string") : [];
+    if (typeof title !== "string" || typeof text !== "string" || typeof kind !== "string") {
+      return fail(400, "invalid_request");
+    }
+    const blocked = this.sweepFields({ title, body: text, links: links.join(" ") });
+    if (blocked) return blocked;
+    this.context.log(`ask: opening a ${kind}`);
+    return this.asksCall("create", { title, body: text, kind, links });
+  }
+
+  private async askReply(body: Record<string, unknown>): Promise<JsonResult> {
+    const { askId, text } = body;
+    if (typeof askId !== "string" || typeof text !== "string") return fail(400, "invalid_request");
+    const blocked = this.sweepFields({ text });
+    if (blocked) return blocked;
+    return this.asksCall("reply", { askId, text });
+  }
+
+  private async askTransition(
+    door: "retract" | "close",
+    body: Record<string, unknown>
+  ): Promise<JsonResult> {
+    const { askId, text } = body;
+    if (typeof askId !== "string") return fail(400, "invalid_request");
+    if (text !== undefined && typeof text !== "string") return fail(400, "invalid_request");
+    if (typeof text === "string") {
+      const blocked = this.sweepFields({ text });
+      if (blocked) return blocked;
+    }
+    return this.asksCall(door, { askId, ...(text !== undefined ? { text } : {}) });
   }
 
   /**

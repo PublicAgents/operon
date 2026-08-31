@@ -27,6 +27,7 @@ export const DOOR_ROUTES: Record<string, DoorRoute> = {
   spend: { binding: "SPEND", perAgentPrefix: "SPEND_TOKEN" },
   vault: { binding: "VAULT", perAgentPrefix: "VAULT_TOKEN" },
   x: { binding: "X", perAgentPrefix: "X_TOKEN" },
+  asks: { binding: "ASKS_GK", perAgentPrefix: "ASKS_TOKEN" },
   // The web door (spec 0004): browser-gk has no public surface, so the
   // binding is the auth and no bearer rides at all.
   web: { binding: "BROWSER", bearerless: true }

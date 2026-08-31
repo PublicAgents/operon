@@ -205,6 +205,60 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["x", "dance"])).toThrow(CliUsageError);
   });
 
+  it("parses the ask door: the kind leads, and links repeat", () => {
+    expect(
+      parseArgs([
+        "ask",
+        "decision",
+        "--title",
+        "may I pay the invoice",
+        "--body",
+        "20 USD, due friday",
+        "--link",
+        "https://example.com/a",
+        "--link",
+        "https://example.com/b"
+      ])
+    ).toEqual({
+      path: "/ask/create",
+      payload: {
+        kind: "decision",
+        title: "may I pay the invoice",
+        body: "20 USD, due friday",
+        links: ["https://example.com/a", "https://example.com/b"]
+      }
+    });
+    // No --body: main() reads it from stdin, so it must be absent here
+    // rather than empty (an empty body would file a blank ask).
+    expect(parseArgs(["ask", "question", "--title", "what next"])).toEqual({
+      path: "/ask/create",
+      payload: { kind: "question", title: "what next", links: [] }
+    });
+    expect(parseArgs(["ask", "list"])).toEqual({ path: "/ask/list", payload: {} });
+    expect(parseArgs(["ask", "reply", "a1", "--text", "done"])).toEqual({
+      path: "/ask/reply",
+      payload: { askId: "a1", text: "done" }
+    });
+    expect(parseArgs(["ask", "reply", "a1"])).toEqual({
+      path: "/ask/reply",
+      payload: { askId: "a1" }
+    });
+    expect(parseArgs(["ask", "retract", "a1", "--reason", "solved it myself"])).toEqual({
+      path: "/ask/retract",
+      payload: { askId: "a1", text: "solved it myself" }
+    });
+    expect(parseArgs(["ask", "close", "a1"])).toEqual({
+      path: "/ask/close",
+      payload: { askId: "a1" }
+    });
+    // A kind is required: defaulting it would choose on the mind's
+    // behalf what the operator is being asked to do.
+    expect(() => parseArgs(["ask", "--title", "t", "--body", "b"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["ask", "urgent", "--title", "t"])).toThrow(/decision\|request\|question/);
+    expect(() => parseArgs(["ask", "decision", "--body", "b"])).toThrow(/--title/);
+    expect(() => parseArgs(["ask", "close"])).toThrow(/ask-id/);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

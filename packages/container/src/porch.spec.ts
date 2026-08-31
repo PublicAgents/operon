@@ -66,7 +66,7 @@ async function startPorch(
   wakeConfig: WakeConfig,
   denylist: string[] = [],
   pullFresh?: () => Promise<void>,
-  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean }
+  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean; asks: string[] }
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
@@ -421,7 +421,7 @@ describe("the living help and the mid-wake pull", () => {
     // other truthfully hears nothing new; a later pull with an empty
     // buffer also hears nothing new.
     let calls = 0;
-    const buffer = { mail: 0, dms: 0, channel: false };
+    const buffer = { mail: 0, dms: 0, channel: false, asks: [] as string[] };
     let shared: Promise<void> | null = null;
     const { url } = await startPorch(
       config(),
@@ -436,10 +436,11 @@ describe("the living help and the mid-wake pull", () => {
         return shared;
       },
       () => {
-        const out = { ...buffer };
+        const out = { ...buffer, asks: [...buffer.asks] };
         buffer.mail = 0;
         buffer.dms = 0;
         buffer.channel = false;
+        buffer.asks = [];
         return out;
       }
     );
@@ -454,5 +455,97 @@ describe("the living help and the mid-wake pull", () => {
     const mails = bodies.map(body => body.mail).sort();
     expect(mails).toEqual([0, 1]);
     for (const body of bodies) expect(body).toMatchObject({ ok: true });
+  });
+});
+
+describe("the ask door", () => {
+  it("sweeps every field the operator will read, before it leaves", async () => {
+    const stub = await startStub(() => ({ status: 200, body: '{"ok":true}' }));
+    const { url } = await startPorch(
+      config({ asksUrl: stub.url, asksToken: "ask-bearer" }),
+      ["hunter2"]
+    );
+    const post = (path: string, body: unknown) =>
+      fetch(`${url}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-operon-porch": "1" },
+        body: JSON.stringify(body)
+      });
+
+    const leakyBody = await post("/ask/create", {
+      kind: "decision",
+      title: "may I",
+      body: "the key is hunter2",
+      links: []
+    });
+    expect(leakyBody.status).toBe(422);
+    const leakyTitle = await post("/ask/create", {
+      kind: "decision",
+      title: "hunter2 in the title",
+      body: "safe",
+      links: []
+    });
+    expect(leakyTitle.status).toBe(422);
+    const leakyLink = await post("/ask/create", {
+      kind: "decision",
+      title: "safe",
+      body: "safe",
+      links: ["https://example.com/?token=hunter2"]
+    });
+    expect(leakyLink.status).toBe(422);
+    const leakyReply = await post("/ask/reply", { askId: "a1", text: "it was hunter2" });
+    expect(leakyReply.status).toBe(422);
+    const leakyReason = await post("/ask/retract", { askId: "a1", text: "hunter2" });
+    expect(leakyReason.status).toBe(422);
+    // Nothing swept-out ever reached the Gatekeeper.
+    expect(stub.requests).toEqual([]);
+
+    const clean = await post("/ask/create", {
+      kind: "decision",
+      title: "may I pay the invoice",
+      body: "it is 20 USD and due friday",
+      links: ["https://example.com/invoice"]
+    });
+    expect(clean.status).toBe(200);
+    expect(JSON.parse(stub.requests[0])).toEqual({
+      kind: "decision",
+      title: "may I pay the invoice",
+      body: "it is 20 USD and due friday",
+      links: ["https://example.com/invoice"]
+    });
+  });
+
+  it("passes the Gatekeeper's own refusal through, cap and all", async () => {
+    const stub = await startStub(() => ({
+      status: 429,
+      body: JSON.stringify({
+        ok: false,
+        error: "asks_wake_cap",
+        detail: "10 of 10 asks already filed this wake; consolidate the rest into one"
+      })
+    }));
+    const { url } = await startPorch(config({ asksUrl: stub.url, asksToken: "ask-bearer" }));
+    const response = await fetch(`${url}/ask/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-operon-porch": "1" },
+      body: JSON.stringify({ kind: "question", title: "one more", body: "please", links: [] })
+    });
+    expect(response.status).toBe(429);
+    const body = (await response.json()) as { gatekeeper: { error: string; detail: string } };
+    // The mind must see WHICH bound it hit and how many it has filed,
+    // or it cannot consolidate; a flattened porch error would hide it.
+    expect(body.gatekeeper.error).toBe("asks_wake_cap");
+    expect(body.gatekeeper.detail).toContain("10 of 10");
+  });
+
+  it("answers ask_not_wired when the door is closed", async () => {
+    const { url } = await startPorch(config());
+    const response = await fetch(`${url}/ask/list`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-operon-porch": "1" },
+      body: "{}"
+    });
+    expect(response.status).toBe(503);
+    expect((await response.json()) as { error: string }).toMatchObject({ error: "ask_not_wired" });
   });
 });

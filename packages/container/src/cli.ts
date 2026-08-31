@@ -33,6 +33,22 @@ const HELP = `operon: the doors out of this wake
                                          need what it carried, e.g. a sign-up or
                                          verification link. Never save the
                                          credential parts to your repo.
+  operon ask <decision|request|question> --title <t> --body <b> [--link <url>]
+                                         put a question or a decision formally
+                                         in front of the operator: it lands in
+                                         their queue, it is threaded, and the
+                                         answer survives this wake. Use it when
+                                         you are BLOCKED on a human, not for
+                                         news (that is operon notify). Capped
+                                         per wake: consolidate rather than
+                                         file ten small ones.
+  operon ask list                        your asks, their state, and any
+                                         operator replies you have not read
+  operon ask reply <id> --text <t>       add to an ask's thread (or pipe the
+                                         text on stdin)
+  operon ask retract <id> [--reason <r>] never mind: withdraw an ask you no
+                                         longer need answered
+  operon ask close <id> [--note <n>]     done: you got what you needed
   operon channel original <id>           the stored, unredacted original of one
                                          operator-channel entry (id = the [#id]
                                          on its header line in
@@ -160,6 +176,15 @@ export class CliUsageError extends Error {
   override name = "CliUsageError";
 }
 
+/** Every value given for a repeatable flag, in order (--link, --link, ...). */
+function flagValues(args: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && i + 1 < args.length) out.push(args[i + 1]);
+  }
+  return out;
+}
+
 function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
   if (index === -1 || index + 1 >= args.length) return undefined;
@@ -218,6 +243,8 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       // from stdin. A literal one-character dash is never a real email.
       return { path: "/email", payload: { to, subject, ...(body && body !== "-" ? { text: body } : {}) } };
     }
+    case "ask":
+      return parseAsk(rest);
     case "github":
       return parseGithub(rest);
     case "till":
@@ -252,6 +279,62 @@ export function parseArgs(argv: string[]): CliCall | "help" {
     }
     default:
       throw new CliUsageError(`unknown command "${command}"; run operon --help`);
+  }
+}
+
+const ASK_KINDS = ["decision", "request", "question"];
+
+function parseAsk(args: string[]): CliCall {
+  const [sub, ...rest] = args;
+  const askId = (): string => {
+    const id = positionals(rest)[0];
+    if (!id) throw new CliUsageError(`usage: operon ask ${sub} <ask-id> (from operon ask list)`);
+    return id;
+  };
+  switch (sub) {
+    case "list":
+      return { path: "/ask/list", payload: {} };
+    case "reply": {
+      const id = askId();
+      // --text may be omitted: main() then reads it from stdin.
+      const text = flagValue(rest, "--text");
+      return { path: "/ask/reply", payload: { askId: id, ...(text !== undefined ? { text } : {}) } };
+    }
+    case "retract":
+    case "close": {
+      const id = askId();
+      const text = flagValue(rest, "--reason") ?? flagValue(rest, "--note");
+      return {
+        path: `/ask/${sub}`,
+        payload: { askId: id, ...(text !== undefined ? { text } : {}) }
+      };
+    }
+    default: {
+      // `operon ask <kind> --title ...`: the kind reads as the verb,
+      // because what the operator must do with it is the first thing
+      // both of you need to agree on.
+      if (!sub || !ASK_KINDS.includes(sub)) {
+        throw new CliUsageError(
+          `usage: operon ask <${ASK_KINDS.join("|")}> --title <t> --body <b> [--link <url>] | operon ask list | reply | retract | close`
+        );
+      }
+      const title = flagValue(rest, "--title");
+      const body = flagValue(rest, "--body");
+      if (!title) {
+        throw new CliUsageError(
+          `usage: operon ask ${sub} --title <t> --body <b> (or pipe the body on stdin)`
+        );
+      }
+      return {
+        path: "/ask/create",
+        payload: {
+          kind: sub,
+          title,
+          links: flagValues(rest, "--link"),
+          ...(body && body !== "-" ? { body } : {})
+        }
+      };
+    }
   }
 }
 
@@ -533,16 +616,19 @@ async function main(): Promise<number> {
 
   // vault set / x post without the inline flag: the payload text comes
   // from stdin (kept off argv; posts keep their formatting).
-  const stdinField =
-    call.path === "/vault/set" && call.payload.value === undefined
-      ? { name: "value", usage: "vault set: pass --value <v> or pipe the value on stdin", trim: true }
-      : call.path === "/x/post" && call.payload.text === undefined
-        ? { name: "text", usage: "x post: pass --text <t> or pipe the text on stdin", trim: false }
-        : call.path === "/x/dm" && call.payload.text === undefined
-          ? { name: "text", usage: "x dm: pass --text <t> or pipe the text on stdin", trim: false }
-          : call.path === "/email" && call.payload.text === undefined
-            ? { name: "text", usage: "email: pass --body <b> or pipe the body on stdin", trim: false }
-            : null;
+  // Doors whose payload text may come from stdin instead of argv: long
+  // bodies keep their formatting, and a secret never lands in a process
+  // listing. The field is read only when the flag was omitted.
+  const STDIN_FIELDS: Record<string, { name: string; usage: string; trim: boolean }> = {
+    "/vault/set": { name: "value", usage: "vault set: pass --value <v> or pipe the value on stdin", trim: true },
+    "/x/post": { name: "text", usage: "x post: pass --text <t> or pipe the text on stdin", trim: false },
+    "/x/dm": { name: "text", usage: "x dm: pass --text <t> or pipe the text on stdin", trim: false },
+    "/email": { name: "text", usage: "email: pass --body <b> or pipe the body on stdin", trim: false },
+    "/ask/create": { name: "body", usage: "ask: pass --body <b> or pipe the body on stdin", trim: false },
+    "/ask/reply": { name: "text", usage: "ask reply: pass --text <t> or pipe the text on stdin", trim: false }
+  };
+  const candidate = STDIN_FIELDS[call.path];
+  const stdinField = candidate && call.payload[candidate.name] === undefined ? candidate : null;
   if (stdinField) {
     if (process.stdin.isTTY) {
       console.error(stdinField.usage);
