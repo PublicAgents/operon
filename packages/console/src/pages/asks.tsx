@@ -99,7 +99,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
       setNote("");
       refresh();
     } catch (error) {
-      setRefusal(refusalFrom(error, decision, ask.state));
+      setRefusal(refusalFrom(error, decision, ask));
       refresh();
     }
   }
@@ -128,7 +128,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
         </p>
       ) : null}
       <Thread entries={ask.thread} />
-      {refusal ? <ErrorNote error={refusalMessage(refusal, ask.state)} /> : null}
+      {refusal ? <ErrorNote error={refusalMessage(refusal, ask)} /> : null}
       {settled ? (
         <p className="sub">settled; replies still land in the thread</p>
       ) : (
@@ -181,7 +181,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
               await callTool("ask_reply", { askId: ask.id, text: reply.trim() });
               setReply("");
             } catch (error) {
-              setRefusal(refusalFrom(error, "reply", ask.state));
+              setRefusal(refusalFrom(error, "reply", ask));
             }
             refresh();
           }}

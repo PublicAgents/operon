@@ -19,6 +19,13 @@ export interface Refusal {
   attempted: AskState | "reply";
   /** The state the card rendered when the attempt was made. */
   from: AskState;
+  /**
+   * The ask's updatedAt as the card had it. It is the marker for "the
+   * refreshed ask has not landed yet": the ask on the server has moved
+   * on, so any different value means we are now holding fresher truth
+   * than the refusal body and should stop quoting it.
+   */
+  seenUpdatedAt: string;
   /** Where the gatekeeper said the ask actually was, when it said so. */
   reported?: AskState;
   /** Only for failures that are not the gatekeeper refusing a transition. */
@@ -37,8 +44,10 @@ export const LABEL: Record<AskState, string> = {
 export function refusalFrom(
   error: unknown,
   attempted: Refusal["attempted"],
-  from: AskState
+  seen: { state: AskState; updatedAt: string }
 ): Refusal {
+  const from = seen.state;
+  const seenUpdatedAt = seen.updatedAt;
   if (error instanceof ApiError) {
     const body = error.body as { error?: unknown; state?: unknown } | null;
     // The 409 body also carries a thread tail. It is deliberately not
@@ -48,25 +57,33 @@ export function refusalFrom(
       return {
         attempted,
         from,
+        seenUpdatedAt,
         ...(typeof body.state === "string" ? { reported: body.state as AskState } : {})
       };
     }
-    return { attempted, from, raw: error.message };
+    return { attempted, from, seenUpdatedAt, raw: error.message };
   }
-  return { attempted, from, raw: "the request did not go through" };
+  return { attempted, from, seenUpdatedAt, raw: "the request did not go through" };
 }
 
 /**
- * The live ask once the refresh has landed, and until then the state
- * the refusal itself reported. Both are the gatekeeper's word, so the
- * sentence is never a guess, never lags the card, and never outlives
- * the state it describes.
+ * The state the refusal reported, but ONLY until the refreshed ask
+ * lands; from then on the live ask, always. Freshness is decided by
+ * updatedAt rather than by comparing states, because states repeat: an
+ * ask can be moved back to where it was, and a message that reasoned
+ * from equality would revive the refusal body long after it went out
+ * of date. Both sources are the gatekeeper's word, so the sentence is
+ * never a guess, never lags the refusal, and never outlives it.
  */
-export function refusalMessage(refusal: Refusal, current: AskState): string {
+export function refusalMessage(
+  refusal: Refusal,
+  current: { state: AskState; updatedAt: string }
+): string {
   const what =
     refusal.attempted === "reply" ? "your reply" : `marking this ${LABEL[refusal.attempted]}`;
   if (refusal.raw !== undefined) return `${what} was refused: ${refusal.raw}`;
-  const now = current !== refusal.from ? current : refusal.reported;
+  const landed = current.updatedAt !== refusal.seenUpdatedAt;
+  const now = landed ? current.state : refusal.reported;
   if (now === undefined || now === refusal.from) {
     return `${what} was refused; the ask is still ${refusal.from}`;
   }
