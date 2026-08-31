@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ApiError, callTool } from "../api.js";
+import { callTool } from "../api.js";
+import { LABEL, refusalFrom, refusalMessage, type AskState, type Refusal } from "../asks-refusal.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { ExternalUrl, UntrustedText } from "../untrusted.js";
@@ -17,8 +18,6 @@ import { ExternalUrl, UntrustedText } from "../untrusted.js";
  * decision control is ever parameterized by it: the buttons act on
  * the ask's id and its state, never on anything the agent wrote.
  */
-
-type AskState = "open" | "acknowledged" | "allowed" | "declined" | "closed" | "retracted";
 
 interface ThreadEntry {
   seq: number;
@@ -55,52 +54,6 @@ const SUGGESTED: Record<Ask["kind"], AskState[]> = {
   request: ["acknowledged", "allowed", "declined"],
   question: ["acknowledged", "allowed", "declined"]
 };
-
-const LABEL: Record<AskState, string> = {
-  open: "open",
-  acknowledged: "on it",
-  allowed: "allow",
-  declined: "decline",
-  closed: "close",
-  retracted: "retracted"
-};
-
-/**
- * A refusal is remembered as FACTS, never as a rendered sentence: what
- * the operator attempted, and the state the card was showing when they
- * attempted it. The notice is written at render time against the ask as
- * it stands right now, so a card that keeps polling can never end up
- * claiming the ask moved somewhere it has since moved on from.
- */
-interface Refusal {
-  attempted: AskState | "reply";
-  /** The state the card rendered when the attempt was made. */
-  from: AskState;
-  /** Only for failures that are not the gatekeeper refusing a transition. */
-  raw?: string;
-}
-
-function refusalFrom(error: unknown, attempted: Refusal["attempted"], from: AskState): Refusal {
-  if (error instanceof ApiError) {
-    const body = error.body as { error?: unknown } | null;
-    // The 409 body also carries a thread tail. It is deliberately not
-    // read here: this notice sits next to the decision buttons, and
-    // only gatekeeper facts belong that close to them (spec 0005 §8).
-    if (body?.error === "ask_state_moved" || body?.error === "ask_terminal") {
-      return { attempted, from };
-    }
-    return { attempted, from, raw: error.message };
-  }
-  return { attempted, from, raw: "the request did not go through" };
-}
-
-/** Written against the CURRENT ask, so it stays true however it moved. */
-function refusalMessage(refusal: Refusal, ask: Ask): string {
-  const what = refusal.attempted === "reply" ? "your reply" : `marking this ${LABEL[refusal.attempted]}`;
-  if (refusal.raw !== undefined) return `${what} was refused: ${refusal.raw}`;
-  if (ask.state === refusal.from) return `${what} was refused; the ask is still ${ask.state}`;
-  return `${what} was refused: the ask is now ${ask.state}, and nothing was overwritten`;
-}
 
 function Thread({ entries }: { entries: ThreadEntry[] }) {
   if (entries.length === 0) return <p className="sub">no replies yet</p>;
@@ -175,7 +128,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
         </p>
       ) : null}
       <Thread entries={ask.thread} />
-      {refusal ? <ErrorNote error={refusalMessage(refusal, ask)} /> : null}
+      {refusal ? <ErrorNote error={refusalMessage(refusal, ask.state)} /> : null}
       {settled ? (
         <p className="sub">settled; replies still land in the thread</p>
       ) : (
