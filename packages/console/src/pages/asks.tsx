@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { callTool } from "../api.js";
-import { LABEL, refusalFrom, refusalMessage, type AskState, type Refusal } from "../asks-refusal.js";
+import {
+  askVersion,
+  LABEL,
+  refusalFrom,
+  refusalMessage,
+  type AskState,
+  type Refusal
+} from "../asks-refusal.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { ExternalUrl, UntrustedText } from "../untrusted.js";
@@ -99,7 +106,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
       setNote("");
       refresh();
     } catch (error) {
-      setRefusal(refusalFrom(error, decision, ask));
+      setRefusal(refusalFrom(error, decision, { state: ask.state, version: askVersion(ask) }));
       refresh();
     }
   }
@@ -128,7 +135,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
         </p>
       ) : null}
       <Thread entries={ask.thread} />
-      {refusal ? <ErrorNote error={refusalMessage(refusal, ask)} /> : null}
+      {refusal ? <ErrorNote error={refusalMessage(refusal, { state: ask.state, version: askVersion(ask) })} /> : null}
       {settled ? (
         <p className="sub">settled; replies still land in the thread</p>
       ) : (
@@ -181,7 +188,7 @@ function AskCard({ ask, refresh }: { ask: Ask; refresh: () => void }) {
               await callTool("ask_reply", { askId: ask.id, text: reply.trim() });
               setReply("");
             } catch (error) {
-              setRefusal(refusalFrom(error, "reply", ask));
+              setRefusal(refusalFrom(error, "reply", { state: ask.state, version: askVersion(ask) }));
             }
             refresh();
           }}
