@@ -183,7 +183,8 @@ React + Vite SPA in `packages/console`, built to static assets, served
 by the ops Worker (assets binding, SPA fallback for unmatched GETs
 after Access verification). Views: agents (status, wake, enable,
 disable), events explorer, ledgers, wakes with live tail, messages,
-channel, approvals, web sessions, notifications, audit, secrets.
+channel, approvals, asks (spec 0007), web sessions, notifications,
+audit, secrets.
 
 The console is a pure client of `/api/v1/*` and `/ws/*`: it contains
 no logic a curl user would miss, by construction (the parity rule).
