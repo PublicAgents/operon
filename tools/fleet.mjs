@@ -27,6 +27,21 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * How long a deploy may wait for running wakes to finish. Bounded by
+ * the colony's maximum wake length: past this, something is wrong
+ * with the wake, not with the deploy.
+ */
+const DRAIN_TIMEOUT_MS = 45 * 60 * 1000;
+
+/**
+ * How long a deploy may queue behind ANOTHER deploy's pause. Must
+ * exceed the holder's own legitimate lifetime (its full drain plus
+ * the deploy itself), or a well-behaved holder would make the queued
+ * deploy fail; the margin is the deploy phase.
+ */
+const QUEUE_TIMEOUT_MS = DRAIN_TIMEOUT_MS + 15 * 60 * 1000;
+
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = process.cwd();
 
@@ -148,7 +163,7 @@ async function opsCall(manifest, tool, body) {
  * the caller's finally always gets to resume.
  */
 async function waitForQuiet(manifest) {
-  const deadline = Date.now() + 45 * 60 * 1000;
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
   let quietOnce = false;
   for (;;) {
     const { agents: now } = await opsCall(manifest, "agents-list");
@@ -212,7 +227,7 @@ for (const manifest of manifests) {
       // both deploys are legitimate and the loser would otherwise have
       // to be re-run by hand. Bounded, so a genuinely stuck pause
       // still surfaces instead of hanging forever.
-      const queueDeadline = Date.now() + 10 * 60 * 1000;
+      const queueDeadline = Date.now() + QUEUE_TIMEOUT_MS;
       for (;;) {
         try {
           await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
