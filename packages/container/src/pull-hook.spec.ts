@@ -34,6 +34,17 @@ describe("composeNotice", () => {
     );
   });
 
+  it("names an answered ask on its own: it may be what the mind is blocked on", () => {
+    const { text } = composeNotice({ mail: 0, dms: 0, channel: false, asks: 2 }, null, []);
+    expect(text).toContain("acted on 2 of your ask(s)");
+    expect(text).toContain("operator/asks.md");
+    // Still a pointer, never the operator's words.
+    expect(text).not.toContain("allowed");
+    expect(composeNotice({ mail: 1, dms: 0, channel: false, asks: 0 }, null, []).text).not.toContain(
+      "asks.md"
+    );
+  });
+
   it("warns about the journal once per threshold crossing", () => {
     const first = composeNotice(NOTHING, 14 * 60_000, []);
     expect(first.text).toContain("write it NOW");

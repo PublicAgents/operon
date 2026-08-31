@@ -337,7 +337,17 @@ export default {
       // handed, so a lost response re-delivers instead of vanishing
       // and no caller ever computes a cursor.
       const delivery = await box(env).unread(agent.id);
-      return json({ ok: true, deliveryId: delivery.deliveryId, unread: delivery.rows });
+      // The ceilings ride along with the delivery the wake already
+      // makes, so the container's living help can state this colony's
+      // real numbers without a second call and without a copy of the
+      // policy: the Gatekeeper that enforces them is the one saying
+      // them (spec 0007 §3).
+      return json({
+        ok: true,
+        deliveryId: delivery.deliveryId,
+        unread: delivery.rows,
+        limits: { perWake: perWakeCap(env), perDay: perDayCap(env) }
+      });
     }
     if (url.pathname === "/gatekeeper/asks/ack") {
       const agent = agentFromBearer(request, env);

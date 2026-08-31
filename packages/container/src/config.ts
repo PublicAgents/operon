@@ -37,6 +37,8 @@ export const ENV = {
   spendToken: "OPERON_SPEND_TOKEN",
   vaultUrl: "OPERON_VAULT_URL",
   vaultToken: "OPERON_VAULT_TOKEN",
+  asksUrl: "OPERON_ASKS_URL",
+  asksToken: "OPERON_ASKS_TOKEN",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -88,6 +90,9 @@ export interface WakeConfig {
   /** vault Gatekeeper endpoint + this agent's own secret-store bearer. */
   vaultUrl?: string;
   vaultToken?: string;
+  /** asks Gatekeeper endpoint + this agent's own decision-queue bearer. */
+  asksUrl?: string;
+  asksToken?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -171,6 +176,8 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     spendToken: env[ENV.spendToken],
     vaultUrl: env[ENV.vaultUrl],
     vaultToken: env[ENV.vaultToken],
+    asksUrl: env[ENV.asksUrl],
+    asksToken: env[ENV.asksToken],
     chronicleUrl: env[ENV.chronicleUrl],
     chronicleToken: env[ENV.chronicleToken],
     xUrl: env[ENV.xUrl],

@@ -38,6 +38,11 @@ export function xTokenVar(agentId: string): string {
   return `X_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/** "promoter" -> "ASKS_TOKEN_PROMOTER" (the decision queue is per-agent). */
+export function asksTokenVar(agentId: string): string {
+  return `ASKS_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
 export class LaunchPreconditionError extends Error {
   override name = "LaunchPreconditionError";
   constructor(
@@ -111,6 +116,7 @@ export async function prepareLaunch(
     spendUrl: "http://" + doorHost("spend"),
     vaultUrl: "http://" + doorHost("vault"),
     xUrl: "http://" + doorHost("x"),
+    asksUrl: "http://" + doorHost("asks"),
     // The web door is opt-in per agent (spec 0004): only a web-capable
     // agent gets it, and only such a container launches fenced, so a
     // web upgrade can never arrive from an unfenced container.
@@ -127,7 +133,8 @@ export async function prepareLaunch(
     ...(context.getSecret(tillTokenVar(agent.id)) ? { tillToken: umbilicalNonce } : {}),
     ...(context.getSecret(spendTokenVar(agent.id)) ? { spendToken: umbilicalNonce } : {}),
     ...(context.getSecret(vaultTokenVar(agent.id)) ? { vaultToken: umbilicalNonce } : {}),
-    ...(context.getSecret(xTokenVar(agent.id)) ? { xToken: umbilicalNonce } : {})
+    ...(context.getSecret(xTokenVar(agent.id)) ? { xToken: umbilicalNonce } : {}),
+    ...(context.getSecret(asksTokenVar(agent.id)) ? { asksToken: umbilicalNonce } : {})
   };
   return {
     wakeId,

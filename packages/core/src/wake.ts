@@ -58,6 +58,9 @@ export interface WakeOptions {
   /** vault Gatekeeper endpoint + this agent's OWN secret-store bearer (per-agent). */
   vaultUrl?: string;
   vaultToken?: string;
+  /** asks Gatekeeper endpoint + this agent's OWN asks bearer (per-agent). */
+  asksUrl?: string;
+  asksToken?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -108,6 +111,8 @@ export const WAKE_ENV = {
   spendToken: "OPERON_SPEND_TOKEN",
   vaultUrl: "OPERON_VAULT_URL",
   vaultToken: "OPERON_VAULT_TOKEN",
+  asksUrl: "OPERON_ASKS_URL",
+  asksToken: "OPERON_ASKS_TOKEN",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -153,6 +158,8 @@ export function wakeEnv(
   if (options.spendToken) env[WAKE_ENV.spendToken] = options.spendToken;
   if (options.vaultUrl) env[WAKE_ENV.vaultUrl] = options.vaultUrl;
   if (options.vaultToken) env[WAKE_ENV.vaultToken] = options.vaultToken;
+  if (options.asksUrl) env[WAKE_ENV.asksUrl] = options.asksUrl;
+  if (options.asksToken) env[WAKE_ENV.asksToken] = options.asksToken;
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
   if (options.xUrl) env[WAKE_ENV.xUrl] = options.xUrl;
