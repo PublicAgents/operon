@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { dueAgents, findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, requireBearer } from "@operon/worker-kit";
 import {
@@ -7,6 +8,23 @@ import {
 } from "./launch.js";
 import { WakeContainer } from "./wake-container.js";
 export { FleetControl } from "./fleet-control.js";
+
+/**
+ * The authoritative answer to "which wake is this agent running right
+ * now", binding-only (spec 0007 §3). A Gatekeeper that quotas per wake
+ * must not take the wake id from its caller: the scheduler owns the
+ * supervisor lock, so it is the only honest source.
+ */
+export class WakeQuery extends WorkerEntrypoint<Env> {
+  async currentWakeId(agentId: string): Promise<string | null> {
+    const roster = parseRoster(this.env.ROSTER);
+    const agent = findAgent(roster, agentId);
+    if (!agent) return null;
+    const stub = this.env.WAKE_CONTAINER.get(this.env.WAKE_CONTAINER.idFromName(agent.id));
+    const status = await stub.status();
+    return status.current?.wakeId ?? null;
+  }
+}
 import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };

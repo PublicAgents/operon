@@ -43,8 +43,8 @@ export const DEPLOY_ORDER = [
   "gatekeeper-x",
   "gatekeeper-till",
   "gatekeeper-browser",
-  "gatekeeper-asks",
   "scheduler",
+  "gatekeeper-asks",
   "gatekeeper-telegram",
   "gatekeeper-ops"
 ] as const;
@@ -267,7 +267,11 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // The decision queue reaches the operator by mail through the
         // email Gatekeeper's binding-only operator path, so asks never
         // hold a send credential of their own.
-        services: [service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail")],
+        services: [
+          service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail"),
+          // The quota's honest source: the scheduler owns the wake lock.
+          service("SCHEDULER_WAKE", "scheduler", "WakeQuery")
+        ],
         durable_objects: {
           bindings: [{ name: "ASKS", class_name: "AskBox" }, ledger]
         },

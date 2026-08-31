@@ -46,6 +46,8 @@ interface Env {
   TELEGRAM?: TelegramGatewayBinding;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  /** The scheduler's binding-only wake query: the quota's honest source. */
+  SCHEDULER_WAKE?: { currentWakeId(agentId: string): Promise<string | null> };
   /** The email Gatekeeper's operator-mail entrypoint (binding-only). */
   EMAIL_OPERATOR?: { notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{ ok: boolean; detail?: string }> };
   ASKS_MAX_PER_WAKE?: string;
@@ -148,19 +150,25 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   let text: string;
   let kind;
   let links: string[];
-  let wakeId: string;
   try {
     title = requireText(body.value.title, "title", LIMITS.title);
     text = requireText(body.value.body, "body", LIMITS.body);
     kind = parseKind(body.value.kind);
     links = parseLinks(body.value.links);
-    // The porch supplies the wake id; a mind cannot mint cap headroom.
-    wakeId = requireText(body.value.wakeId, "wakeId", 100);
   } catch (error) {
     if (error instanceof AskInputError) return errorResponse(400, "invalid_ask", error.message);
     throw error;
   }
   const at = new Date().toISOString();
+  // The wake id is RESOLVED from the scheduler, never taken from the
+  // request: a caller holding the bearer could otherwise rotate it and
+  // mint a fresh quota per ask. With no scheduler binding or no wake
+  // running, the bucket falls back to the hour, which is still
+  // something the caller cannot choose.
+  const currentWake = env.SCHEDULER_WAKE
+    ? await env.SCHEDULER_WAKE.currentWakeId(agent.id).catch(() => null)
+    : null;
+  const wakeId = currentWake ?? `nowake:${at.slice(0, 13)}`;
   const result = await box(env).create({
     agentId: agent.id,
     wakeId,

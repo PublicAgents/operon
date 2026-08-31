@@ -85,10 +85,11 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     // Asks hold no send credential: mail goes through the email
     // Gatekeeper's binding-only operator entrypoint.
     expect(asks.services).toEqual([
-      { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" }
+      { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" },
+      { binding: "SCHEDULER_WAKE", service: "operon-scheduler", entrypoint: "WakeQuery" }
     ]);
-    // Deployed before the scheduler, which carries its door URL.
-    expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeLessThan(
+    // Deployed AFTER the scheduler, whose WakeQuery it binds.
+    expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeGreaterThan(
       rendered.findIndex(w => w.key === "scheduler")
     );
     expect(byKey["scheduler"].vars.ASKS_URL).toBe("https://asks-gk.livevariant.ai");
