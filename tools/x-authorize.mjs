@@ -19,37 +19,32 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { loadProject } from "./colony.mjs";
 
-// Chassis tooling, colony data: run from a COLONY checkout's root.
+// Chassis tooling, project data: run from a PROJECT checkout's root.
 const ROOT = process.cwd();
-if (!existsSync(join(ROOT, "workers", "gatekeeper-x", "wrangler.jsonc"))) {
-  console.error("run this from a colony root (workers/gatekeeper-x/wrangler.jsonc not found)");
-  process.exit(2);
-}
-
 const agentId = process.argv[2];
 if (!agentId) {
-  console.error("usage: node scripts/x-authorize.mjs <agentId>");
+  console.error("usage: node operon/tools/x-authorize.mjs <agentId> [--project <name>]");
   process.exit(2);
 }
 const SUFFIX = agentId.toUpperCase().replace(/-/g, "_");
 
+const projectFlag = process.argv.indexOf("--project");
+let project;
+try {
+  project = await loadProject(ROOT, projectFlag !== -1 ? process.argv[projectFlag + 1] : undefined);
+} catch (error) {
+  console.error(String(error.message ?? error));
+  process.exit(2);
+}
 // The agent must exist in the roster: a typo would otherwise mint real
 // credentials under secret names nothing reads, leaving the intended
 // agent unconfigured with no error anywhere.
-{
-  const stripJsonc = text =>
-    text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const roster = JSON.parse(stripJsonc(readFileSync(join(ROOT, "roster.jsonc"), "utf8")));
-  if (!roster.agents.some(agent => agent.id === agentId)) {
-    console.error(
-      `unknown agent "${agentId}"; roster has: ${roster.agents.map(agent => agent.id).join(", ")}`
-    );
-    process.exit(2);
-  }
+if (!project.agentIds.includes(agentId)) {
+  console.error(`unknown agent "${agentId}"; roster has: ${project.agentIds.join(", ")}`);
+  process.exit(2);
 }
 
 
@@ -144,7 +139,7 @@ console.log(`\nauthorized as @${access.screen_name ?? "?"}; storing secrets (val
 function put(secretName, value) {
   execFileSync(
     "npx",
-    ["wrangler", "secret", "put", secretName, "-c", "workers/gatekeeper-x/wrangler.jsonc"],
+    ["wrangler", "secret", "put", secretName, "--name", project.workerName("gatekeeper-x")],
     { cwd: ROOT, input: value, stdio: ["pipe", "inherit", "inherit"] }
   );
 }

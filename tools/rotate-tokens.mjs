@@ -2,9 +2,10 @@
 /**
  * Rotate every INTERNAL bearer of the colony in one command:
  *
- *   npm run rotate:tokens              # all internal bearers (from the colony root)
+ *   npm run rotate:tokens              # all internal bearers (from the project root)
  *   npm run rotate:tokens -- --only notify,wake-trigger
  *   npm run rotate:tokens -- --direct  # skip the gateway, write via wrangler
+ *   npm run rotate:tokens -- --project <name>   # when the repo holds several
  *
  * Internal bearers are the tokens both sides of which live in OUR
  * Workers, so rotation is self-contained: one fresh value per group,
@@ -28,25 +29,22 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { groupsFor } from "./rotate-groups.mjs";
+import { rotationGroups } from "../packages/ops-tools/dist/rotation.js";
+import { loadProject } from "./colony.mjs";
 
-// Chassis tooling, colony data: run from a COLONY checkout's root (the
-// repo holding roster.jsonc and workers/*/wrangler.jsonc). The chassis
-// ships the tool; the deployment supplies everything it touches.
+// Chassis tooling, project data: run from a PROJECT checkout's root
+// (the repo holding .operon/operon.yaml). The chassis ships the tool;
+// the deployment supplies everything it touches.
 const ROOT = process.cwd();
-if (!existsSync(join(ROOT, "roster.jsonc"))) {
-  console.error("run this from a colony root (no roster.jsonc here)");
+const projectFlag = process.argv.indexOf("--project");
+let project;
+try {
+  project = await loadProject(ROOT, projectFlag !== -1 ? process.argv[projectFlag + 1] : undefined);
+} catch (error) {
+  console.error(String(error.message ?? error));
   process.exit(2);
 }
-
-function stripJsonc(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
-const roster = JSON.parse(stripJsonc(readFileSync(join(ROOT, "roster.jsonc"), "utf8")));
-const GROUPS = groupsFor(roster);
+const GROUPS = rotationGroups(project.agentIds);
 
 const onlyArg = process.argv.indexOf("--only");
 const direct = process.argv.includes("--direct");
@@ -68,10 +66,7 @@ if (unknown.length > 0) {
  */
 function opsUrl() {
   if (process.env.OPERON_OPS_URL) return { kind: "url", url: process.env.OPERON_OPS_URL };
-  const configPath = join(ROOT, "workers", "gatekeeper-ops", "wrangler.jsonc");
-  if (!existsSync(configPath)) return { kind: "none" };
-  const pattern = JSON.parse(stripJsonc(readFileSync(configPath, "utf8"))).routes?.[0]?.pattern;
-  return pattern ? { kind: "url", url: `https://${pattern}` } : { kind: "unknown" };
+  return { kind: "url", url: project.opsUrl };
 }
 
 /**
@@ -83,19 +78,7 @@ function opsUrl() {
  * the operator who knows nothing is in flight.
  */
 async function rotateViaGateway(groups) {
-  const discovered = opsUrl();
-  if (discovered.kind === "none") {
-    console.log("this colony has no ops gateway config; writing directly");
-    return false;
-  }
-  if (discovered.kind === "unknown") {
-    console.error(
-      "✗ workers/gatekeeper-ops/wrangler.jsonc exists but has no route pattern; " +
-        "set OPERON_OPS_URL, or pass --direct only if no console/MCP rotation can be in flight"
-    );
-    process.exit(1);
-  }
-  const ops = discovered.url;
+  const ops = opsUrl().url;
   let token;
   try {
     token = execFileSync("cloudflared", ["access", "token", "--app", ops], {
@@ -139,10 +122,10 @@ async function rotateViaGateway(groups) {
   return true;
 }
 
-function putDirect(workerDir, secretName, value) {
+function putDirect(workerKey, secretName, value) {
   execFileSync(
     "npx",
-    ["wrangler", "secret", "put", secretName, "-c", `workers/${workerDir}/wrangler.jsonc`],
+    ["wrangler", "secret", "put", secretName, "--name", project.workerName(workerKey)],
     { cwd: ROOT, input: value, stdio: ["pipe", "inherit", "inherit"] }
   );
 }
@@ -155,9 +138,9 @@ if (!direct && (await rotateViaGateway(selected))) {
 for (const name of selected) {
   const value = randomBytes(32).toString("hex");
   console.log(`\n→ rotating "${name}" across ${GROUPS[name].length} worker(s) (direct)`);
-  for (const [workerDir, secretName] of GROUPS[name]) {
-    console.log(`  ${workerDir} · ${secretName}`);
-    putDirect(workerDir, secretName, value);
+  for (const [workerKey, secretName] of GROUPS[name]) {
+    console.log(`  ${project.workerName(workerKey)} · ${secretName}`);
+    putDirect(workerKey, secretName, value);
   }
 }
 

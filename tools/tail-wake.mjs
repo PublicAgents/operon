@@ -18,31 +18,41 @@
  * them readably and passes chassis [operon] lines through untouched.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { loadProject } from "./colony.mjs";
 
-// Chassis tooling, colony data: the ops gateway URL comes from the
-// colony checkout this runs in (the ops worker's own route), or the
-// OPERON_OPS_URL override. Reads proxy through it, Access-gated.
-function opsUrl() {
+// Chassis tooling, project data: the ops gateway URL comes from the
+// project manifest this runs in (its zone), or the OPERON_OPS_URL
+// override. Reads proxy through it, Access-gated.
+async function opsUrl() {
   if (process.env.OPERON_OPS_URL) return process.env.OPERON_OPS_URL;
-  const configPath = join(process.cwd(), "workers", "gatekeeper-ops", "wrangler.jsonc");
-  if (existsSync(configPath)) {
-    const raw = readFileSync(configPath, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    const pattern = JSON.parse(raw).routes?.[0]?.pattern;
-    if (pattern) return `https://${pattern}`;
+  const flag = process.argv.indexOf("--project");
+  try {
+    return (await loadProject(process.cwd(), flag !== -1 ? process.argv[flag + 1] : undefined))
+      .opsUrl;
+  } catch (error) {
+    console.error(`${String(error.message ?? error)}\n(or set OPERON_OPS_URL)`);
+    process.exit(2);
   }
-  console.error("no ops URL: run from a colony root or set OPERON_OPS_URL");
-  process.exit(2);
 }
 
-const GK = opsUrl();
+const GK = await opsUrl();
 const args = process.argv.slice(2);
 const raw = args.includes("--raw");
 const forcePoll = args.includes("--poll");
-const wakeArg = args.find(arg => !arg.startsWith("--"));
+// The wake id is the only bare positional, so a flag's VALUE must not
+// be mistaken for one: `tail-wake --project livevariant` would
+// otherwise tail a wake named after the project and find nothing.
+const wakeArg = (() => {
+  const takesValue = new Set(["--project"]);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith("--")) {
+      if (takesValue.has(args[i])) i += 1;
+      continue;
+    }
+    return args[i];
+  }
+  return undefined;
+})();
 
 // A short-lived Access JWT for the ops gateway; the login is a one-time
 // browser SSO (`cloudflared access login <ops>`), then this refreshes
