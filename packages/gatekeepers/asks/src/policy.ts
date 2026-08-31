@@ -36,6 +36,13 @@ export const LIMITS = {
   linkLength: 500,
   /** New asks per agent per wake; the eleventh is noise or a loop. */
   perWake: 10,
+  /**
+   * New asks per agent per UTC day, whatever wake they claim. The
+   * per-wake cap trusts the porch to supply the wake id; this one
+   * trusts nothing, so a caller that could rotate wake ids still
+   * cannot mint unbounded interrupts.
+   */
+  perDay: 40,
   /** Backstop on operator emails per day, so a reply loop cannot flood a mailbox. */
   emailsPerDay: 100
 } as const;

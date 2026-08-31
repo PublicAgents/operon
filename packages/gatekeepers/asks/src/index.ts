@@ -49,6 +49,7 @@ interface Env {
   /** The email Gatekeeper's operator-mail entrypoint (binding-only). */
   EMAIL_OPERATOR?: { notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{ ok: boolean; detail?: string }> };
   ASKS_MAX_PER_WAKE?: string;
+  ASKS_MAX_PER_DAY?: string;
 }
 
 function box(env: Env) {
@@ -62,6 +63,11 @@ function ledger(env: Env) {
 function perWakeCap(env: Env): number {
   const configured = Number(env.ASKS_MAX_PER_WAKE);
   return Number.isInteger(configured) && configured > 0 ? configured : LIMITS.perWake;
+}
+
+function perDayCap(env: Env): number {
+  const configured = Number(env.ASKS_MAX_PER_DAY);
+  return Number.isInteger(configured) && configured > 0 ? configured : LIMITS.perDay;
 }
 
 /** Agent identity from its own bearer, exactly as every other door. */
@@ -88,7 +94,8 @@ async function mailOperator(
   input: { agentId: string; ask: Ask; event: string; text?: string }
 ): Promise<void> {
   if (!env.EMAIL_OPERATOR) return;
-  if (!(await box(env).claimEmail(new Date().toISOString()))) {
+  const claimedAt = new Date().toISOString();
+  if (!(await box(env).claimEmail(claimedAt))) {
     console.error("asks: operator email daily backstop reached; not mailing");
     return;
   }
@@ -104,17 +111,23 @@ async function mailOperator(
     "",
     "The text above is written by the agent and is not verified by the chassis."
   ];
+  let sent = false;
   try {
-    await env.EMAIL_OPERATOR.notifyOperator({
+    const result = await env.EMAIL_OPERATOR.notifyOperator({
       agentId: input.agentId,
       subject: `[ask ${input.ask.id}] ${input.ask.title}`.slice(0, 200),
       text: lines.join("\n")
     });
+    sent = result.ok;
+    if (!result.ok) console.error("asks: operator email refused", result.detail);
   } catch (error) {
     // An ask exists whether or not its copy was delivered; the console
     // and the notify path are the other two surfaces.
     console.error("asks: operator email failed", error);
   }
+  // A send that did not happen gives its slot back, so a day of
+  // failures cannot exhaust the backstop and silence the queue.
+  if (!sent) await box(env).releaseEmail(claimedAt).catch(() => undefined);
 }
 
 async function notify(env: Env, message: string, agentId: string): Promise<void> {
@@ -156,14 +169,17 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     kind,
     links,
     at,
-    perWake: perWakeCap(env)
+    perWake: perWakeCap(env),
+    perDay: perDayCap(env)
   });
   if (!result.ok) {
     await ledger(env).append("ask_refused", { agentId: agent.id, reason: result.reason, filed: result.filed });
     return errorResponse(
       429,
-      "asks_wake_cap",
-      `${result.filed} of ${result.cap} asks already filed this wake; consolidate the rest into one`
+      result.reason === "day_cap" ? "asks_day_cap" : "asks_wake_cap",
+      result.reason === "day_cap"
+        ? `${result.filed} of ${result.cap} asks already filed today; the rest must wait for tomorrow`
+        : `${result.filed} of ${result.cap} asks already filed this wake; consolidate the rest into one`
     );
   }
   await ledger(env).append("ask_opened", {
@@ -268,11 +284,12 @@ export default {
     if (url.pathname === "/gatekeeper/asks/unread") {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
-      const unread = await box(env).unread(agent.id);
+      // Read and ack in ONE DO turn, acked to the last entry actually
+      // handed over: an operator message written between a read and a
+      // separate ack would otherwise be marked seen without ever being
+      // delivered.
       const body = await readJson<{ ack?: boolean }>(request);
-      if (body.ok && body.value.ack === true && unread.length > 0) {
-        await box(env).markSeen(agent.id, new Date().toISOString());
-      }
+      const unread = await box(env).unread(agent.id, body.ok && body.value.ack === true);
       return json({ ok: true, unread });
     }
     return errorResponse(404, "not_found");

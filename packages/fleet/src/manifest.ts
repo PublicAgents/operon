@@ -44,7 +44,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   deploy: ["DISCLOSURE_MARKER"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
   scheduler: ["HARNESS_EXTRA_ARGS"],
-  asks: ["ASKS_MAX_PER_WAKE"]
+  asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
 export interface FleetManifest {

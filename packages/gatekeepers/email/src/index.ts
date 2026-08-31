@@ -409,6 +409,18 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
     // vanish into a mailbox nobody reads.
     const to = this.env.OPERATOR_EMAIL;
     if (!to || to.length === 0) return { ok: false, detail: "operator_email_unset" };
+    // Audit doctrine (spec 0003): the record lands BEFORE the
+    // privileged act, and the act refuses when it cannot be recorded.
+    // A notification is worth less than an unauditable send.
+    try {
+      await ledger(this.env).append("operator_mail", {
+        agentId: input.agentId,
+        subject: input.subject
+      });
+    } catch (error) {
+      console.error("operator mail refused: audit unavailable", error);
+      return { ok: false, detail: "audit_unavailable" };
+    }
     const from = { email: `${input.agentId}@${this.env.EMAIL_DOMAIN}`, name: input.agentId };
     try {
       await this.env.EMAIL.send({
@@ -419,12 +431,6 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
       });
     } catch (error) {
       return { ok: false, detail: String(error).slice(0, 200) };
-    }
-    try {
-      await ledger(this.env).append("operator_mail", { agentId: input.agentId, subject: input.subject });
-    } catch (error) {
-      // The mail is sent; a missing ledger row must not unsend it.
-      console.error("operator mail ledger append failed", error);
     }
     return { ok: true };
   }

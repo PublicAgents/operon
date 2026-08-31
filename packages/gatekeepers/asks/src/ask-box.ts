@@ -49,11 +49,23 @@ export class AskBox extends DurableObject {
     links: string[];
     at: string;
     perWake: number;
-  }): Promise<{ ok: true; ask: Ask } | { ok: false; reason: "wake_cap"; filed: number; cap: number }> {
+    perDay: number;
+  }): Promise<
+    | { ok: true; ask: Ask }
+    | { ok: false; reason: "wake_cap" | "day_cap"; filed: number; cap: number }
+  > {
     const counterKey = `wake:${input.agentId}:${input.wakeId}`;
+    const dayKey = `day:${input.agentId}:${day(input.at)}`;
     const filed = (await this.ctx.storage.get<number>(counterKey)) ?? 0;
     if (filed >= input.perWake) {
       return { ok: false, reason: "wake_cap", filed, cap: input.perWake };
+    }
+    // The daily backstop is counted on the DO's own clock and cannot be
+    // reset by a caller choosing a different wake id: the per-wake cap
+    // is the useful bound, this one is the un-bypassable one.
+    const filedToday = (await this.ctx.storage.get<number>(dayKey)) ?? 0;
+    if (filedToday >= input.perDay) {
+      return { ok: false, reason: "day_cap", filed: filedToday, cap: input.perDay };
     }
     const ask: Ask = {
       id: crypto.randomUUID().slice(0, 8),
@@ -69,6 +81,7 @@ export class AskBox extends DurableObject {
       thread: []
     };
     await this.ctx.storage.put(counterKey, filed + 1);
+    await this.ctx.storage.put(dayKey, filedToday + 1);
     await this.save(ask);
     return { ok: true, ask };
   }
@@ -149,17 +162,25 @@ export class AskBox extends DurableObject {
    * Marking seen is the ack (spec 0007 §6): an answer delivered is an
    * answer the agent has actually been handed.
    */
-  async unread(agentId: string): Promise<{ id: string; title: string; state: AskState; entries: AskThreadEntry[] }[]> {
-    const asks = await this.list({ agentId });
-    return asks
-      .map(ask => ({ id: ask.id, title: ask.title, state: ask.state, entries: unreadForAgent(ask) }))
-      .filter(row => row.entries.length > 0);
-  }
-
-  async markSeen(agentId: string, at: string): Promise<void> {
+  async unread(
+    agentId: string,
+    ack = false
+  ): Promise<{ id: string; title: string; state: AskState; entries: AskThreadEntry[] }[]> {
+    const rows: { id: string; title: string; state: AskState; entries: AskThreadEntry[] }[] = [];
     for (const ask of await this.list({ agentId })) {
-      if (unreadForAgent(ask).length > 0) await this.save({ ...ask, agentSeenAt: at });
+      const entries = unreadForAgent(ask);
+      if (entries.length === 0) continue;
+      rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
+      if (ack) {
+        // Acked to the timestamp of the LAST ENTRY ACTUALLY HANDED
+        // OVER, in the same serialized turn that read it. Marking
+        // "now" instead would swallow anything the operator wrote
+        // between the read and the write: an answer silently lost is
+        // the exact failure this queue exists to end.
+        await this.save({ ...ask, agentSeenAt: entries[entries.length - 1].at });
+      }
     }
+    return rows;
   }
 
   /**
@@ -172,5 +193,15 @@ export class AskBox extends DurableObject {
     if (sent >= cap) return false;
     await this.ctx.storage.put(key, sent + 1);
     return true;
+  }
+
+  /**
+   * Give a claimed email slot back when the send did not happen: a day
+   * of failures must not exhaust the backstop and silence the queue.
+   */
+  async releaseEmail(at: string): Promise<void> {
+    const key = `email:${day(at)}`;
+    const sent = (await this.ctx.storage.get<number>(key)) ?? 0;
+    if (sent > 0) await this.ctx.storage.put(key, sent - 1);
   }
 }
