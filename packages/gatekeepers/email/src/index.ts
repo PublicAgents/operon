@@ -450,8 +450,17 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
         subject: input.subject
       });
     } catch (error) {
-      // Delivered; the requested row plus this log carry the record.
+      // Delivered, but the ledger cannot say so: a requested row with
+      // no outcome is exactly as ambiguous as no row at all. Escalate
+      // on a DIFFERENT channel than the one that just succeeded, and
+      // tell the caller, so the gap is visible from two directions
+      // rather than resolved by guesswork later.
       console.error("operator mail sent but outcome row lost", error);
+      await notifyOperator(
+        this.env,
+        `audit gap: operator mail to ${to} (${input.subject}) was DELIVERED but its outcome row could not be written; the operator_mail_requested row plus this notice are the record.`
+      ).catch(() => undefined);
+      return { ok: true, detail: "outcome_unrecorded" };
     }
     return { ok: true };
   }
