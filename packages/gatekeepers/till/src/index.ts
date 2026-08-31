@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
-import { durableStore, TillStore } from "./replay-store.js";
+import { credentialClaimKey, durableStore, TillStore } from "./replay-store.js";
 export { TillStore };
 import { TillCatalog } from "./catalog-do.js";
 import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
@@ -52,6 +52,57 @@ interface Env {
   DEPLOY: Fetcher;
   CATALOG: DurableObjectNamespace<TillCatalog>;
   LEDGER: DurableObjectNamespace<Ledger>;
+}
+
+/**
+ * How long a spent credential stays claimed. Challenges expire in
+ * minutes, so a credential is unusable long before this lapses; the
+ * window only has to outlive the challenge it belongs to.
+ */
+const CREDENTIAL_CLAIM_MS = 30 * 60 * 1000;
+
+/**
+ * The MPP refusal for a replayed credential: 402 with the
+ * invalid-challenge problem type (the spec groups already-used there)
+ * and, when it can be minted, a FRESH challenge so an honest client
+ * can pay again immediately.
+ */
+async function replayRefusal(
+  mppx: unknown,
+  offer: { price: string; currency: string; description: string },
+  env: Env
+): Promise<Response> {
+  const headers = new Headers({
+    "content-type": "application/problem+json",
+    "cache-control": "no-store"
+  });
+  try {
+    const generate = (mppx as {
+      challenge?: { tempo?: { charge?: (options: unknown) => Promise<{ headers?: Headers }> } };
+    }).challenge?.tempo?.charge;
+    if (generate) {
+      const challenge = await generate({
+        amount: offer.price,
+        currency: offer.currency,
+        description: offer.description,
+        recipient: env.TILL_RECIPIENT
+      });
+      const wwwAuthenticate = challenge?.headers?.get("WWW-Authenticate");
+      if (wwwAuthenticate) headers.set("WWW-Authenticate", wwwAuthenticate);
+    }
+  } catch {
+    // A refusal without a fresh challenge is still a correct refusal.
+  }
+  return new Response(
+    JSON.stringify({
+      type: "https://paymentauth.org/problems/invalid-challenge",
+      title: "Invalid Challenge",
+      status: 402,
+      detail:
+        "This credential has already been used: its challenge is spent. Request a fresh challenge and pay again."
+    }),
+    { status: 402, headers }
+  );
 }
 
 function ledger(env: Env) {
@@ -188,6 +239,7 @@ app.all("*", async c => {
   // A malformed chain id must fall back, not become NaN/0 as an rpcUrl key.
   const parsedChainId = Number(env.TILL_RPC_CHAIN_ID);
   const chainId = Number.isInteger(parsedChainId) && parsedChainId > 0 ? parsedChainId : 42431;
+  const store = durableStore(env.TILL_STORE.get(env.TILL_STORE.idFromName("till")));
   const mppx = Mppx.create({
     methods: [
       tempo.charge({
@@ -197,7 +249,7 @@ app.all("*", async c => {
         // hitting another isolate is re-served 200 instead of 402
         // invalid-challenge (already-used), the one scored failure on
         // conformance cert ea57e4fe.
-        store: durableStore(env.TILL_STORE.get(env.TILL_STORE.idFromName("till"))) as never,
+        store: store as never,
         ...(typeof env.TEMPO_API_KEY === "string" && env.TEMPO_API_KEY.length > 0
           ? { relay: { apiKey: env.TEMPO_API_KEY } }
           : typeof env.TILL_RPC_URL === "string" && env.TILL_RPC_URL.length > 0
@@ -216,6 +268,26 @@ app.all("*", async c => {
     recipient: env.TILL_RECIPIENT
   });
 
+  // SINGLE-USE CREDENTIALS, enforced by the till itself (operon#69).
+  // MPP requires a replayed credential to be refused (its challenge is
+  // already used), and a shipped conformance certificate turns on that
+  // refusal. mppx's own claim path did not produce it in production
+  // even with a working shared store, so the till owns the guarantee
+  // rather than inheriting it: the credential is claimed BEFORE mppx
+  // sees it, and released again if mppx then rejects it, so a refused
+  // credential never burns its key and every hostile credential keeps
+  // its own precise refusal reason.
+  const authorization = c.req.header("authorization");
+  const credentialKey = authorization ? await credentialClaimKey(authorization) : null;
+  if (credentialKey && !(await store.tryClaim(credentialKey, Date.now() + CREDENTIAL_CLAIM_MS))) {
+    await ledger(env).append("replay_refused", {
+      agentId: offer.agentId,
+      host: offer.host,
+      path: offer.path
+    });
+    return replayRefusal(mppx, offer, env);
+  }
+
   // The middleware decorates c.res with the Payment-Receipt header after
   // the handler runs; c.res (or a directly returned Response) is the
   // authoritative final response, never the raw deploy fetch.
@@ -223,6 +295,11 @@ app.all("*", async c => {
     c.res = await env.DEPLOY.fetch(c.req.raw);
   });
   const out = result instanceof Response ? result : c.res;
+  // A credential mppx refused was never spent: release its claim so
+  // the refusal reason stays the true one on any resend.
+  if (out.status === 402 && credentialKey) {
+    await store.releaseClaim(credentialKey).catch(() => undefined);
+  }
   if (out.status !== 402) {
     // The settlement reference rides the receipt row (operon#67's
     // secondary finding): a revenue ledger whose rows carry their
