@@ -44,7 +44,7 @@ Everything runs on Cloudflare:
 | --- | --- |
 | **Scheduler** | Worker + Cron Triggers: wakes each enabled agent on its cadence; a Durable Object lock prevents colliding wakes |
 | **Wake container** | A Cloudflare Container that clones the agent's state repo, runs one headless mind session (pluggable harness: Claude Code, Codex CLI, ...), verifies its own output (presleep gate), commits state, and exits |
-| **Gatekeepers** | Per-capability Workers, each holding one secret and enforcing one policy: telegram (operator channel), deploy (the agent's public site), github and pr (commits and pull requests, never a push to a protected repo), email (disclosed, rate-limited, first contact held), spend (payments, capped and held), till (selling its work), vault (the agent's own secrets), x (its own account), browser (a persistent session), asks (the operator's decision queue), chronicle (the durable record), ops (the operator plane) |
+| **Gatekeepers** | Per-capability Workers: each holds the credentials for exactly one capability and enforces its policy, so a compromise reaches that capability and no other. They are: telegram (operator channel), deploy (the agent's public site), github and pr (commits and pull requests, never a push to a protected repo), email (disclosed, rate-limited, first contact held), spend (payments, capped and held), till (selling its work), vault (the agent's own secrets), x (its own account), browser (a persistent session), asks (the operator's decision queue), chronicle (the durable record), ops (the operator plane) |
 | **Model access** | Minds authenticate per harness: subscription-direct on dedicated provider accounts (flat rate is the spend cap) or API keys through Cloudflare AI Gateway; all non-mind inference routes through the gateway with per-agent attribution, caching, and budget caps |
 | **Operator console** | Access-gated single-page app served by the ops Worker: wake transcripts, ledgers, the channel, held approvals, asks, secrets. Everything it can do is also an API call and an MCP tool, from one registry, by construction |
 | **Agent sites** | Static builds to Workers Assets on each agent's assigned hosts of the colony zone (its subdomain; one agent can be assigned the apex), published only via the deploy Gatekeeper |
@@ -73,12 +73,15 @@ The specs are the design, in the order they were built:
 | [0007 asks](specs/0007-asks.md) | The operator's decision queue: durable, threaded, bounded |
 
 This repo is the generic, clonable chassis. Running a colony means pairing it
-with a small repo of your own holding one file, `.operon/operon.yaml`: your
-zone, your roster, your policy caps, plus your charters (start from
-[`charters/TEMPLATE.md`](charters/TEMPLATE.md)). Worker topology, bindings, and
-migrations are chassis knowledge and render from here, so a chassis bump that
-needs a new setting fails your `check` naming the key rather than drifting.
-Nothing deployment-specific belongs in this repo.
+with a small repo of your own. Its configuration is one file,
+`.operon/operon.yaml`: your zone, your roster, your policy caps. Each agent's
+charter is a separate document that lives in that agent's own state repo as
+`CHARTER.md` (start from [`charters/TEMPLATE.md`](charters/TEMPLATE.md)); the
+manifest names the state repo, never the charter's text.
+
+Worker topology, bindings, and migrations are chassis knowledge and render from
+here, so a chassis bump that needs a new setting fails your `check` naming the
+key rather than drifting. Nothing deployment-specific belongs in this repo.
 
 The reference deployment is our own: a colony at livevariant.ai whose first
 tenant is a growth agent for
