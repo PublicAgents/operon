@@ -33,7 +33,34 @@ export class TillStore extends DurableObject {
     const existing = await this.ctx.storage.get<number>(`claim:${key}`);
     if (existing !== undefined && existing > Date.now()) return false;
     await this.ctx.storage.put(`claim:${key}`, expires);
+    // Arm the sweep once; the alarm reschedules itself thereafter.
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + 24 * 60 * 60 * 1000);
+    }
     return true;
+  }
+
+  /**
+   * Drop a claim. Only for keys this colony owns (the self-check's
+   * scratch keys); a settlement claim must never be released by hand,
+   * which is why nothing but the diagnostic calls it.
+   */
+  async releaseClaim(key: string): Promise<void> {
+    await this.ctx.storage.delete(`claim:${key}`);
+  }
+
+  /**
+   * Expired claims are semantically dead (tryClaim re-claims them), so
+   * sweeping them is safe and keeps the claim set from growing without
+   * bound over a colony's life. Runs daily; reschedules itself.
+   */
+  override async alarm(): Promise<void> {
+    const now = Date.now();
+    const claims = await this.ctx.storage.list<number>({ prefix: "claim:" });
+    for (const [key, expires] of claims) {
+      if (typeof expires === "number" && expires <= now) await this.ctx.storage.delete(key);
+    }
+    await this.ctx.storage.setAlarm(now + 24 * 60 * 60 * 1000);
   }
 
   /** Versioned read for the optimistic update loop in the adapter. */

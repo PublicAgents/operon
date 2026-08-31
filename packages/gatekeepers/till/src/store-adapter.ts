@@ -9,6 +9,7 @@ export interface TillStoreStub {
   put(key: string, value: unknown): Promise<void>;
   delete(key: string): Promise<void>;
   tryClaim(key: string, expires: number): Promise<boolean>;
+  releaseClaim(key: string): Promise<void>;
   getVersioned(key: string): Promise<{ value: unknown; version: number }>;
   casPut(
     key: string,
@@ -29,6 +30,7 @@ export function durableStore(stub: TillStoreStub): {
   put: (key: string, value: unknown) => Promise<void>;
   delete: (key: string) => Promise<void>;
   tryClaim: (key: string, expires: number) => Promise<boolean>;
+  releaseClaim: (key: string) => Promise<void>;
   update: <result>(
     key: string,
     fn: (current: unknown) => { op: "noop"; result: result } | { op: "set"; value: unknown; result: result } | { op: "delete"; result: result }
@@ -39,6 +41,7 @@ export function durableStore(stub: TillStoreStub): {
     put: (key, value) => stub.put(key, value),
     delete: key => stub.delete(key),
     tryClaim: (key, expires) => stub.tryClaim(key, expires),
+    releaseClaim: key => stub.releaseClaim(key),
     async update(key, fn) {
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const { value, version } = await stub.getVersioned(key);
