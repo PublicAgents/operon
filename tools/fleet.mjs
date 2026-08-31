@@ -52,6 +52,9 @@ const WORKER_DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
  */
 const CONTAINER_DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
 
+/** Room for the work the enforced limits do not cover (see below). */
+const QUEUE_SLACK_MS = 5 * 60 * 1000;
+
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = process.cwd();
 
@@ -89,7 +92,14 @@ const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loa
 const QUEUE_TIMEOUT_MS =
   DRAIN_TIMEOUT_MS +
   (DEPLOY_ORDER.length - 1) * WORKER_DEPLOY_TIMEOUT_MS +
-  CONTAINER_DEPLOY_TIMEOUT_MS;
+  CONTAINER_DEPLOY_TIMEOUT_MS +
+  // The enforced limits bound the WAITS, not the work between them:
+  // drain polling, spawning wrangler once per worker, and the resume
+  // round trip all happen outside them. Without slack, a holder that
+  // used its full allowance would be declared stuck for the seconds it
+  // spent on that overhead, and calling a healthy deploy stuck is the
+  // expensive direction to be wrong in.
+  QUEUE_SLACK_MS;
 
 /** Locate every manifest in the repo (spec 0006 §1 layouts). */
 function findManifests() {
