@@ -35,12 +35,10 @@ import { fileURLToPath } from "node:url";
 const DRAIN_TIMEOUT_MS = 45 * 60 * 1000;
 
 /**
- * How long a deploy may queue behind ANOTHER deploy's pause. Must
- * exceed the holder's own legitimate lifetime (its full drain plus
- * the deploy itself), or a well-behaved holder would make the queued
- * deploy fail; the margin is the deploy phase.
+ * How long ONE worker's wrangler deploy may take. Enforced, so the
+ * deploy phase has a real upper bound rather than an assumed one.
  */
-const QUEUE_TIMEOUT_MS = DRAIN_TIMEOUT_MS + 15 * 60 * 1000;
+const WORKER_DEPLOY_TIMEOUT_MS = 2 * 60 * 1000;
 
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = process.cwd();
@@ -68,6 +66,15 @@ const onlyProject = projectFlagIndex >= 0 ? rest[projectFlagIndex + 1] : undefin
 const noDrain = rest.includes("--no-drain");
 
 const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loadFleet();
+
+/**
+ * How long a deploy may queue behind ANOTHER deploy's pause: the
+ * holder's entire ENFORCED lifetime, computed rather than guessed
+ * (its full drain, plus every worker taking its full deploy timeout).
+ * A holder cannot legitimately exceed this, so a queue that reaches
+ * it is looking at a stuck pause and says so.
+ */
+const QUEUE_TIMEOUT_MS = DRAIN_TIMEOUT_MS + DEPLOY_ORDER.length * WORKER_DEPLOY_TIMEOUT_MS;
 
 /** Locate every manifest in the repo (spec 0006 §1 layouts). */
 function findManifests() {
@@ -233,7 +240,14 @@ for (const manifest of manifests) {
           await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
           break;
         } catch (error) {
-          if (error.status !== 409 || Date.now() > queueDeadline) throw error;
+          if (error.status !== 409) throw error;
+          if (Date.now() > queueDeadline) {
+            throw new Error(
+              `the fleet pause has been held longer than a deploy can legitimately hold it ` +
+                `(${Math.round(QUEUE_TIMEOUT_MS / 60000)} min); it is stuck. Verify with agents-list ` +
+                `(paused field) and clear it with fleet_resume (force: true).`
+            );
+          }
           console.log("  another deploy holds the fleet pause; waiting for it to finish");
           await new Promise(resolve => setTimeout(resolve, 20_000));
         }
@@ -277,7 +291,7 @@ for (const manifest of manifests) {
       execFileSync(
         "npx",
         ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`],
-        { cwd: PROJECT_ROOT, stdio: "inherit" }
+        { cwd: PROJECT_ROOT, stdio: "inherit", timeout: WORKER_DEPLOY_TIMEOUT_MS }
       );
     }
   } catch (error) {
