@@ -36,9 +36,21 @@ const DRAIN_TIMEOUT_MS = 45 * 60 * 1000;
 
 /**
  * How long ONE worker's wrangler deploy may take. Enforced, so the
- * deploy phase has a real upper bound rather than an assumed one.
+ * deploy phase has a real upper bound rather than an assumed one. The
+ * bound exists to stop a HUNG deploy from holding the pause forever,
+ * not to police a slow one, so it is set well above what a healthy
+ * deploy needs: a large bundle on a slow link is a legitimate deploy,
+ * and killing it mid-sequence leaves the colony half-deployed.
  */
-const WORKER_DEPLOY_TIMEOUT_MS = 2 * 60 * 1000;
+const WORKER_DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * The same, for a worker that carries a CONTAINER image. That deploy
+ * builds and pushes the image, which is a different order of magnitude
+ * from uploading a script: a cold build of the wake container takes
+ * many minutes, and a Dockerfile change makes every deploy a cold one.
+ */
+const CONTAINER_DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
 
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = process.cwd();
@@ -74,7 +86,10 @@ const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loa
  * A holder cannot legitimately exceed this, so a queue that reaches
  * it is looking at a stuck pause and says so.
  */
-const QUEUE_TIMEOUT_MS = DRAIN_TIMEOUT_MS + DEPLOY_ORDER.length * WORKER_DEPLOY_TIMEOUT_MS;
+const QUEUE_TIMEOUT_MS =
+  DRAIN_TIMEOUT_MS +
+  (DEPLOY_ORDER.length - 1) * WORKER_DEPLOY_TIMEOUT_MS +
+  CONTAINER_DEPLOY_TIMEOUT_MS;
 
 /** Locate every manifest in the repo (spec 0006 §1 layouts). */
 function findManifests() {
@@ -213,6 +228,7 @@ for (const manifest of manifests) {
     fail("the console build is missing; run build:chassis first (deploying without it ships a blank console)");
   }
   const { buildDir, workers } = render(manifest, { resolveIds: true });
+  const workersByKey = new Map(workers.map(worker => [worker.key, worker]));
   for (const worker of workers) {
     if (JSON.stringify(worker.config).includes(D1_PLACEHOLDER)) {
       fail(`${worker.key} still carries an unresolved resource id`);
@@ -288,10 +304,20 @@ for (const manifest of manifests) {
     if (paused) await waitForQuiet(manifest);
     for (const key of DEPLOY_ORDER) {
       console.log(`\n→ deploying ${manifest.project}/${key}`);
+      // A worker carrying a container image gets the image-build bound;
+      // read from the rendered config, so adding a container to another
+      // worker cannot leave it on the script-sized timeout.
+      const carriesContainer = Boolean(
+        workersByKey.get(key)?.config.containers?.length
+      );
       execFileSync(
         "npx",
         ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`],
-        { cwd: PROJECT_ROOT, stdio: "inherit", timeout: WORKER_DEPLOY_TIMEOUT_MS }
+        {
+          cwd: PROJECT_ROOT,
+          stdio: "inherit",
+          timeout: carriesContainer ? CONTAINER_DEPLOY_TIMEOUT_MS : WORKER_DEPLOY_TIMEOUT_MS
+        }
       );
     }
   } catch (error) {
