@@ -277,6 +277,28 @@ export class Ops extends OpsEntrypoint<Env> {
     // exists anywhere in the chassis. Balances are best-effort chain
     // reads per allowed currency; decimals are known only for currencies
     // in the display map, others report raw base units.
+    // Does the shared replay store actually work in production? The
+    // claim path is only exercised by real payments, so operon#69 (a
+    // replay served 200 after the store shipped) had no way to
+    // distinguish "store broken" from "mppx never claimed". This
+    // exercises the claim contract on a scratch key: a working store
+    // claims once and refuses the second.
+    if (pathname === "/gatekeeper/till/store-check") {
+      const store = durableStore(this.env.TILL_STORE.get(this.env.TILL_STORE.idFromName("till")));
+      const key = `selfcheck:${crypto.randomUUID()}`;
+      const expires = Date.now() + 60_000;
+      const first = await store.tryClaim(key, expires);
+      const second = await store.tryClaim(key, expires);
+      await store.put(`${key}:rt`, { probe: true });
+      const readBack = await store.get(`${key}:rt`);
+      await store.delete(`${key}:rt`);
+      return json({
+        ok: first === true && second === false,
+        claimedFirst: first,
+        refusedSecond: second,
+        roundTrip: readBack !== null
+      });
+    }
     if (pathname === "/gatekeeper/till/wallet") {
       if (!this.env.TILL_RECIPIENT) return errorResponse(503, "till_unconfigured");
       const address = this.env.TILL_RECIPIENT;

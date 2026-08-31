@@ -364,6 +364,17 @@ export const TOOLS: readonly ToolDefinition[] = [
       context.ops("SPEND", "GET", "/gatekeeper/spend/outbox")
   },
   {
+    name: "till_store_check",
+    title: "Check the till's shared replay store",
+    description:
+      "Exercise the MPP replay-claim contract on a scratch key: a working shared store claims once and refuses the identical second claim. ok:false means replays cannot be refused (operon#69).",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("TILL", "GET", "/gatekeeper/till/store-check")
+  },
+  {
     name: "till_wallet",
     title: "The till's receiving wallet: address, chain, balances",
     description:
