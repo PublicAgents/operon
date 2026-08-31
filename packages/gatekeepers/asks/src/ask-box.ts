@@ -160,47 +160,65 @@ export class AskBox extends DurableObject {
   }
 
   /**
-   * The agent's unread operator activity. Reading NEVER acks: the
-   * chassis delivers at-least-once and acks only after the wake has
-   * persisted what it was handed (the same rule the mail and channel
-   * cursors follow). Acking on read would lose every entry in a
-   * response that never arrived, which is precisely the failure this
-   * queue exists to end.
+   * The agent's unread operator activity, handed out as a DELIVERY:
+   * the rows plus a token naming exactly what this call returned.
+   * Reading never acks (delivery is at-least-once, and the wake acks
+   * only after it has persisted what it was handed), and the caller
+   * never computes a cursor: it acks the token. That removes the last
+   * way an ack can name entries it did not receive, including when
+   * two reads for the same agent overlap.
    */
-  async unread(
-    agentId: string
-  ): Promise<{ id: string; title: string; state: AskState; entries: AskThreadEntry[] }[]> {
+  async unread(agentId: string): Promise<{
+    deliveryId: string;
+    rows: { id: string; title: string; state: AskState; entries: AskThreadEntry[] }[];
+  }> {
     const rows: { id: string; title: string; state: AskState; entries: AskThreadEntry[] }[] = [];
+    const cursors: { askId: string; throughSeq: number }[] = [];
     for (const ask of await this.list({ agentId })) {
       const entries = unreadForAgent(ask);
       if (entries.length === 0) continue;
       rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
-      // Record what was handed over, so a later ack can be bounded by
-      // it. This is the only honest ceiling: the thread length at ack
-      // time may already include entries this read never returned.
-      const offered = Math.max(ask.agentOfferedSeq ?? 0, entries[entries.length - 1].seq);
-      if (offered !== (ask.agentOfferedSeq ?? 0)) await this.save({ ...ask, agentOfferedSeq: offered });
+      cursors.push({ askId: ask.id, throughSeq: entries[entries.length - 1].seq });
     }
-    return rows;
+    const deliveryId = crypto.randomUUID();
+    if (cursors.length > 0) {
+      await this.ctx.storage.put(`delivery:${deliveryId}`, { agentId, cursors, at: new Date().toISOString() });
+      await this.pruneDeliveries();
+    }
+    return { deliveryId, rows };
   }
 
   /**
-   * Ack what the wake actually kept, per ask, up to a sequence it
-   * names. Idempotent and monotonic: a replayed ack is a no-op, and a
-   * stale one can never move a cursor backwards and re-deliver.
+   * Ack one delivery: every cursor it recorded, and nothing else. An
+   * unknown or replayed token is a no-op, a cursor never moves
+   * backwards, and an entry written after that delivery cannot be
+   * swallowed by it, because the delivery remembers what it contained.
    */
-  async ackUnread(agentId: string, cursors: { askId: string; throughSeq: number }[]): Promise<void> {
-    for (const cursor of cursors) {
+  async ackDelivery(agentId: string, deliveryId: string): Promise<number> {
+    const key = `delivery:${deliveryId}`;
+    const delivery = await this.ctx.storage.get<{
+      agentId: string;
+      cursors: { askId: string; throughSeq: number }[];
+    }>(key);
+    if (!delivery || delivery.agentId !== agentId) return 0;
+    for (const cursor of delivery.cursors) {
       const ask = await this.load(cursor.askId);
       if (!ask || ask.agentId !== agentId) continue;
-      // Clamped to what this ask actually HANDED OVER, never to the
-      // thread's current length: an operator entry written between the
-      // read and the ack must survive an over-large cursor, and an
-      // invented number must not reach past delivery at all.
-      const ceiling = ask.agentOfferedSeq ?? 0;
-      const next = Math.min(Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq), ceiling);
+      const next = Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq);
       if (next !== (ask.agentSeenSeq ?? 0)) await this.save({ ...ask, agentSeenSeq: next });
     }
+    await this.ctx.storage.delete(key);
+    return delivery.cursors.length;
+  }
+
+  /** Deliveries are short-lived receipts; keep the recent ones only. */
+  private async pruneDeliveries(keep = 50): Promise<void> {
+    const entries = await this.ctx.storage.list<{ at: string }>({ prefix: "delivery:" });
+    if (entries.size <= keep) return;
+    const sorted = [...entries.entries()].sort((left, right) =>
+      (left[1].at ?? "") < (right[1].at ?? "") ? -1 : 1
+    );
+    for (const [key] of sorted.slice(0, entries.size - keep)) await this.ctx.storage.delete(key);
   }
 
   /**

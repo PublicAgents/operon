@@ -107,24 +107,24 @@ describe("unreadForAgent", () => {
   });
 });
 
-describe("the delivery cursor's ceiling", () => {
-  // The invariant ackUnread enforces, stated as arithmetic so the
-  // reasoning survives the implementation: an ack advances to what was
-  // offered, never past it, and never backwards.
-  const advance = (seen: number, through: number, offered: number) =>
-    Math.min(Math.max(seen, through), offered);
+describe("the delivery cursor", () => {
+  // The invariant ackDelivery enforces, as arithmetic so the reasoning
+  // survives the implementation. The delivery itself carries the
+  // sequence it handed over, so the only question is monotonicity.
+  const advance = (seen: number, delivered: number) => Math.max(seen, delivered);
 
-  it("advances to what was handed over", () => {
-    expect(advance(0, 3, 3)).toBe(3);
+  it("advances to what the delivery contained", () => {
+    expect(advance(0, 3)).toBe(3);
   });
 
-  it("cannot advance past what was handed over, however large the ack", () => {
-    // The operator wrote entry 4 after the read returned 1..3.
-    expect(advance(0, 9_999, 3)).toBe(3);
+  it("never moves backwards on a stale or replayed delivery ack", () => {
+    expect(advance(5, 2)).toBe(5);
+    expect(advance(5, 5)).toBe(5);
   });
 
-  it("never moves backwards on a stale or replayed ack", () => {
-    expect(advance(5, 2, 8)).toBe(5);
-    expect(advance(5, 5, 8)).toBe(5);
+  it("cannot be moved by a delivery that contained nothing for the ask", () => {
+    // An unknown token acks nothing at all; a known one acks only its
+    // own cursors, so an entry written after it stays unread.
+    expect(advance(3, 0)).toBe(3);
   });
 });

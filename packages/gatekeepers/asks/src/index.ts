@@ -306,26 +306,19 @@ export default {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
       // Delivery is at-least-once: reading never acks. The porch acks
-      // separately, after the wake has persisted what it was handed,
-      // so a lost response re-delivers instead of vanishing.
-      return json({ ok: true, unread: await box(env).unread(agent.id) });
+      // the DELIVERY TOKEN, after the wake has persisted what it was
+      // handed, so a lost response re-delivers instead of vanishing
+      // and no caller ever computes a cursor.
+      const delivery = await box(env).unread(agent.id);
+      return json({ ok: true, deliveryId: delivery.deliveryId, unread: delivery.rows });
     }
     if (url.pathname === "/gatekeeper/asks/ack") {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
-      const body = await readJson<{ cursors?: { askId?: unknown; throughSeq?: unknown }[] }>(request);
-      if (!body.ok || !Array.isArray(body.value.cursors)) return errorResponse(400, "invalid_ack");
-      const cursors = body.value.cursors
-        .filter(
-          (cursor): cursor is { askId: string; throughSeq: number } =>
-            typeof cursor?.askId === "string" &&
-            typeof cursor?.throughSeq === "number" &&
-            Number.isInteger(cursor.throughSeq) &&
-            cursor.throughSeq > 0
-        )
-        .slice(0, 200);
-      await box(env).ackUnread(agent.id, cursors);
-      return json({ ok: true, acked: cursors.length });
+      const body = await readJson<{ deliveryId?: unknown }>(request);
+      if (!body.ok || typeof body.value.deliveryId !== "string") return errorResponse(400, "invalid_ack");
+      const acked = await box(env).ackDelivery(agent.id, body.value.deliveryId);
+      return json({ ok: true, acked });
     }
     return errorResponse(404, "not_found");
   }
