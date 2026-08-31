@@ -114,6 +114,7 @@ export class AskBox extends DurableObject {
     const ask = await this.load(input.id);
     if (!ask) return { ok: false, reason: "not_found" };
     const entry: AskThreadEntry = {
+      seq: ask.thread.length + 1,
       at: input.at,
       author: input.author,
       kind: "message",
@@ -141,6 +142,7 @@ export class AskBox extends DurableObject {
     const refusal = transitionRefusal(ask.state, input.expectedState, input.next);
     if (refusal) return { ok: false, reason: refusal, ask };
     const entry: AskThreadEntry = {
+      seq: ask.thread.length + 1,
       at: input.at,
       author: input.author,
       kind: "state_change",
@@ -172,12 +174,13 @@ export class AskBox extends DurableObject {
       if (entries.length === 0) continue;
       rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
       if (ack) {
-        // Acked to the timestamp of the LAST ENTRY ACTUALLY HANDED
-        // OVER, in the same serialized turn that read it. Marking
-        // "now" instead would swallow anything the operator wrote
+        // Acked to the SEQUENCE of the last entry actually handed over,
+        // in the same serialized turn that read it. A timestamp cursor
+        // would drop a reply that shared a millisecond with the last
+        // acked one, and marking "now" would swallow anything written
         // between the read and the write: an answer silently lost is
         // the exact failure this queue exists to end.
-        await this.save({ ...ask, agentSeenAt: entries[entries.length - 1].at });
+        await this.save({ ...ask, agentSeenSeq: entries[entries.length - 1].seq });
       }
     }
     return rows;

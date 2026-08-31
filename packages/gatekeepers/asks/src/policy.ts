@@ -48,6 +48,13 @@ export const LIMITS = {
 } as const;
 
 export interface AskThreadEntry {
+  /**
+   * Position in this ask's thread, 1-based and monotonic. The delivery
+   * cursor counts entries rather than milliseconds: two entries can
+   * share a timestamp, and a cursor that compared times would exclude
+   * the second one forever.
+   */
+  seq: number;
   at: string;
   author: "agent" | "operator";
   kind: "message" | "state_change";
@@ -67,8 +74,8 @@ export interface Ask {
   state: AskState;
   createdAt: string;
   updatedAt: string;
-  /** Last time the agent read this thread; operator entries after it are unread. */
-  agentSeenAt?: string;
+  /** The last thread entry the agent was handed; later ones are unread. */
+  agentSeenSeq?: number;
   thread: AskThreadEntry[];
 }
 
@@ -137,8 +144,6 @@ export function transitionRefusal(
 
 /** Operator entries the agent has not read yet (spec 0007 §6). */
 export function unreadForAgent(ask: Ask): AskThreadEntry[] {
-  const since = ask.agentSeenAt;
-  return ask.thread.filter(
-    entry => entry.author === "operator" && (since === undefined || entry.at > since)
-  );
+  const since = ask.agentSeenSeq ?? 0;
+  return ask.thread.filter(entry => entry.author === "operator" && entry.seq > since);
 }

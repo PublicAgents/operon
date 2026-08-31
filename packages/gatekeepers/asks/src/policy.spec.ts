@@ -84,17 +84,25 @@ describe("transitionRefusal", () => {
 });
 
 describe("unreadForAgent", () => {
-  const operatorEntry = { at: "2026-08-31T07:00:00.000Z", author: "operator" as const, kind: "message" as const, text: "hi" };
-  const agentEntry = { at: "2026-08-31T07:05:00.000Z", author: "agent" as const, kind: "message" as const, text: "ok" };
+  const operatorEntry = { seq: 1, at: "2026-08-31T07:00:00.000Z", author: "operator" as const, kind: "message" as const, text: "hi" };
+  const agentEntry = { seq: 2, at: "2026-08-31T07:05:00.000Z", author: "agent" as const, kind: "message" as const, text: "ok" };
 
   it("counts operator entries the agent has not seen, never its own", () => {
     expect(unreadForAgent(ask({ thread: [operatorEntry, agentEntry] }))).toEqual([operatorEntry]);
   });
 
   it("stops counting once seen, and counts what arrived after", () => {
-    const seen = ask({ thread: [operatorEntry], agentSeenAt: "2026-08-31T07:01:00.000Z" });
+    const seen = ask({ thread: [operatorEntry], agentSeenSeq: 1 });
     expect(unreadForAgent(seen)).toEqual([]);
-    const later = { ...operatorEntry, at: "2026-08-31T07:02:00.000Z", text: "and this" };
+    const later = { ...operatorEntry, seq: 2, at: "2026-08-31T07:02:00.000Z", text: "and this" };
     expect(unreadForAgent({ ...seen, thread: [operatorEntry, later] })).toEqual([later]);
+  });
+
+  it("delivers a reply that shares a millisecond with the acked one", () => {
+    // The bug a timestamp cursor has: same instant, later entry, gone
+    // forever. The sequence cursor cannot express that.
+    const sameMs = { ...operatorEntry, seq: 2, text: "and one more" };
+    const seen = ask({ thread: [operatorEntry, sameMs], agentSeenSeq: 1 });
+    expect(unreadForAgent(seen)).toEqual([sameMs]);
   });
 });

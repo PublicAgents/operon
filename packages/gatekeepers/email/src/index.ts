@@ -412,8 +412,10 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
     // Audit doctrine (spec 0003): the record lands BEFORE the
     // privileged act, and the act refuses when it cannot be recorded.
     // A notification is worth less than an unauditable send.
+    // Intent first, and the intent row says INTENT: a row claiming a
+    // delivered mail must never outlive a send that failed.
     try {
-      await ledger(this.env).append("operator_mail", {
+      await ledger(this.env).append("operator_mail_requested", {
         agentId: input.agentId,
         subject: input.subject
       });
@@ -430,7 +432,26 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
         text: input.text
       });
     } catch (error) {
-      return { ok: false, detail: String(error).slice(0, 200) };
+      const detail = String(error).slice(0, 200);
+      try {
+        await ledger(this.env).append("operator_mail_failed", {
+          agentId: input.agentId,
+          subject: input.subject,
+          detail
+        });
+      } catch (auditError) {
+        console.error("operator mail failure could not be ledgered", auditError);
+      }
+      return { ok: false, detail };
+    }
+    try {
+      await ledger(this.env).append("operator_mail_sent", {
+        agentId: input.agentId,
+        subject: input.subject
+      });
+    } catch (error) {
+      // Delivered; the requested row plus this log carry the record.
+      console.error("operator mail sent but outcome row lost", error);
     }
     return { ok: true };
   }
