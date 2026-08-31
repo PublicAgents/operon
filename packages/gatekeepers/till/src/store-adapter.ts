@@ -57,3 +57,15 @@ export function durableStore(stub: TillStoreStub): {
     }
   };
 }
+
+/**
+ * The store key for a presented credential. MPP credentials ride the
+ * Authorization header, and a replay is byte-identical, so the digest
+ * of that header IS the single-use identity: same credential, same
+ * key, from any isolate.
+ */
+export async function credentialClaimKey(authorization: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(authorization));
+  const hex = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  return `credential:${hex}`;
+}

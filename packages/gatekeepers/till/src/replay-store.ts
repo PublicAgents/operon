@@ -87,4 +87,4 @@ export class TillStore extends DurableObject {
   }
 }
 
-export { durableStore, type TillStoreStub } from "./store-adapter.js";
+export { credentialClaimKey, durableStore, type TillStoreStub } from "./store-adapter.js";

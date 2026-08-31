@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durableStore } from "./store-adapter.js";
+import { credentialClaimKey, durableStore } from "./store-adapter.js";
 
 /** In-memory stand-in with the DO stub's contract, for the adapter. */
 function fakeStub() {
@@ -93,5 +93,17 @@ describe("durableStore adapter", () => {
     });
     expect(result).toBe("other");
     expect(stub._versioned.get("k")?.value).toBe("other+mine");
+  });
+});
+
+describe("credentialClaimKey", () => {
+  it("is stable for the same credential and distinct for different ones", async () => {
+    const a = await credentialClaimKey("Payment credential=\"abc\"");
+    const again = await credentialClaimKey("Payment credential=\"abc\"");
+    const other = await credentialClaimKey("Payment credential=\"abd\"");
+    expect(a).toBe(again);
+    expect(a).not.toBe(other);
+    expect(a.startsWith("credential:")).toBe(true);
+    expect(a).toHaveLength("credential:".length + 64);
   });
 });
