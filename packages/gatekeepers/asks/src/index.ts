@@ -96,8 +96,8 @@ async function mailOperator(
   input: { agentId: string; ask: Ask; event: string; text?: string }
 ): Promise<void> {
   if (!env.EMAIL_OPERATOR) return;
-  const claimedAt = new Date().toISOString();
-  if (!(await box(env).claimEmail(claimedAt))) {
+  const at = new Date().toISOString();
+  if (!(await box(env).mailAllowed(at))) {
     console.error("asks: operator email daily backstop reached; not mailing");
     return;
   }
@@ -127,9 +127,17 @@ async function mailOperator(
     // and the notify path are the other two surfaces.
     console.error("asks: operator email failed", error);
   }
-  // A send that did not happen gives its slot back, so a day of
-  // failures cannot exhaust the backstop and silence the queue.
-  if (!sent) await box(env).releaseEmail(claimedAt).catch(() => undefined);
+  // Only a mail that actually left is counted: a failed send costs the
+  // backstop nothing, so a bad hour cannot silence the queue.
+  if (sent) {
+    try {
+      await box(env).recordMail(at);
+    } catch (error) {
+      // Undercounting fails toward DELIVERING later mail, which is the
+      // safe direction for a notification backstop.
+      console.error("asks: operator mail count not recorded", error);
+    }
+  }
 }
 
 async function notify(env: Env, message: string, agentId: string): Promise<void> {

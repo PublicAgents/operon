@@ -187,24 +187,25 @@ export class AskBox extends DurableObject {
   }
 
   /**
-   * Claim one operator email for today, or refuse: the backstop that
-   * keeps a reply loop from flooding a mailbox (spec 0007 §3).
+   * The operator-mail backstop (spec 0007 §3), counted on DELIVERIES
+   * ONLY. Reserving a slot up front needed a release when the send
+   * failed, and a release that itself failed silently ate capacity
+   * until the queue went quiet; counting only what actually left makes
+   * that whole class impossible. The cost is that a burst of
+   * simultaneous sends can overshoot slightly, which for a
+   * runaway-loop backstop is the right way to be wrong: this bound
+   * exists to stop a flood, not to ration a budget, and a
+   * notification suppressed in error is worse than one too many.
    */
-  async claimEmail(at: string, cap = LIMITS.emailsPerDay): Promise<boolean> {
-    const key = `email:${day(at)}`;
-    const sent = (await this.ctx.storage.get<number>(key)) ?? 0;
-    if (sent >= cap) return false;
-    await this.ctx.storage.put(key, sent + 1);
-    return true;
+  async mailAllowed(at: string, cap = LIMITS.emailsPerDay): Promise<boolean> {
+    const sent = (await this.ctx.storage.get<number>(`email:${day(at)}`)) ?? 0;
+    return sent < cap;
   }
 
-  /**
-   * Give a claimed email slot back when the send did not happen: a day
-   * of failures must not exhaust the backstop and silence the queue.
-   */
-  async releaseEmail(at: string): Promise<void> {
+  /** Count a mail that actually went out. */
+  async recordMail(at: string): Promise<void> {
     const key = `email:${day(at)}`;
     const sent = (await this.ctx.storage.get<number>(key)) ?? 0;
-    if (sent > 0) await this.ctx.storage.put(key, sent - 1);
+    await this.ctx.storage.put(key, sent + 1);
   }
 }
