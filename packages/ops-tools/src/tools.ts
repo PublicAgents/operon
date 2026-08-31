@@ -32,6 +32,7 @@ const UNTRUSTED =
 export const LEDGERS: Record<string, { binding: string; path: string }> = {
   email: { binding: "EMAIL", path: "/gatekeeper/email/ledger" },
   spend: { binding: "SPEND", path: "/gatekeeper/spend/ledger" },
+  asks: { binding: "ASKS", path: "/gatekeeper/asks/ledger" },
   vault: { binding: "VAULT", path: "/gatekeeper/vault/ledger" },
   x: { binding: "X", path: "/gatekeeper/x/ledger" },
   till: { binding: "TILL", path: "/gatekeeper/till/ledger" },
@@ -362,6 +363,64 @@ export const TOOLS: readonly ToolDefinition[] = [
     decision: false,
     handler: (_input, context) =>
       context.ops("SPEND", "GET", "/gatekeeper/spend/outbox")
+  },
+  {
+    name: "ask_list",
+    title: "The operator's decision queue",
+    description:
+      `Every ask, newest first, with state, kind, links and thread length; filter by state (open, acknowledged, allowed, declined, closed, retracted). An ask is the agent's formal request for operator attention. ${UNTRUSTED}`,
+    input: z.object({
+      states: z
+        .array(z.enum(["open", "acknowledged", "allowed", "declined", "closed", "retracted"]))
+        .optional()
+        .describe("omit for every ask; [\"open\",\"acknowledged\"] is the working queue")
+    }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { states } = input as { states?: string[] };
+      const query = states?.length ? `?states=${states.join(",")}` : "";
+      return context.ops("ASKS", "GET", `/gatekeeper/asks/list${query}`);
+    }
+  },
+  {
+    name: "ask_read",
+    title: "Read one ask with its full thread",
+    description: `One ask: its body, links, state, and every thread entry in order. ${UNTRUSTED}`,
+    input: z.object({ askId: z.string().min(1) }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { askId } = input as { askId: string };
+      return context.ops("ASKS", "GET", `/gatekeeper/asks/read?askId=${encodeURIComponent(askId)}`);
+    }
+  },
+  {
+    name: "ask_decide",
+    title: "Decide an ask (on it, allow, decline, close)",
+    description:
+      "Move an ask and optionally say why in the same act. expectedState is the state you are deciding FROM (compare-and-set): if the ask moved under you, this refuses with 409 and returns the current state and thread tail rather than overwriting someone else's decision. Terminal states (closed, retracted) never move.",
+    input: z.object({
+      askId: z.string().min(1),
+      expectedState: z.enum(["open", "acknowledged", "allowed", "declined"]),
+      decision: z.enum(["acknowledged", "allowed", "declined", "closed"]),
+      text: z.string().min(1).max(4000).optional().describe("the reason, recorded in the thread")
+    }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) =>
+      context.ops("ASKS", "POST", "/gatekeeper/asks/decide", { body: input })
+  },
+  {
+    name: "ask_reply",
+    title: "Reply in an ask thread",
+    description:
+      "Add a message to an ask's thread without changing its state: the conversation that resolves a question. Allowed in any state, including terminal ones (an afterthought is still a record).",
+    input: z.object({ askId: z.string().min(1), text: z.string().min(1).max(4000) }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) =>
+      context.ops("ASKS", "POST", "/gatekeeper/asks/reply", { body: input })
   },
   {
     name: "till_store_check",

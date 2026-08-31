@@ -44,6 +44,7 @@ export const DEPLOY_ORDER = [
   "gatekeeper-till",
   "gatekeeper-browser",
   "scheduler",
+  "gatekeeper-asks",
   "gatekeeper-telegram",
   "gatekeeper-ops"
 ] as const;
@@ -167,7 +168,12 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         services: [service("TELEGRAM", "gatekeeper-telegram")],
         durable_objects: { bindings: [{ name: "MAILBOX", class_name: "Mailbox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Mailbox", "Ledger"] }],
-        vars: { EMAIL_DOMAIN: zone, ...policyVars(manifest, "email"), NOTIFY_URL: notifyUrl }
+        vars: {
+          EMAIL_DOMAIN: zone,
+          ...policyVars(manifest, "email"),
+          ...(manifest.operatorEmail !== undefined ? { OPERATOR_EMAIL: manifest.operatorEmail } : {}),
+          NOTIFY_URL: notifyUrl
+        }
       }
     },
     {
@@ -253,6 +259,27 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       }
     },
     {
+      key: "gatekeeper-asks",
+      config: {
+        ...common("gatekeeper-asks"),
+        ...chronicleD1,
+        routes: [route(gkHost("asks-gk"))],
+        // The decision queue reaches the operator by mail through the
+        // email Gatekeeper's binding-only operator path, so asks never
+        // hold a send credential of their own.
+        services: [
+          service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail"),
+          // The quota's honest source: the scheduler owns the wake lock.
+          service("SCHEDULER_WAKE", "scheduler", "WakeQuery")
+        ],
+        durable_objects: {
+          bindings: [{ name: "ASKS", class_name: "AskBox" }, ledger]
+        },
+        migrations: [{ tag: "v1", new_sqlite_classes: ["AskBox", "Ledger"] }],
+        vars: { ...policyVars(manifest, "asks"), NOTIFY_URL: notifyUrl }
+      }
+    },
+    {
       key: "scheduler",
       config: {
         ...common("scheduler"),
@@ -312,6 +339,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           VAULT_URL: `https://${gkHost("vault-gk")}`,
           CHRONICLE_URL: `https://${gkHost("chronicle-gk")}`,
           X_URL: `https://${gkHost("x-gk")}`,
+          ASKS_URL: `https://${gkHost("asks-gk")}`,
           ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {})
         }
       }
@@ -368,6 +396,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           service("PR", "gatekeeper-pr", "Ops"),
           service("TELEGRAM", "gatekeeper-telegram", "Ops"),
           service("BROWSER", "gatekeeper-browser", "Ops"),
+          service("ASKS", "gatekeeper-asks", "Ops"),
           service("SCHEDULER", "scheduler")
         ],
         vars: {

@@ -43,13 +43,16 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   pr: ["PR_REPOS"],
   deploy: ["DISCLOSURE_MARKER"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
-  scheduler: ["HARNESS_EXTRA_ARGS"]
+  scheduler: ["HARNESS_EXTRA_ARGS"],
+  asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
 export interface FleetManifest {
   /** The project identity: seeds every account-level resource name. */
   project: string;
   accountId: string;
+  /** Where the operator is reachable: asks and mail copies land here. */
+  operatorEmail?: string;
   /** Worker name prefix; workers are `<prefix>-gatekeeper-*` and `<prefix>-scheduler`. */
   workerPrefix: string;
   access: { teamDomain: string; aud: string };
@@ -126,6 +129,17 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   const accountId = requireString(root.accountId, "accountId");
   if (!HEX32.test(accountId)) fail("accountId", "must be the 32-hex Cloudflare account id");
 
+  // The operator's own address: asks (spec 0007) and outbound mail
+  // copies land here. Optional, because a colony can run headless,
+  // but an asks Gatekeeper without it can only reach the console.
+  let operatorEmail: string | undefined;
+  if (root.operatorEmail !== undefined) {
+    operatorEmail = requireString(root.operatorEmail, "operatorEmail");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(operatorEmail)) {
+      fail("operatorEmail", `"${operatorEmail}" is not an email address`);
+    }
+  }
+
   const workerPrefix =
     root.workerPrefix === undefined ? `operon-${project}` : requireString(root.workerPrefix, "workerPrefix");
   if (!/^[a-z][a-z0-9-]{1,40}$/.test(workerPrefix)) {
@@ -165,6 +179,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   return {
     project,
     accountId,
+    ...(operatorEmail !== undefined ? { operatorEmail } : {}),
     workerPrefix,
     access: { teamDomain, aud },
     resources: { d1Name, ...(siteStoreKvId !== undefined ? { siteStoreKvId } : {}) },

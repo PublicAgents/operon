@@ -82,6 +82,10 @@ export function rotationGroups(agentIds: readonly string[]): Record<string, Rota
       ["gatekeeper-x", `X_TOKEN_${suffix}`],
       ["scheduler", `X_TOKEN_${suffix}`]
     ];
+    groups[`asks-${agentId}`] = [
+      ["gatekeeper-asks", `ASKS_TOKEN_${suffix}`],
+      ["scheduler", `ASKS_TOKEN_${suffix}`]
+    ];
   }
   return groups;
 }

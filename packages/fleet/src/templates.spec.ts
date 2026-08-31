@@ -13,6 +13,7 @@ const LIVEVARIANT = validateManifest({
   project: "livevariant",
   accountId: "85c7962b4a17a841ef0689e0e7c2a050",
   workerPrefix: "operon",
+  operatorEmail: "michael@krens.nl",
   access: {
     teamDomain: "https://floral-shape-360c.cloudflareaccess.com",
     aud: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025"
@@ -70,6 +71,28 @@ describe("renderWorkers reproduces the livevariant colony", () => {
   it("renders every worker in the chassis deploy order (ops last)", () => {
     expect(rendered.map(worker => worker.key)).toEqual([...DEPLOY_ORDER]);
     expect(rendered[rendered.length - 1].key).toBe("gatekeeper-ops");
+  });
+
+  it("ships the asks Gatekeeper: its own worker, DO, route, and operator-mail binding", () => {
+    const asks = byKey["gatekeeper-asks"];
+    expect(asks.name).toBe("operon-gatekeeper-asks");
+    expect(asks.routes).toEqual([{ pattern: "asks-gk.livevariant.ai", custom_domain: true }]);
+    expect(asks.durable_objects.bindings).toEqual([
+      { name: "ASKS", class_name: "AskBox" },
+      { name: "LEDGER", class_name: "Ledger" }
+    ]);
+    expect(asks.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["AskBox", "Ledger"] }]);
+    // Asks hold no send credential: mail goes through the email
+    // Gatekeeper's binding-only operator entrypoint.
+    expect(asks.services).toEqual([
+      { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" },
+      { binding: "SCHEDULER_WAKE", service: "operon-scheduler", entrypoint: "WakeQuery" }
+    ]);
+    // Deployed AFTER the scheduler, whose WakeQuery it binds.
+    expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeGreaterThan(
+      rendered.findIndex(w => w.key === "scheduler")
+    );
+    expect(byKey["scheduler"].vars.ASKS_URL).toBe("https://asks-gk.livevariant.ai");
   });
 
   it("keeps the legacy worker names byte-for-byte (renames would orphan DO state)", () => {
@@ -130,7 +153,12 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       entrypoint: "Ops"
     });
     expect(ops.services).toContainEqual({ binding: "SCHEDULER", service: "operon-scheduler" });
-    expect(ops.services).toHaveLength(12);
+    expect(ops.services).toContainEqual({
+      binding: "ASKS",
+      service: "operon-gatekeeper-asks",
+      entrypoint: "Ops"
+    });
+    expect(ops.services).toHaveLength(13);
     expect(ops.vars).toEqual({
       ACCESS_TEAM_DOMAIN: "https://floral-shape-360c.cloudflareaccess.com",
       ACCESS_AUD: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025",
@@ -166,6 +194,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     });
     expect(byKey["gatekeeper-email"].vars).toEqual({
       EMAIL_DOMAIN: "livevariant.ai",
+      OPERATOR_EMAIL: "michael@krens.nl",
       NOTIFY_URL: "https://tg.livevariant.ai/notify"
     });
     expect(byKey["gatekeeper-browser"].vars).toEqual({
