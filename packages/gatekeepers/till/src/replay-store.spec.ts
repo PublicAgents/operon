@@ -16,6 +16,9 @@ function fakeStub() {
     async delete(key: string) {
       kv.delete(key);
     },
+    async releaseClaim(key: string) {
+      claims.delete(key);
+    },
     async tryClaim(key: string, expires: number) {
       const existing = claims.get(key);
       if (existing !== undefined && existing > Date.now()) return false;
@@ -47,6 +50,15 @@ describe("durableStore adapter", () => {
     expect(await store.tryClaim("tx:0xabc", expires)).toBe(true);
     expect(await store.tryClaim("tx:0xabc", expires)).toBe(false);
     expect(await store.tryClaim("tx:0xdef", expires)).toBe(true);
+  });
+
+  it("releaseClaim drops a scratch claim so the key is claimable again", async () => {
+    const store = durableStore(fakeStub());
+    const expires = Date.now() + 60_000;
+    expect(await store.tryClaim("selfcheck:x", expires)).toBe(true);
+    expect(await store.tryClaim("selfcheck:x", expires)).toBe(false);
+    await store.releaseClaim("selfcheck:x");
+    expect(await store.tryClaim("selfcheck:x", expires)).toBe(true);
   });
 
   it("an expired claim is claimable again", async () => {

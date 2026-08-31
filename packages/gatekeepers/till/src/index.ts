@@ -292,6 +292,9 @@ export class Ops extends OpsEntrypoint<Env> {
       await store.put(`${key}:rt`, { probe: true });
       const readBack = await store.get(`${key}:rt`);
       await store.delete(`${key}:rt`);
+      // The scratch claim is diagnostic litter, not a settlement:
+      // release it so repeated checks cannot grow the claim set.
+      await store.releaseClaim(key);
       return json({
         ok: first === true && second === false,
         claimedFirst: first,
