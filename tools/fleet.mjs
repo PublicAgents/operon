@@ -27,6 +27,34 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * How long a deploy may wait for running wakes to finish. Bounded by
+ * the colony's maximum wake length: past this, something is wrong
+ * with the wake, not with the deploy.
+ */
+const DRAIN_TIMEOUT_MS = 45 * 60 * 1000;
+
+/**
+ * How long ONE worker's wrangler deploy may take. Enforced, so the
+ * deploy phase has a real upper bound rather than an assumed one. The
+ * bound exists to stop a HUNG deploy from holding the pause forever,
+ * not to police a slow one, so it is set well above what a healthy
+ * deploy needs: a large bundle on a slow link is a legitimate deploy,
+ * and killing it mid-sequence leaves the colony half-deployed.
+ */
+const WORKER_DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * The same, for a worker that carries a CONTAINER image. That deploy
+ * builds and pushes the image, which is a different order of magnitude
+ * from uploading a script: a cold build of the wake container takes
+ * many minutes, and a Dockerfile change makes every deploy a cold one.
+ */
+const CONTAINER_DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
+
+/** Room for the work the enforced limits do not cover (see below). */
+const QUEUE_SLACK_MS = 5 * 60 * 1000;
+
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = process.cwd();
 
@@ -53,6 +81,25 @@ const onlyProject = projectFlagIndex >= 0 ? rest[projectFlagIndex + 1] : undefin
 const noDrain = rest.includes("--no-drain");
 
 const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loadFleet();
+
+/**
+ * How long a deploy may queue behind ANOTHER deploy's pause: the
+ * holder's entire ENFORCED lifetime, computed rather than guessed
+ * (its full drain, plus every worker taking its full deploy timeout).
+ * A holder cannot legitimately exceed this, so a queue that reaches
+ * it is looking at a stuck pause and says so.
+ */
+const QUEUE_TIMEOUT_MS =
+  DRAIN_TIMEOUT_MS +
+  (DEPLOY_ORDER.length - 1) * WORKER_DEPLOY_TIMEOUT_MS +
+  CONTAINER_DEPLOY_TIMEOUT_MS +
+  // The enforced limits bound the WAITS, not the work between them:
+  // drain polling, spawning wrangler once per worker, and the resume
+  // round trip all happen outside them. Without slack, a holder that
+  // used its full allowance would be declared stuck for the seconds it
+  // spent on that overhead, and calling a healthy deploy stuck is the
+  // expensive direction to be wrong in.
+  QUEUE_SLACK_MS;
 
 /** Locate every manifest in the repo (spec 0006 §1 layouts). */
 function findManifests() {
@@ -132,7 +179,11 @@ async function opsCall(manifest, tool, body) {
     headers,
     body: JSON.stringify(body ?? {})
   });
-  if (!response.ok) throw new Error(`${tool} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  if (!response.ok) {
+    const error = new Error(`${tool} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 
@@ -144,7 +195,7 @@ async function opsCall(manifest, tool, body) {
  * the caller's finally always gets to resume.
  */
 async function waitForQuiet(manifest) {
-  const deadline = Date.now() + 45 * 60 * 1000;
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
   let quietOnce = false;
   for (;;) {
     const { agents: now } = await opsCall(manifest, "agents-list");
@@ -187,6 +238,7 @@ for (const manifest of manifests) {
     fail("the console build is missing; run build:chassis first (deploying without it ships a blank console)");
   }
   const { buildDir, workers } = render(manifest, { resolveIds: true });
+  const workersByKey = new Map(workers.map(worker => [worker.key, worker]));
   for (const worker of workers) {
     if (JSON.stringify(worker.config).includes(D1_PLACEHOLDER)) {
       fail(`${worker.key} still carries an unresolved resource id`);
@@ -203,7 +255,29 @@ for (const manifest of manifests) {
   let paused = false;
   if (!noDrain) {
     try {
-      await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
+      // Another deploy (CI and a laptop can both be pushed at once)
+      // holds the pause: QUEUE behind it rather than failing, since
+      // both deploys are legitimate and the loser would otherwise have
+      // to be re-run by hand. Bounded, so a genuinely stuck pause
+      // still surfaces instead of hanging forever.
+      const queueDeadline = Date.now() + QUEUE_TIMEOUT_MS;
+      for (;;) {
+        try {
+          await opsCall(manifest, "fleet-pause", { reason: "deploy in progress", token: drainToken });
+          break;
+        } catch (error) {
+          if (error.status !== 409) throw error;
+          if (Date.now() > queueDeadline) {
+            throw new Error(
+              `the fleet pause has been held longer than a deploy can legitimately hold it ` +
+                `(${Math.round(QUEUE_TIMEOUT_MS / 60000)} min); it is stuck. Verify with agents-list ` +
+                `(paused field) and clear it with fleet_resume (force: true).`
+            );
+          }
+          console.log("  another deploy holds the fleet pause; waiting for it to finish");
+          await new Promise(resolve => setTimeout(resolve, 20_000));
+        }
+      }
       paused = true;
       console.log("  fleet paused: new wakes defer; running wakes finish undisturbed");
     } catch (error) {
@@ -240,10 +314,20 @@ for (const manifest of manifests) {
     if (paused) await waitForQuiet(manifest);
     for (const key of DEPLOY_ORDER) {
       console.log(`\n→ deploying ${manifest.project}/${key}`);
+      // A worker carrying a container image gets the image-build bound;
+      // read from the rendered config, so adding a container to another
+      // worker cannot leave it on the script-sized timeout.
+      const carriesContainer = Boolean(
+        workersByKey.get(key)?.config.containers?.length
+      );
       execFileSync(
         "npx",
         ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`],
-        { cwd: PROJECT_ROOT, stdio: "inherit" }
+        {
+          cwd: PROJECT_ROOT,
+          stdio: "inherit",
+          timeout: carriesContainer ? CONTAINER_DEPLOY_TIMEOUT_MS : WORKER_DEPLOY_TIMEOUT_MS
+        }
       );
     }
   } catch (error) {
