@@ -403,6 +403,8 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
   async notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{
     ok: boolean;
     detail?: string;
+    /** False when this Gatekeeper's ledger could not record the outcome. */
+    outcomeRecorded?: boolean;
   }> {
     // No fallback to a colony catch-all here: a notification the
     // operator never configured an address for should say so, not
@@ -439,6 +441,7 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
           subject: input.subject,
           detail
         });
+        return { ok: false, detail, outcomeRecorded: true };
       } catch (auditError) {
         // The ledger holds only the requested row, which reads as
         // outcome-unknown; but this outcome is KNOWN and worse than
@@ -450,7 +453,7 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
           `audit gap: operator mail (${input.subject}) FAILED to send and the failure row could not be written either; the unresolved operator_mail_requested row is a known failure, not an unknown one.`
         ).catch(() => undefined);
       }
-      return { ok: false, detail };
+      return { ok: false, detail, outcomeRecorded: false };
     }
     // The send is an external side effect and the ledger is a Durable
     // Object: they cannot commit together, so the outcome row is
@@ -486,9 +489,9 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
         this.env,
         `audit gap: operator mail to ${to} (${input.subject}) was DELIVERED but its outcome row could not be written after three attempts. Read the unresolved operator_mail_requested row as outcome-unknown; this notice is its resolution.`
       ).catch(() => undefined);
-      return { ok: true, detail: "outcome_unrecorded" };
+      return { ok: true, detail: "outcome_unrecorded", outcomeRecorded: false };
     }
-    return { ok: true };
+    return { ok: true, outcomeRecorded: true };
   }
 }
 

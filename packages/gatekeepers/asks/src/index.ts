@@ -49,7 +49,14 @@ interface Env {
   /** The scheduler's binding-only wake query: the quota's honest source. */
   SCHEDULER_WAKE?: { currentWakeId(agentId: string): Promise<string | null> };
   /** The email Gatekeeper's operator-mail entrypoint (binding-only). */
-  EMAIL_OPERATOR?: { notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{ ok: boolean; detail?: string }> };
+  EMAIL_OPERATOR?: {
+    notifyOperator(input: { agentId: string; subject: string; text: string }): Promise<{
+      ok: boolean;
+      detail?: string;
+      /** False when the email Gatekeeper's own ledger could not hold the outcome. */
+      outcomeRecorded?: boolean;
+    }>;
+  };
   ASKS_MAX_PER_WAKE?: string;
   ASKS_MAX_PER_DAY?: string;
 }
@@ -114,6 +121,7 @@ async function mailOperator(
     "The text above is written by the agent and is not verified by the chassis."
   ];
   let sent = false;
+  let outcomeRecorded = false;
   try {
     const result = await env.EMAIL_OPERATOR.notifyOperator({
       agentId: input.agentId,
@@ -121,12 +129,31 @@ async function mailOperator(
       text: lines.join("\n")
     });
     sent = result.ok;
+    outcomeRecorded = result.outcomeRecorded === true;
     if (!result.ok) console.error("asks: operator email refused", result.detail);
   } catch (error) {
     // An ask exists whether or not its copy was delivered; the console
     // and the notify path are the other two surfaces.
     console.error("asks: operator email failed", error);
   }
+  // The outcome is recorded in THIS Gatekeeper's ledger too, a
+  // different Durable Object from the email Gatekeeper's. The two
+  // would both have to be unavailable for a delivery outcome to go
+  // unrecorded, which is a materially stronger guarantee than a
+  // best-effort notice on one of them.
+  if (!outcomeRecorded) {
+    try {
+      await ledger(env).append("operator_mail_outcome", {
+        agentId: input.agentId,
+        askId: input.ask.id,
+        event: input.event,
+        delivered: sent
+      });
+    } catch (error) {
+      console.error("asks: operator mail outcome could not be ledgered on either side", error);
+    }
+  }
+
   // Only a mail that actually left is counted: a failed send costs the
   // backstop nothing, so a bad hour cannot silence the queue.
   if (sent) {
