@@ -300,13 +300,27 @@ export default {
     if (url.pathname === "/gatekeeper/asks/unread") {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
-      // Read and ack in ONE DO turn, acked to the last entry actually
-      // handed over: an operator message written between a read and a
-      // separate ack would otherwise be marked seen without ever being
-      // delivered.
-      const body = await readJson<{ ack?: boolean }>(request);
-      const unread = await box(env).unread(agent.id, body.ok && body.value.ack === true);
-      return json({ ok: true, unread });
+      // Delivery is at-least-once: reading never acks. The porch acks
+      // separately, after the wake has persisted what it was handed,
+      // so a lost response re-delivers instead of vanishing.
+      return json({ ok: true, unread: await box(env).unread(agent.id) });
+    }
+    if (url.pathname === "/gatekeeper/asks/ack") {
+      const agent = agentFromBearer(request, env);
+      if (!agent) return errorResponse(401, "unauthorized");
+      const body = await readJson<{ cursors?: { askId?: unknown; throughSeq?: unknown }[] }>(request);
+      if (!body.ok || !Array.isArray(body.value.cursors)) return errorResponse(400, "invalid_ack");
+      const cursors = body.value.cursors
+        .filter(
+          (cursor): cursor is { askId: string; throughSeq: number } =>
+            typeof cursor?.askId === "string" &&
+            typeof cursor?.throughSeq === "number" &&
+            Number.isInteger(cursor.throughSeq) &&
+            cursor.throughSeq > 0
+        )
+        .slice(0, 200);
+      await box(env).ackUnread(agent.id, cursors);
+      return json({ ok: true, acked: cursors.length });
     }
     return errorResponse(404, "not_found");
   }

@@ -160,30 +160,36 @@ export class AskBox extends DurableObject {
   }
 
   /**
-   * The agent's unread operator activity, and the act of reading it.
-   * Marking seen is the ack (spec 0007 §6): an answer delivered is an
-   * answer the agent has actually been handed.
+   * The agent's unread operator activity. Reading NEVER acks: the
+   * chassis delivers at-least-once and acks only after the wake has
+   * persisted what it was handed (the same rule the mail and channel
+   * cursors follow). Acking on read would lose every entry in a
+   * response that never arrived, which is precisely the failure this
+   * queue exists to end.
    */
   async unread(
-    agentId: string,
-    ack = false
+    agentId: string
   ): Promise<{ id: string; title: string; state: AskState; entries: AskThreadEntry[] }[]> {
     const rows: { id: string; title: string; state: AskState; entries: AskThreadEntry[] }[] = [];
     for (const ask of await this.list({ agentId })) {
       const entries = unreadForAgent(ask);
-      if (entries.length === 0) continue;
-      rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
-      if (ack) {
-        // Acked to the SEQUENCE of the last entry actually handed over,
-        // in the same serialized turn that read it. A timestamp cursor
-        // would drop a reply that shared a millisecond with the last
-        // acked one, and marking "now" would swallow anything written
-        // between the read and the write: an answer silently lost is
-        // the exact failure this queue exists to end.
-        await this.save({ ...ask, agentSeenSeq: entries[entries.length - 1].seq });
-      }
+      if (entries.length > 0) rows.push({ id: ask.id, title: ask.title, state: ask.state, entries });
     }
     return rows;
+  }
+
+  /**
+   * Ack what the wake actually kept, per ask, up to a sequence it
+   * names. Idempotent and monotonic: a replayed ack is a no-op, and a
+   * stale one can never move a cursor backwards and re-deliver.
+   */
+  async ackUnread(agentId: string, cursors: { askId: string; throughSeq: number }[]): Promise<void> {
+    for (const cursor of cursors) {
+      const ask = await this.load(cursor.askId);
+      if (!ask || ask.agentId !== agentId) continue;
+      const next = Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq);
+      if (next !== (ask.agentSeenSeq ?? 0)) await this.save({ ...ask, agentSeenSeq: next });
+    }
   }
 
   /**
