@@ -440,7 +440,15 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
           detail
         });
       } catch (auditError) {
+        // The ledger holds only the requested row, which reads as
+        // outcome-unknown; but this outcome is KNOWN and worse than
+        // unknown, so it escalates on the other channel rather than
+        // leaving an auditor to assume the softer reading.
         console.error("operator mail failure could not be ledgered", auditError);
+        await notifyOperator(
+          this.env,
+          `audit gap: operator mail (${input.subject}) FAILED to send and the failure row could not be written either; the unresolved operator_mail_requested row is a known failure, not an unknown one.`
+        ).catch(() => undefined);
       }
       return { ok: false, detail };
     }

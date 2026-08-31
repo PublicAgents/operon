@@ -187,7 +187,11 @@ export class AskBox extends DurableObject {
     for (const cursor of cursors) {
       const ask = await this.load(cursor.askId);
       if (!ask || ask.agentId !== agentId) continue;
-      const next = Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq);
+      // Clamped to entries that EXIST: an ack past the end of the
+      // thread (a faulty porch, or a caller inventing a number) would
+      // otherwise hide every future reply behind a cursor nothing can
+      // reach.
+      const next = Math.min(Math.max(ask.agentSeenSeq ?? 0, cursor.throughSeq), ask.thread.length);
       if (next !== (ask.agentSeenSeq ?? 0)) await this.save({ ...ask, agentSeenSeq: next });
     }
   }

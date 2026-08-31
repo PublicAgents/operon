@@ -176,7 +176,12 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   const currentWake = env.SCHEDULER_WAKE
     ? await env.SCHEDULER_WAKE.currentWakeId(agent.id).catch(() => null)
     : null;
-  const wakeId = currentWake ?? `nowake:${at.slice(0, 13)}`;
+  // The fallback bucket is the DAY, not the hour: an unavailable
+  // scheduler during a long wake would otherwise hand out a fresh
+  // allotment every hour, which is a renewable quota by another name.
+  // A day bucket degrades the per-wake cap to a per-day one, and the
+  // daily backstop still binds above it.
+  const wakeId = currentWake ?? `nowake:${at.slice(0, 10)}`;
   const result = await box(env).create({
     agentId: agent.id,
     wakeId,
