@@ -12,6 +12,7 @@ import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
 import type { AskLimits } from "./skills.js";
+import { countNewAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 
 /**
@@ -402,8 +403,8 @@ async function pullAsks(
   config: WakeConfig,
   chassisWritten: Map<string, string>,
   denylist: string[]
-): Promise<{ deliveryId: string | null; fresh: number; limits?: AskLimits }> {
-  if (!config.asksUrl || !config.asksToken) return { deliveryId: null, fresh: 0 };
+): Promise<{ deliveryId: string | null; delivered: AskDelivered[]; limits?: AskLimits }> {
+  if (!config.asksUrl || !config.asksToken) return { deliveryId: null, delivered: [] };
   try {
     const response = await fetch(`${config.asksUrl}/gatekeeper/asks/unread`, {
       method: "POST",
@@ -412,7 +413,7 @@ async function pullAsks(
     });
     if (!response.ok) {
       log(`asks pull failed: ${response.status}`);
-      return { deliveryId: null, fresh: 0 };
+      return { deliveryId: null, delivered: [] };
     }
     const delivery = (await response.json()) as {
       deliveryId: string;
@@ -420,12 +421,12 @@ async function pullAsks(
         id: string;
         title: string;
         state: string;
-        entries: Array<{ at: string; kind: string; state?: string; text?: string }>;
+        entries: Array<{ seq: number; at: string; kind: string; state?: string; text?: string }>;
       }>;
       limits?: AskLimits;
     };
     const rows = delivery.unread ?? [];
-    if (rows.length === 0) return { deliveryId: null, fresh: 0, limits: delivery.limits };
+    if (rows.length === 0) return { deliveryId: null, delivered: [], limits: delivery.limits };
     const sections = rows.map(row => {
       const lines = row.entries.map(entry =>
         entry.kind === "state_change"
@@ -453,7 +454,7 @@ async function pullAsks(
       if (sanitized.sanitized) log("asks: delivery sanitized at write (matched the secret scanner)");
     } catch (error) {
       log(`asks delivery skipped, scanner unavailable: ${String(error).slice(0, 200)}`);
-      return { deliveryId: null, fresh: 0, limits: delivery.limits };
+      return { deliveryId: null, delivered: [], limits: delivery.limits };
     }
     const dir = join(STATE_DIR, "operator");
     await mkdir(dir, { recursive: true });
@@ -461,10 +462,17 @@ async function pullAsks(
     chassisWritten.set("operator/asks.md", text);
     await chownToMind(dir);
     log(`asks: ${rows.length} with new operator activity`);
-    return { deliveryId: delivery.deliveryId, fresh: rows.length, limits: delivery.limits };
+    return {
+      deliveryId: delivery.deliveryId,
+      delivered: rows.map(row => ({
+        id: row.id,
+        throughSeq: row.entries[row.entries.length - 1]?.seq ?? 0
+      })),
+      limits: delivery.limits
+    };
   } catch (error) {
     log(`asks pull error: ${String(error).slice(0, 200)}`);
-    return { deliveryId: null, fresh: 0 };
+    return { deliveryId: null, delivered: [] };
   }
 }
 
@@ -867,6 +875,11 @@ async function main(): Promise<number> {
   ackState.channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
   const asksAtStart = await pullAsks(config, chassisWritten, denylist);
   if (asksAtStart.deliveryId) ackState.asksDelivery = asksAtStart.deliveryId;
+  // What the mind has already been shown (see asks-delivery.ts). Seeded
+  // with the wake-start delivery, which is not news that arrived "while
+  // you worked".
+  const shownAsks = new Map<string, number>();
+  countNewAsks(asksAtStart.delivered, shownAsks);
 
   const verified = await verifyModel(adapter, config);
   const probedModel = verified.degraded
@@ -940,10 +953,8 @@ async function main(): Promise<number> {
       unannounced.channel = true;
     }
     const asks = await pullAsks(config, chassisWritten, denylist);
-    if (asks.deliveryId) {
-      ackState.asksDelivery = asks.deliveryId;
-      unannounced.asks += asks.fresh;
-    }
+    if (asks.deliveryId) ackState.asksDelivery = asks.deliveryId;
+    unannounced.asks += countNewAsks(asks.delivered, shownAsks);
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
