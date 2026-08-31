@@ -444,21 +444,39 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
       }
       return { ok: false, detail };
     }
+    // The send is an external side effect and the ledger is a Durable
+    // Object: they cannot commit together, so the outcome row is
+    // retried before the gap is declared. Most failures here are
+    // transient.
+    let outcomeError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await ledger(this.env).append("operator_mail_sent", {
+          agentId: input.agentId,
+          subject: input.subject
+        });
+        outcomeError = null;
+        break;
+      } catch (error) {
+        outcomeError = error;
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+    }
     try {
-      await ledger(this.env).append("operator_mail_sent", {
-        agentId: input.agentId,
-        subject: input.subject
-      });
+      if (outcomeError) throw outcomeError;
     } catch (error) {
-      // Delivered, but the ledger cannot say so: a requested row with
-      // no outcome is exactly as ambiguous as no row at all. Escalate
-      // on a DIFFERENT channel than the one that just succeeded, and
-      // tell the caller, so the gap is visible from two directions
-      // rather than resolved by guesswork later.
+      // Delivered, but the ledger cannot say so even after retries.
+      // This is not an undefined gap: a requested row with no outcome
+      // row IS the outcome-unknown state, the same doctrine spec 0002
+      // applies to a payment whose result was lost (the record assumes
+      // it MAY have happened and an operator reconciles). Escalate on
+      // a DIFFERENT channel than the one that just succeeded, and tell
+      // the caller, so the ambiguity is visible from two directions
+      // rather than reconstructed by guesswork later.
       console.error("operator mail sent but outcome row lost", error);
       await notifyOperator(
         this.env,
-        `audit gap: operator mail to ${to} (${input.subject}) was DELIVERED but its outcome row could not be written; the operator_mail_requested row plus this notice are the record.`
+        `audit gap: operator mail to ${to} (${input.subject}) was DELIVERED but its outcome row could not be written after three attempts. Read the unresolved operator_mail_requested row as outcome-unknown; this notice is its resolution.`
       ).catch(() => undefined);
       return { ok: true, detail: "outcome_unrecorded" };
     }
