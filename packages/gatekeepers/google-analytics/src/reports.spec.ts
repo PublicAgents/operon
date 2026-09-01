@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isMcpPath } from "./paths.js";
 import {
   AnalyticsError,
   ReportInputError,
@@ -122,5 +123,21 @@ describe("the other reads", () => {
     expect(calls[1].url).toBe(
       "https://analyticsadmin.googleapis.com/v1beta/accountSummaries"
     );
+  });
+});
+
+describe("the door's path (the contract with the container config)", () => {
+  it("answers /mcp/<name>, which is how every wake addresses it", () => {
+    // mcp-config.ts writes http://<virtual>/mcp/<name>; the first
+    // hand-run wake reported the server "failed" because only bare
+    // /mcp was accepted.
+    expect(isMcpPath("/mcp/google-analytics")).toBe(true);
+    expect(isMcpPath("/mcp")).toBe(true);
+  });
+
+  it("refuses anything else", () => {
+    for (const path of ["/", "/mcp/", "/mcp/Google", "/mcp/a/b", "/gatekeeper/google-analytics/ledger"]) {
+      expect(isMcpPath(path), path).toBe(false);
+    }
   });
 });
