@@ -6,9 +6,11 @@ import {
   requireBearer,
   Ledger,
   commitToBranch,
+  githubApi,
   GitDataError,
   type GitFile, OpsEntrypoint } from "@operon/worker-kit";
 import { signAppJwt } from "./app-jwt.js";
+import { branchDecision } from "./branch-policy.js";
 
 export { Ledger };
 
@@ -32,6 +34,11 @@ export { signAppJwt, pemToPkcs8Bytes } from "./app-jwt.js";
  *  - /commit: persist the wake's file changes by committing them to the
  *    state repo through the Git Data API. No push token ever enters the
  *    container; the container only sends file data.
+ *  - /branch: commit to a NON-DEFAULT branch of a repo the agent was
+ *    granted write on (spec 0008 §6), with a token minted for that one
+ *    repo. The merge gate survives on three legs, all required: this
+ *    mint-time scope, the default-branch refusal below, and branch
+ *    protection on the GitHub side.
  */
 
 interface Env {
@@ -77,6 +84,35 @@ async function installationToken(
   }
   const { token, expires_at } = (await response.json()) as { token: string; expires_at: string };
   return { token, expiresAt: expires_at };
+}
+
+/**
+ * The branch must exist before commitToBranch can fast-forward it, so a
+ * first commit to a new branch forks it off the repo's default head. A
+ * ref that already exists is left alone: this door never resets a branch
+ * it did not create, it only appends to it.
+ */
+async function ensureBranch(
+  api: { token: string; userAgent: string },
+  ownerRepo: string,
+  branch: string,
+  defaultBranch: string
+): Promise<void> {
+  try {
+    await githubApi(api, "GET", `/repos/${ownerRepo}/git/ref/heads/${branch}`);
+    return;
+  } catch (error) {
+    if (!(error instanceof GitDataError) || error.status !== 404) throw error;
+  }
+  const head = (await githubApi(
+    api,
+    "GET",
+    `/repos/${ownerRepo}/git/ref/heads/${defaultBranch}`
+  )) as { object: { sha: string } };
+  await githubApi(api, "POST", `/repos/${ownerRepo}/git/refs`, {
+    ref: `refs/heads/${branch}`,
+    sha: head.object.sha
+  });
 }
 
 async function resolveAgent(
@@ -187,11 +223,120 @@ async function commitState(request: Request, env: Env): Promise<Response> {
   }
 }
 
+/**
+ * Commit to a branch of a repo the agent holds a write grant on (spec
+ * 0008 §6). Everything that bounds this door is decided BEFORE the
+ * token exists: the roster grant says which repo, and the mint scopes
+ * the credential to exactly that repo, so no argument in the request
+ * can widen it.
+ */
+async function commitBranch(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.COMMIT_SERVICE_TOKEN);
+  if (denied) {
+    await ledger(env).append("branch_denied", { status: denied.status });
+    return denied;
+  }
+  const body = await readJson<{
+    agentId?: string;
+    repo?: string;
+    branch?: string;
+    message?: string;
+    files?: GitFile[];
+    deletions?: string[];
+  }>(request);
+  if (!body.ok) {
+    await ledger(env).append("branch_failed", { reason: "malformed_json" });
+    return errorResponse(400, "malformed_json");
+  }
+  const agent = await resolveAgent(env, body.value.agentId);
+  if (agent instanceof Response) return agent;
+  if (!appConfigured(env)) {
+    await ledger(env).append("branch_failed", { reason: "app_unconfigured", agentId: agent.id });
+    return errorResponse(500, "github_app_unconfigured");
+  }
+
+  const { repo, branch, message, files, deletions } = body.value;
+  const granted = agent.github?.write ?? [];
+  // Pre-network: the grant decides which repo, before a token exists.
+  const decision = branchDecision({ granted, repo, branch }, agent.id);
+  if (!decision.ok) {
+    await ledger(env).append("branch_failed", { reason: decision.code, agentId: agent.id, repo });
+    return errorResponse(decision.status, decision.code, decision.detail);
+  }
+  if (typeof message !== "string" || message.length === 0) {
+    return errorResponse(400, "missing_message");
+  }
+  const safeFiles = Array.isArray(files) ? files : [];
+  const safeDeletions = Array.isArray(deletions) ? deletions : [];
+  if (safeFiles.length === 0 && safeDeletions.length === 0) return errorResponse(400, "no_files");
+  for (const file of safeFiles) {
+    if (
+      typeof file?.path !== "string" ||
+      file.path.includes("..") ||
+      file.path.startsWith("/") ||
+      typeof file.contentBase64 !== "string"
+    ) {
+      await ledger(env).append("branch_failed", { reason: "invalid_file", agentId: agent.id, path: file?.path });
+      return errorResponse(400, "invalid_file", String(file?.path));
+    }
+  }
+
+  try {
+    const [, repoName] = decision.repo.split("/");
+    const { token } = await installationToken(env, repoName, "write");
+    const api = { token, userAgent: "operon-gatekeeper-github" };
+    const info = (await githubApi(api, "GET", `/repos/${decision.repo}`)) as {
+      default_branch: string;
+    };
+    const withDefault = branchDecision(
+      { granted, repo, branch, defaultBranch: info.default_branch },
+      agent.id
+    );
+    if (!withDefault.ok) {
+      await ledger(env).append("branch_failed", {
+        reason: withDefault.code,
+        agentId: agent.id,
+        repo: decision.repo,
+        branch: decision.branch
+      });
+      return errorResponse(withDefault.status, withDefault.code, withDefault.detail);
+    }
+    await ensureBranch(api, decision.repo, decision.branch, info.default_branch);
+    const result = await commitToBranch(api, decision.repo, {
+      branch: decision.branch,
+      message,
+      files: safeFiles,
+      deletions: safeDeletions
+    });
+    await ledger(env).append("branch_committed", {
+      agentId: agent.id,
+      repo: decision.repo,
+      branch: decision.branch,
+      commit: result.commitSha,
+      files: safeFiles.length,
+      deletions: safeDeletions.length
+    });
+    return json({ ok: true, repo: decision.repo, ...result });
+  } catch (error) {
+    // GitHub's own words: "not installed on this repository" is the
+    // answer the operator needs, and paraphrasing it would hide it.
+    const detail = error instanceof GitDataError ? error.message : String(error);
+    await ledger(env).append("branch_failed", {
+      reason: "github_api_error",
+      agentId: agent.id,
+      repo,
+      detail: detail.slice(0, 300)
+    });
+    return errorResponse(502, "branch_commit_failed", detail.slice(0, 300));
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/token" && request.method === "POST") return mintCloneToken(request, env);
     if (url.pathname === "/commit" && request.method === "POST") return commitState(request, env);
+    if (url.pathname === "/branch" && request.method === "POST") return commitBranch(request, env);
     return errorResponse(404, "not_found");
   }
 } satisfies ExportedHandler<Env>;

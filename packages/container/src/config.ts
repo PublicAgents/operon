@@ -97,8 +97,14 @@ export interface WakeConfig {
   asksToken?: string;
   /** Staged MCP servers (spec 0008 §4): stdio defs, or a name plus virtual host. */
   mcpServers: StagedMcpServer[];
-  /** This agent's GitHub grants (spec 0008 §6); empty lists grant nothing. */
-  githubGrants: { pr: string[]; write: string[] };
+  /**
+   * This agent's GitHub grants (spec 0008 §6), or undefined when the
+   * roster carries none. The difference is load-bearing: an EXPLICIT
+   * empty grant means "nothing", while an ABSENT one means "fall back
+   * to the fleet list", and conflating them would let the container
+   * admit repos the Gatekeeper refuses.
+   */
+  githubGrants?: { pr: string[]; write: string[] };
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -146,8 +152,10 @@ function parseMcpServers(raw: string | undefined): StagedMcpServer[] {
   return parsed as StagedMcpServer[];
 }
 
-function parseGithubGrants(raw: string | undefined): { pr: string[]; write: string[] } {
-  if (!raw) return { pr: [], write: [] };
+function parseGithubGrants(
+  raw: string | undefined
+): { pr: string[]; write: string[] } | undefined {
+  if (!raw) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

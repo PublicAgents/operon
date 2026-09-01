@@ -33,6 +33,7 @@ export function renderSkills(
   askLimits?: AskLimits
 ): string {
   void config; // reserved: future per-colony guidance (hosts, PR targets)
+  const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
   const askCeiling = askLimits
     ? `at most ${askLimits.perWake} per wake, ${askLimits.perDay} per day`
     : "there is a per-wake ceiling; the door names it if you reach it";
@@ -170,6 +171,12 @@ GITHUB (a Gatekeeper holds the credential; you submit data)
   operon github push <owner/repo> <n> [dir] --message <m>
                                          follow-up commits to YOUR open PR${mark(caps.github)}
   operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]${mark(caps.github)}
+  operon github branch <owner/repo> [dir] --branch <b> --message <m>
+                                         commit straight to a NON-DEFAULT branch
+                                         of a repo you hold a WRITE grant on${
+                                           writeRepos.length > 0 ? ` (${writeRepos.join(", ")})` : ""
+                                         }; the default branch is refused,
+                                         because review happens on a PR${mark(writeRepos.length > 0)}
 
 Doors answer with named errors; the error names what to fix. A door
 that is not wired answers *_not_wired. This guide is rendered live by

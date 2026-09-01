@@ -107,6 +107,13 @@ the fallback for agents without a `github:` block; a manifest that
 sets both for the same agent refuses at `--check`, because two sources
 of the same truth is how allowlists rot.
 
+The switch is the PRESENCE OF THE BLOCK, not of a key inside it, and
+every layer keys on the same thing: an agent whose entry says
+`github:` has per-agent grants, and a list missing from inside that
+block means nothing rather than the fleet's. Reading a missing `pr:`
+as a fallback would hand an agent granted only `write:` the entire
+fleet allowlist, and an explicit `pr: []` must mean what it says.
+
 `github.write` names repos where the agent may commit to non-default
 branches through the App (section 6). The App installation must cover
 those repos; that cannot be validated offline, so it refuses at mint
@@ -278,8 +285,17 @@ existing colonies keep working, and its use is logged by name as a
 degradation, because with a shared login "authored by me" means
 "authored by everyone". All allowlist checks resolve the calling
 agent's `github.pr` grant from the roster; authorship checks resolve
-against that agent's own login. Refusals: `repo_not_granted`,
-`not_your_item`.
+against that agent's own login.
+
+The agent id arrives in the request body, so it is a CLAIM, and it
+selects both the repo grant and the credential. Both Gatekeepers
+therefore check it against the roster before it selects anything: an
+id the roster does not list is `unknown_agent`, and a Worker with no
+parseable `ROSTER` refuses with `roster_unavailable` rather than
+guessing, because every Worker is deployed with that var and its
+absence is a broken deployment, not a request to be served. Other
+refusals: `repo_not_granted`, `not_author`, `write_not_granted`,
+`default_branch_protected`.
 
 ### Branch write (github)
 
@@ -296,10 +312,16 @@ for the repos it grants. Ledgered like `/commit`.
 
 The container door is `operon github branch <owner/repo> [dir]
 --branch <b> --message <m>`, swept like every outbound payload. The
-porch also gains the missing symmetry: every github door pre-checks
-the agent's own grants (delivered as `OPERON_GITHUB_GRANTS`), with the
-Gatekeeper remaining authoritative; previously only three of eight
-doors had the container-side check.
+porch pre-checks the agent's own grants (delivered as
+`OPERON_GITHUB_GRANTS`) wherever the rule is knowable locally: the pr,
+issue, upstream-file, and branch doors, so a refusal costs no round
+trip and every door says the same thing. The authorship doors (thread,
+comment, update, push) are deliberately NOT pre-checked, because their
+rule is "this agent's account authored the item", which is only
+knowable from GitHub; pre-checking a repo list there would refuse the
+legitimate case the rule exists for, an agent's own pull request on a
+repo nobody granted it. The Gatekeeper remains authoritative for all
+eight.
 
 ### Why not the GitHub MCP server
 

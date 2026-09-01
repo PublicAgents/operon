@@ -1,3 +1,4 @@
+import { grantedRepos, rosterVerdict } from "./grants.js";
 import {
   errorResponse,
   json,
@@ -30,6 +31,7 @@ export class Ops extends OpsEntrypoint<Env> {
   }
 }
 export * from "./github.js";
+export { grantedRepos } from "./grants.js";
 
 /**
  * The PR Gatekeeper: opens fork-based pull requests and issues for
@@ -40,6 +42,7 @@ export * from "./github.js";
  */
 
 interface Env {
+  ROSTER?: string;
   MACHINE_PAT?: string;
   PR_SERVICE_TOKEN?: string;
   PR_REPOS?: string;
@@ -48,26 +51,54 @@ interface Env {
 }
 
 /**
- * The GitHub credential for an agent: its own account's PAT
- * (MACHINE_PAT_<AGENTID>) when set, else the shared MACHINE_PAT. Per-agent
- * accounts let each agent open and own its PRs under its own identity and
- * receive its own notifications.
+ * The GitHub identity for an agent: its OWN account's PAT
+ * (MACHINE_PAT_<AGENTID>) when set, else the shared MACHINE_PAT.
+ *
+ * Which one answered matters enough to travel with the result. Every
+ * authorship rule below asks "did this credential's login author the
+ * item", so under the shared PAT "mine" means "any agent's", and one
+ * agent can update or push to another's pull request (spec 0008 §6).
+ * Per-agent accounts make that check mean what it says; the shared
+ * fallback keeps existing colonies working and is ledgered as the
+ * degradation it is.
  */
-function patForAgent(env: Env, agentId: string): string | undefined {
+function patForAgent(env: Env, agentId: string): { token: string; shared: boolean } | undefined {
   const perAgent = env[`MACHINE_PAT_${agentId.toUpperCase().replace(/-/g, "_")}`];
-  if (typeof perAgent === "string" && perAgent.length > 0) return perAgent;
-  return env.MACHINE_PAT;
+  if (typeof perAgent === "string" && perAgent.length > 0) {
+    return { token: perAgent, shared: false };
+  }
+  if (typeof env.MACHINE_PAT === "string" && env.MACHINE_PAT.length > 0) {
+    return { token: env.MACHINE_PAT, shared: true };
+  }
+  return undefined;
 }
 
 function ledger(env: Env) {
   return env.LEDGER.get(env.LEDGER.idFromName("pr"));
 }
 
-function allowlist(env: Env): string[] {
-  return (env.PR_REPOS ?? "")
-    .split(",")
-    .map(repo => repo.trim())
-    .filter(repo => repo.length > 0);
+/**
+ * The one place an agent's claimed identity becomes a credential. The
+ * name arrives in the request body, so it is checked against the roster
+ * before it selects anything: an unknown name must not pick up the
+ * shared PAT and the fleet repo list on its way past.
+ */
+function identify(env: Env, agentId: unknown): { token: string; shared: boolean } | Response {
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return errorResponse(400, "missing_agent_id");
+  }
+  const verdict = rosterVerdict(env, agentId);
+  if (verdict === "unknown") return errorResponse(404, "unknown_agent", agentId);
+  if (verdict === "no-roster") {
+    // Every Worker is deployed with the ROSTER var, so this is a broken
+    // deployment rather than a bad request. Fail closed and say which:
+    // an unverifiable claim must not reach the shared credential, and
+    // an operator reading "unknown_agent" would hunt the wrong thing.
+    return errorResponse(500, "roster_unavailable", "this Worker has no parseable ROSTER var");
+  }
+  const pat = patForAgent(env, agentId);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  return pat;
 }
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -86,9 +117,10 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
   }
   const { repo, title, body: prBody, files, submodules, agentId } = body.value;
 
-  if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
-    await ledger(env).append("pr_failed", { reason: "repo_not_allowlisted", repo });
-    return errorResponse(403, "repo_not_allowlisted", `allowed: ${allowlist(env).join(", ")}`);
+  const granted = typeof agentId === "string" ? grantedRepos(env, agentId) : [];
+  if (typeof repo !== "string" || !REPO.test(repo) || !granted.includes(repo)) {
+    await ledger(env).append("pr_failed", { reason: "repo_not_granted", agentId, repo });
+    return errorResponse(403, "repo_not_granted", `granted to ${agentId}: ${granted.join(", ") || "nothing"}`);
   }
   if (typeof title !== "string" || !title || typeof prBody !== "string" || !prBody) {
     await ledger(env).append("pr_failed", { reason: "missing_title_or_body", repo });
@@ -154,20 +186,21 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
       return errorResponse(400, "invalid_file", String(file?.path));
     }
   }
-  const pat = typeof agentId === "string" ? patForAgent(env, agentId) : undefined;
-  if (!pat) {
-    await ledger(env).append("pr_failed", { reason: "credential_unconfigured", repo });
-    return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) {
+    await ledger(env).append("pr_failed", { reason: "identity_refused", agentId, repo });
+    return pat;
   }
 
   try {
     const result = await openPullRequest(
-      { token: pat, userAgent: "operon-gatekeeper-pr" },
+      { token: pat.token, userAgent: "operon-gatekeeper-pr" },
       { repo, title, body: prBody, files, submodules: links },
       crypto.randomUUID()
     );
     await ledger(env).append("pr_opened", {
       agentId,
+      identity: pat.shared ? "shared" : agentId,
       repo,
       url: result.url,
       branch: result.branch,
@@ -196,24 +229,34 @@ async function handleIssue(request: Request, env: Env): Promise<Response> {
     return errorResponse(400, "malformed_json");
   }
   const { repo, title, body: issueBody, agentId } = body.value;
-  if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
-    await ledger(env).append("issue_failed", { reason: "repo_not_allowlisted", repo });
-    return errorResponse(403, "repo_not_allowlisted", `allowed: ${allowlist(env).join(", ")}`);
+  const grantedForIssue = typeof agentId === "string" ? grantedRepos(env, agentId) : [];
+  if (typeof repo !== "string" || !REPO.test(repo) || !grantedForIssue.includes(repo)) {
+    await ledger(env).append("issue_failed", { reason: "repo_not_granted", agentId, repo });
+    return errorResponse(
+      403,
+      "repo_not_granted",
+      `granted to ${agentId}: ${grantedForIssue.join(", ") || "nothing"}`
+    );
   }
   if (typeof title !== "string" || !title || typeof issueBody !== "string" || !issueBody) {
     await ledger(env).append("issue_failed", { reason: "missing_title_or_body", repo });
     return errorResponse(400, "missing_title_or_body");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const result = await openIssue(
-      { token: pat, userAgent: "operon-gatekeeper-pr" },
+      { token: pat.token, userAgent: "operon-gatekeeper-pr" },
       repo,
       title,
       issueBody
     );
-    await ledger(env).append("issue_opened", { agentId, repo, url: result.url });
+    await ledger(env).append("issue_opened", {
+      agentId,
+      identity: pat.shared ? "shared" : agentId,
+      repo,
+      url: result.url
+    });
     return json({ ok: true, ...result });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
@@ -227,10 +270,13 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   if (denied) return denied;
   const body = await readJson<{ agentId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
-  const pat = typeof body.value.agentId === "string" ? patForAgent(env, body.value.agentId) : undefined;
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, body.value.agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const activity = await listActivity({ token: pat, userAgent: "operon-gatekeeper-pr" }, allowlist(env));
+    const activity = await listActivity(
+      { token: pat.token, userAgent: "operon-gatekeeper-pr" },
+      grantedRepos(env, body.value.agentId as string)
+    );
     return json({ ok: true, ...activity });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
@@ -251,6 +297,7 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
 
 async function conversationAccess(
   env: Env,
+  agentId: string,
   pat: string,
   repo: string,
   number: number
@@ -258,8 +305,8 @@ async function conversationAccess(
   const login = await authenticatedLogin({ token: pat, userAgent: "operon-gatekeeper-pr" });
   const ref = await getIssueRef({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number);
   const own = ref.author === login;
-  if (!own && !allowlist(env).includes(repo)) {
-    return errorResponse(403, "not_own_and_not_allowlisted", `${repo}#${number}`);
+  if (!own && !grantedRepos(env, agentId).includes(repo)) {
+    return errorResponse(403, "not_own_and_not_granted", `${repo}#${number}`);
   }
   return { ref, own };
 }
@@ -273,12 +320,15 @@ async function handleThread(request: Request, env: Env): Promise<Response> {
   if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
     return errorResponse(400, "invalid_request");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const access = await conversationAccess(env, pat, repo, number);
+    const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) return access;
-    return json({ ok: true, thread: await getThread({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number) });
+    return json({
+      ok: true,
+      thread: await getThread({ token: pat.token, userAgent: "operon-gatekeeper-pr" }, repo, number)
+    });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
     return errorResponse(502, "thread_failed", detail.slice(0, 300));
@@ -301,15 +351,15 @@ async function handleComment(request: Request, env: Env): Promise<Response> {
     return errorResponse(400, "invalid_request");
   }
   if (typeof text !== "string" || !text) return errorResponse(400, "missing_body");
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const access = await conversationAccess(env, pat, repo, number);
+    const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) {
       await ledger(env).append("comment_denied", { agentId, repo, number });
       return access;
     }
-    const api = { token: pat, userAgent: "operon-gatekeeper-pr" };
+    const api = { token: pat.token, userAgent: "operon-gatekeeper-pr" };
     const result =
       typeof replyTo === "number"
         ? await replyToReviewComment(api, repo, number, replyTo, text)
@@ -347,17 +397,28 @@ async function handleUpdate(request: Request, env: Env): Promise<Response> {
   if (typeof text === "string" && text) patch.body = text;
   if (state) patch.state = state;
   if (Object.keys(patch).length === 0) return errorResponse(400, "empty_patch");
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const access = await conversationAccess(env, pat, repo, number);
+    const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) return access;
     if (!access.own) {
       await ledger(env).append("update_denied", { agentId, repo, number, reason: "not_author" });
       return errorResponse(403, "not_author", "only the item's own author may update it");
     }
-    const result = await updateIssue({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number, patch);
-    await ledger(env).append("item_updated", { agentId, repo, number, fields: Object.keys(patch) });
+    const result = await updateIssue(
+      { token: pat.token, userAgent: "operon-gatekeeper-pr" },
+      repo,
+      number,
+      patch
+    );
+    await ledger(env).append("item_updated", {
+      agentId,
+      identity: pat.shared ? "shared" : agentId,
+      repo,
+      number,
+      fields: Object.keys(patch)
+    });
     return json({ ok: true, ...result });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
@@ -393,10 +454,10 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       return errorResponse(400, "invalid_file", String(file?.path));
     }
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const api = { token: pat, userAgent: "operon-gatekeeper-pr" };
+    const api = { token: pat.token, userAgent: "operon-gatekeeper-pr" };
     const login = await authenticatedLogin(api);
     const ref = await getIssueRef(api, repo, number);
     if (ref.kind !== "pr") return errorResponse(400, "not_a_pr");
@@ -415,7 +476,14 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       message,
       files as Array<{ path: string; contentBase64: string }>
     );
-    await ledger(env).append("pr_pushed", { agentId, repo, number, commit: result.commitSha, files: files.length });
+    await ledger(env).append("pr_pushed", {
+      agentId,
+      identity: pat.shared ? "shared" : agentId,
+      repo,
+      number,
+      commit: result.commitSha,
+      files: files.length
+    });
     return json({ ok: true, ...result });
   } catch (error) {
     const detail = error instanceof GitDataError ? error.message : String(error);
@@ -430,8 +498,13 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   const body = await readJson<{ agentId?: string; repo?: string; path?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, repo, path } = body.value;
-  if (typeof repo !== "string" || !REPO.test(repo) || !allowlist(env).includes(repo)) {
-    return errorResponse(403, "repo_not_allowlisted", `allowed: ${allowlist(env).join(", ")}`);
+  const grantedForFile = typeof agentId === "string" ? grantedRepos(env, agentId) : [];
+  if (typeof repo !== "string" || !REPO.test(repo) || !grantedForFile.includes(repo)) {
+    return errorResponse(
+      403,
+      "repo_not_granted",
+      `granted to ${agentId}: ${grantedForFile.join(", ") || "nothing"}`
+    );
   }
   if (
     typeof path !== "string" ||
@@ -441,10 +514,10 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   ) {
     return errorResponse(400, "invalid_path");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
-    const file = await getUpstreamFile({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, path);
+    const file = await getUpstreamFile({ token: pat.token, userAgent: "operon-gatekeeper-pr" }, repo, path);
     return json({ ok: true, ...file });
   } catch (error) {
     return errorResponse(502, "upstream_file_failed", String(error).slice(0, 300));

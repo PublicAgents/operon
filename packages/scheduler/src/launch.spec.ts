@@ -71,6 +71,35 @@ describe("prepareLaunch", () => {
     expect(prepared.env[WAKE_ENV.webToken]).toBe(prepared.umbilicalNonce);
   });
 
+  it("carries the agent's own GitHub grants into the wake", async () => {
+    const granted = {
+      ...agent,
+      github: { pr: ["demo/product"], write: ["demo/product"] }
+    };
+    const prepared = await prepareLaunch(granted, "cron", "wake-grants", context());
+    expect(JSON.parse(prepared.env[WAKE_ENV.githubGrants] as string)).toEqual({
+      pr: ["demo/product"],
+      write: ["demo/product"]
+    });
+    // A write-only grant still carries an explicit empty pr list, so
+    // the container refuses PR repos the Gatekeeper would also refuse.
+    const writeOnly = await prepareLaunch(
+      { ...agent, github: { write: ["demo/product"] } },
+      "cron",
+      "wake-write",
+      context()
+    );
+    expect(JSON.parse(writeOnly.env[WAKE_ENV.githubGrants] as string)).toEqual({
+      pr: [],
+      write: ["demo/product"]
+    });
+    // An agent with no github block carries no variable at all, so the
+    // porch falls back to the fleet list rather than reading a missing
+    // grant as "granted nothing".
+    const plain = await prepareLaunch(agent, "cron", "wake-plain", context());
+    expect(plain.env[WAKE_ENV.githubGrants]).toBeUndefined();
+  });
+
   it("fails closed with a named error when the mind credential is missing", async () => {
     const missing = context({ getSecret: () => undefined });
     await expect(prepareLaunch(agent, "cron", "wake-1", missing)).rejects.toThrowError(
