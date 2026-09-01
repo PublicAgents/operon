@@ -41,7 +41,8 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   x: ["X_DISCLOSURE_ATTESTED", "X_DAILY_CAP"],
   email: ["EMAIL_DOMAIN"],
   pr: ["PR_REPOS"],
-  deploy: ["DISCLOSURE_MARKER"],
+  deploy: ["DISCLOSURE_MARKER", "GA_MEASUREMENT_ID"],
+  "google-analytics": ["GA_PROPERTY_ID"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
   scheduler: ["HARNESS_EXTRA_ARGS"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
