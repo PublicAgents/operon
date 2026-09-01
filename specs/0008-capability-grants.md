@@ -296,10 +296,16 @@ for the repos it grants. Ledgered like `/commit`.
 
 The container door is `operon github branch <owner/repo> [dir]
 --branch <b> --message <m>`, swept like every outbound payload. The
-porch also gains the missing symmetry: every github door pre-checks
-the agent's own grants (delivered as `OPERON_GITHUB_GRANTS`), with the
-Gatekeeper remaining authoritative; previously only three of eight
-doors had the container-side check.
+porch pre-checks the agent's own grants (delivered as
+`OPERON_GITHUB_GRANTS`) wherever the rule is knowable locally: the pr,
+issue, upstream-file, and branch doors, so a refusal costs no round
+trip and every door says the same thing. The authorship doors (thread,
+comment, update, push) are deliberately NOT pre-checked, because their
+rule is "this agent's account authored the item", which is only
+knowable from GitHub; pre-checking a repo list there would refuse the
+legitimate case the rule exists for, an agent's own pull request on a
+repo nobody granted it. The Gatekeeper remains authoritative for all
+eight.
 
 ### Why not the GitHub MCP server
 

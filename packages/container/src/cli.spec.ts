@@ -259,6 +259,34 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["ask", "close"])).toThrow(/ask-id/);
   });
 
+  it("parses the branch door", () => {
+    expect(
+      parseArgs([
+        "github",
+        "branch",
+        "org/repo",
+        "out",
+        "--branch",
+        "prior/experiment",
+        "--message",
+        "wip"
+      ])
+    ).toEqual({
+      path: "/github/branch",
+      payload: { repo: "org/repo", branch: "prior/experiment", message: "wip", dir: "out" }
+    });
+    expect(
+      parseArgs(["github", "branch", "org/repo", "--branch", "b", "--message", "m"])
+    ).toEqual({
+      path: "/github/branch",
+      payload: { repo: "org/repo", branch: "b", message: "m", dir: "pr" }
+    });
+    expect(() => parseArgs(["github", "branch", "org/repo", "--branch", "b"])).toThrow(
+      /--message/
+    );
+    expect(() => parseArgs(["github", "branch", "org/repo", "--message", "m"])).toThrow(/--branch/);
+  });
+
   it("rejects missing requireds with usage errors", () => {
     expect(() => parseArgs(["notify"])).toThrowError(CliUsageError);
     expect(() => parseArgs(["publish"])).toThrowError(/--host/);

@@ -159,6 +159,13 @@ allowlisted repos = you may read and comment on anything in them.
   operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]
                                          edit YOUR OWN PR/issue title or body, or
                                          close/reopen it
+  operon github branch <owner/repo> [dir] --branch <b> --message <m>
+                                         commit files straight to a NON-DEFAULT
+                                         branch of a repo you hold a WRITE grant
+                                         on (operon capabilities lists them).
+                                         The default branch is refused: review
+                                         still happens on a pull request. dir
+                                         defaults to "pr", swept like publish.
   operon github issue <owner/repo> <bodyfile> --title <t>
                                          open an issue on an allowlisted repo; the
                                          body is read from bodyfile (a markdown file
@@ -561,6 +568,20 @@ function parseGithub(args: string[]): CliCall {
         }
       };
     }
+    case "branch": {
+      const [repo, dir] = positionals(rest);
+      const branch = flagValue(rest, "--branch");
+      const message = flagValue(rest, "--message");
+      if (!repo || !repo.includes("/") || !branch || !message) {
+        throw new CliUsageError(
+          "usage: operon github branch <owner/repo> [dir] --branch <b> --message <m>"
+        );
+      }
+      return {
+        path: "/github/branch",
+        payload: { repo, branch, message, dir: dir ?? "pr" }
+      };
+    }
     case "issue": {
       const [repo, bodyFile] = positionals(rest);
       const title = flagValue(rest, "--title");
@@ -571,7 +592,7 @@ function parseGithub(args: string[]): CliCall {
     }
     default:
       throw new CliUsageError(
-        'unknown github subcommand; expected one of: status, thread, comment, pr, push, update, issue'
+        "unknown github subcommand; expected one of: status, thread, comment, pr, push, update, issue, branch"
       );
   }
 }

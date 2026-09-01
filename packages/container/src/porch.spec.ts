@@ -32,6 +32,8 @@ function config(overrides: Partial<WakeConfig> = {}): WakeConfig {
     maxWakeMinutes: 120,
     hosts: ["@"],
     prRepos: [],
+    mcpServers: [],
+    githubGrants: { pr: [], write: [] },
     ...overrides
   };
 }
@@ -327,7 +329,7 @@ describe("porch doors", () => {
     }
   );
 
-  it("refuses PR targets off the allowlist", async () => {
+  it("refuses PR targets the agent was not granted", async () => {
     const { url } = await startPorch(
       config({ prUrl: "http://unused", prToken: "b", prRepos: ["org/allowed"] })
     );
@@ -337,7 +339,46 @@ describe("porch doors", () => {
       body: JSON.stringify({ repo: "org/other", title: "t", body: "b" })
     });
     expect(response.status).toBe(403);
-    expect(((await response.json()) as { error: string }).error).toBe("repo_not_allowlisted");
+    expect(((await response.json()) as { error: string }).error).toBe("repo_not_granted");
+  });
+
+  it("prefers the per-agent grant over the fleet list, and refuses outside it", async () => {
+    // The fleet list still names org/allowed; this agent's own grant
+    // does not, so the grant is what binds (spec 0008 §3).
+    const { url } = await startPorch(
+      config({
+        prUrl: "http://unused",
+        prToken: "b",
+        prRepos: ["org/allowed"],
+        githubGrants: { pr: ["org/mine"], write: [] }
+      })
+    );
+    const refused = await fetch(`${url}/github/pr`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1" },
+      body: JSON.stringify({ repo: "org/allowed", title: "t", body: "b" })
+    });
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { detail: string }).detail).toContain("org/mine");
+  });
+
+  it("refuses a branch commit to a repo with no write grant, without a round trip", async () => {
+    const { url } = await startPorch(
+      config({
+        persistUrl: "http://unused/commit",
+        persistToken: "b",
+        githubGrants: { pr: ["org/mine"], write: ["org/mine"] }
+      })
+    );
+    const response = await fetch(`${url}/github/branch`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1" },
+      body: JSON.stringify({ repo: "org/other", branch: "wip", message: "m" })
+    });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string; detail: string };
+    expect(body.error).toBe("write_not_granted");
+    expect(body.detail).toContain("org/mine");
   });
 
   it.skipIf(!hasGitleaks)(

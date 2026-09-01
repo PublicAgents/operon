@@ -121,12 +121,23 @@ function fail(status: number, error: string, detail?: string): JsonResult {
   return { status, body: { ok: false, error, ...(detail ? { detail } : {}) } };
 }
 
+/**
+ * The repos this wake may open PRs and issues against: its per-agent
+ * grant when the scheduler sent one, else the fleet-wide list (spec
+ * 0008 §3). The Gatekeeper decides authoritatively; this is the
+ * container-side pre-check, so a refusal costs no round trip and every
+ * door tells the mind the same thing.
+ */
+export function prRepos(config: WakeConfig): string[] {
+  return config.githubGrants.pr.length > 0 ? config.githubGrants.pr : config.prRepos;
+}
+
 export function capabilities(config: WakeConfig): Record<string, unknown> {
   return {
     notify: Boolean(config.notifyUrl && config.notifyToken),
     publish: Boolean(config.publishUrl && config.publishToken),
     github: Boolean(config.prUrl && config.prToken),
-    pr: Boolean(config.prUrl && config.prToken && config.prRepos.length > 0),
+    pr: Boolean(config.prUrl && config.prToken && prRepos(config).length > 0),
     email: Boolean(config.emailUrl && config.emailToken),
     till: Boolean(config.tillUrl && config.tillToken),
     pay: Boolean(config.spendUrl && config.spendToken),
@@ -135,7 +146,9 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     x: Boolean(config.xUrl && config.xToken),
     web: Boolean(config.webUrl && config.webToken),
     hosts: config.hosts,
-    prRepos: config.prRepos
+    prRepos: prRepos(config),
+    githubWrite: config.githubGrants.write,
+    mcp: config.mcpServers.map(server => server.name)
   };
 }
 
@@ -278,6 +291,7 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/github/comment") return await this.comment(body);
       if (request.method === "POST" && url.pathname === "/github/update") return await this.update(body);
       if (request.method === "POST" && url.pathname === "/github/push") return await this.push(body);
+      if (request.method === "POST" && url.pathname === "/github/branch") return await this.branch(body);
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       if (request.method === "POST" && url.pathname === "/email/original") return await this.emailOriginal(body);
       if (request.method === "POST" && url.pathname === "/till/offer") return await this.tillOffer(body);
@@ -474,12 +488,12 @@ export class Porch {
 
   private async pr(body: Record<string, unknown>): Promise<JsonResult> {
     const { config, log } = this.context;
-    if (!config.prUrl || !config.prToken || config.prRepos.length === 0) {
+    if (!config.prUrl || !config.prToken || prRepos(config).length === 0) {
       return fail(503, "pr_not_wired");
     }
     const repo = body.repo;
-    if (typeof repo !== "string" || !config.prRepos.includes(repo)) {
-      return fail(403, "repo_not_allowlisted", `allowed: ${config.prRepos.join(", ")}`);
+    if (typeof repo !== "string" || !prRepos(config).includes(repo)) {
+      return fail(403, "repo_not_granted", `granted: ${prRepos(config).join(", ")}`);
     }
     const title = body.title;
     const prBody = body.body;
@@ -544,12 +558,12 @@ export class Porch {
 
   private async issue(body: Record<string, unknown>): Promise<JsonResult> {
     const { config, stateDir, denylist, log } = this.context;
-    if (!config.prUrl || !config.prToken || config.prRepos.length === 0) {
+    if (!config.prUrl || !config.prToken || prRepos(config).length === 0) {
       return fail(503, "issue_not_wired");
     }
     const { repo, title, bodyFile } = body;
-    if (typeof repo !== "string" || !config.prRepos.includes(repo)) {
-      return fail(403, "repo_not_allowlisted", `allowed: ${config.prRepos.join(", ")}`);
+    if (typeof repo !== "string" || !prRepos(config).includes(repo)) {
+      return fail(403, "repo_not_granted", `granted: ${prRepos(config).join(", ")}`);
     }
     if (typeof title !== "string" || title.length === 0) return fail(400, "missing_title");
     {
@@ -708,6 +722,53 @@ export class Porch {
       message,
       files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
     });
+  }
+
+  /**
+   * Commit to a branch of a repo this agent holds a write grant on
+   * (spec 0008 §6). The grant is pre-checked here so a refusal costs no
+   * round trip, and enforced again at the Gatekeeper, which mints a
+   * token that can only reach that one repo.
+   */
+  private async branch(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config, log } = this.context;
+    if (!config.persistUrl || !config.persistToken) return fail(503, "branch_not_wired");
+    const { repo, branch, message } = body;
+    if (typeof repo !== "string" || typeof branch !== "string") return fail(400, "invalid_request");
+    if (typeof message !== "string" || message.length === 0) return fail(400, "missing_message");
+    if (!config.githubGrants.write.includes(repo)) {
+      return fail(
+        403,
+        "write_not_granted",
+        `granted: ${config.githubGrants.write.join(", ") || "nothing"}`
+      );
+    }
+    {
+      const blocked = this.sweepFields({ message, branch });
+      if (blocked) return blocked;
+    }
+    const { files, error } = await this.collectSwept(body.dir, "pr");
+    if (error) return error;
+    log(`committing ${files.length} file(s) to ${repo}@${branch}`);
+    // The branch door lives on the github Gatekeeper (the App's Worker),
+    // which is where /commit already goes: same bearer, same base URL.
+    const base = config.persistUrl.replace(/\/commit$/, "");
+    const response = await fetch(`${base}/branch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.persistToken}` },
+      body: JSON.stringify({
+        agentId: config.agentId,
+        repo,
+        branch,
+        message,
+        files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
+      })
+    });
+    const resultText = (await response.text()).slice(0, 5000);
+    if (!response.ok) {
+      return { status: response.status, body: { ok: false, error: "branch_rejected", gatekeeper: safeJson(resultText) } };
+    }
+    return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
   /** POST a payload to the till Gatekeeper with this agent's OWN bearer. */
