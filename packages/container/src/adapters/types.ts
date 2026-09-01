@@ -22,6 +22,13 @@ export interface HarnessAdapter {
   credentialEnv: string;
   /** A cheap invocation whose stdout names the model that actually answered. */
   probe(model: string, credential: string): CommandSpec;
+  /**
+   * How this harness is pointed at an MCP config file (spec 0008 §4).
+   * Absent when the harness has no such flag: its servers are then
+   * skipped with a named log line rather than staged where nothing
+   * reads them.
+   */
+  mcpConfigArgs?(path: string): string[];
   /** The wake session itself. */
   session(
     prompt: string,

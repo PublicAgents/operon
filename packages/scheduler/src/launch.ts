@@ -154,7 +154,13 @@ export async function prepareLaunch(
     virtual: `mcp-${name}.operon.internal`
   }));
   const mcpEnv = mcpServers.length > 0
-    ? { mcpServers: JSON.stringify(mcpServers.map(s => ({ ...s, type: "http" as const }))) }
+    ? {
+        mcpServers: JSON.stringify(mcpServers.map(s => ({ ...s, type: "http" as const }))),
+        // The MCP doors carry the same per-wake nonce as every other
+        // door, in their own variable: borrowing the web door's would
+        // make MCP access depend on browser access.
+        mcpToken: umbilicalNonce
+      }
     : {};
 
   const secrets: WakeSecrets = { githubToken, mindCredential };

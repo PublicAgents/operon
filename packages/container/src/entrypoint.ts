@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile, copyFile } from "node:fs/promises";
-import { webMcpConfigJson } from "./web-mcp.js";
+import { mcpStagingLines, mergedMcpConfigJson } from "./mcp-config.js";
 import { join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
@@ -161,6 +161,15 @@ async function trustEgressCa(): Promise<void> {
 
 function mindHome(): string {
   return canDropPrivileges() ? "/home/mind" : (process.env.HOME ?? "/tmp");
+}
+
+/**
+ * The wake's MCP config (spec 0008 §4). Under the mind's home, NOT in
+ * the state repo: `git add -A` stages everything in the worktree, so a
+ * config file there is committed into the agent's memory every wake.
+ */
+function mcpConfigPath(): string {
+  return join(mindHome(), ".operon", "mcp.json");
 }
 
 /**
@@ -662,17 +671,40 @@ async function runSession(
   // when the mind ran long. OPERON_PORCH is a loopback address, not a
   // credential: the session's env still contains only its own mind
   // credential; every other token stays behind the porch.
-  // The web door (spec 0004): when it is wired, the harness gets the
-  // standard browser MCP server pointed at the porch relay, so the mind
-  // browses with its own ecosystem's tools and every frame still passes
-  // the relay's policy. No credential is written: the endpoint is
-  // loopback and the nonce stays with the porch.
-  if (config.webUrl && config.webToken) {
-    try {
-      await writeFile(join(STATE_DIR, ".mcp.json"), webMcpConfigJson(porchUrl), "utf8");
-      log("web door: browser MCP staged (.mcp.json)");
-    } catch (error) {
-      log(`web door: could not stage browser MCP: ${String(error).slice(0, 200)}`);
+  // Every MCP server this wake gets, in ONE file outside the state repo
+  // (spec 0008 §4): the browser door of spec 0004, and whatever the
+  // operator granted this agent. Not `.mcp.json` in the worktree, which
+  // committed chassis config into the agent's memory every wake.
+  //
+  // No credential is written. The browser endpoint is loopback, and a
+  // granted server is a virtual host plus the wake nonce, which the
+  // umbilical trades for the real upstream outside the container.
+  const mcpArgs: string[] = [];
+  {
+    const hasBrowser = Boolean(config.webUrl && config.webToken);
+    for (const line of mcpStagingLines(config.mcpServers, hasBrowser)) log(line);
+    if (hasBrowser || config.mcpServers.length > 0) {
+      const configArgs = adapter.mcpConfigArgs?.(mcpConfigPath());
+      if (!configArgs) {
+        log(`mcp: skipped for harness ${adapter.id} (no mcp-config support)`);
+      } else {
+        try {
+          const dir = join(mindHome(), ".operon");
+          await mkdir(dir, { recursive: true, mode: 0o700 });
+          await writeFile(
+            mcpConfigPath(),
+            mergedMcpConfigJson(config.mcpServers, {
+              ...(hasBrowser ? { porchUrl } : {}),
+              ...(config.mcpToken ? { nonce: config.mcpToken } : {})
+            }),
+            { encoding: "utf8", mode: 0o600 }
+          );
+          await chownToMind(dir);
+          mcpArgs.push(...configArgs);
+        } catch (error) {
+          log(`mcp: could not stage the config: ${String(error).slice(0, 200)}`);
+        }
+      }
     }
   }
 
@@ -737,7 +769,7 @@ async function runSession(
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
   }
-  return runStreaming(spec.command, [...spec.args, ...config.harnessExtraArgs], {
+  return runStreaming(spec.command, [...spec.args, ...mcpArgs, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
     env: {
       ...sessionBaseEnv(),

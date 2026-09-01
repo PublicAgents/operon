@@ -17,6 +17,13 @@ export const claudeCode: HarnessAdapter = {
   forbiddenEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
   credentialEnv: "CLAUDE_CODE_OAUTH_TOKEN",
 
+  mcpConfigArgs(path) {
+    // Not --strict-mcp-config: the repo may carry the mind's own
+    // project servers, which are in its trust domain already, and
+    // strictness would silently drop them.
+    return ["--mcp-config", path];
+  },
+
   probe(model, credential) {
     return {
       command: "claude",
