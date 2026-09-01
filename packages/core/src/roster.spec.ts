@@ -140,13 +140,21 @@ describe("capability grants (spec 0008)", () => {
     expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/stdio_env_unsupported/);
   });
 
-  it("refuses an unpinned stdio package", () => {
-    const roster = granted();
-    (roster.mcp as Record<string, Record<string, unknown>>).somelocal.args = [
-      "-y",
-      "some-mcp@latest"
-    ];
-    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/not pinned/);
+  it("refuses unpinned, range-pinned, and floating stdio packages", () => {
+    const withArgs = (args: string[]) => {
+      const roster = granted();
+      (roster.mcp as Record<string, Record<string, unknown>>).somelocal.args = args;
+      return JSON.stringify(roster);
+    };
+    expect(() => parseRoster(withArgs(["-y", "some-mcp@latest"]))).toThrowError(/floating/);
+    expect(() => parseRoster(withArgs(["-y", "some-mcp@^1.2.3"]))).toThrowError(/range/);
+    expect(() => parseRoster(withArgs(["-y", "some-mcp@~1.2"]))).toThrowError(/range/);
+    expect(() => parseRoster(withArgs(["-y", "some-mcp@next"]))).toThrowError(/floating/);
+    // No version at all: nothing pinned anywhere refuses too.
+    expect(() => parseRoster(withArgs(["-y", "some-mcp"]))).toThrowError(/no exact version pin/);
+    // Exact pins pass, npm and pip shaped, scoped packages included.
+    expect(() => parseRoster(withArgs(["-y", "@scope/some-mcp@1.2.3"]))).not.toThrow();
+    expect(() => parseRoster(withArgs(["run", "analytics-mcp==1.0.0"]))).not.toThrow();
   });
 
   it("never grants portal_* tools at any scope", () => {

@@ -199,12 +199,19 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
     default: {
       const command = requireString(raw.command, `${path}.command`);
       const args = requireStringArray(raw.args, `${path}.args`);
+      // The pin rule, mechanically: an unpinned or range-pinned package
+      // is whatever the registry serves that morning. Some arg must name
+      // an EXACT version (npm's pkg@1.2.3 or pip's pkg==1.2.3), and no
+      // arg may carry a range or a floating tag.
+      const EXACT_PIN = /(@\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|==\d+(?:\.\d+)*)$/;
+      const FLOATING = /@(?:latest$|next$|[\^~><=*])|(^|[^=])=\d[^=]*\*/;
       for (const arg of args) {
-        // The mechanical floor of the pin rule: an unpinned package is
-        // whatever PyPI/npm serves that morning.
-        if (/(^|[@:])latest$/.test(arg)) {
-          fail(`${path}.args`, `"${arg}" is not pinned; name an exact version`);
+        if (FLOATING.test(arg)) {
+          fail(`${path}.args`, `"${arg}" is a range or floating tag; name an exact version`);
         }
+      }
+      if (!args.some(arg => EXACT_PIN.test(arg))) {
+        fail(`${path}.args`, `no exact version pin found; name one (pkg@1.2.3 or pkg==1.2.3)`);
       }
       return { type: "stdio", command, args };
     }

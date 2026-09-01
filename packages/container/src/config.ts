@@ -154,10 +154,20 @@ function parseGithubGrants(raw: string | undefined): { pr: string[]; write: stri
   } catch {
     throw new ConfigError(`invalid_env: ${ENV.githubGrants} must be JSON`);
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ConfigError(`invalid_env: ${ENV.githubGrants} must be a JSON object`);
+  }
   const record = parsed as { pr?: unknown; write?: unknown };
-  const list = (value: unknown): string[] =>
-    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
-  return { pr: list(record?.pr), write: list(record?.write) };
+  // Strict: a malformed grant must fail the wake, never quietly shrink
+  // to fewer (or zero) repos than the policy the scheduler sent.
+  const list = (value: unknown, key: string): string[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some(entry => typeof entry !== "string")) {
+      throw new ConfigError(`invalid_env: ${ENV.githubGrants}.${key} must be an array of strings`);
+    }
+    return value as string[];
+  };
+  return { pr: list(record.pr, "pr"), write: list(record.write, "write") };
 }
 
 type EnvSource = Record<string, string | undefined>;
