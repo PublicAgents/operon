@@ -31,14 +31,29 @@ function snippet(id: string): string {
 }
 
 /**
+ * Does this page already LOAD gtag for this id? Naming the id in prose,
+ * a comment, or a dataLayer push is not a loader, and treating it as
+ * one would serve the page untagged forever. So look for the two forms
+ * that actually start measurement: the loader script, and a config
+ * call.
+ */
+function alreadyTagged(html: string, id: string): boolean {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    new RegExp(`googletagmanager\\.com/gtag/js\\?[^"'\\s>]*id=${escaped}`, "i").test(html) ||
+    new RegExp(`gtag\\s*\\(\\s*['"]config['"]\\s*,\\s*['"]${escaped}['"]`, "i").test(html)
+  );
+}
+
+/**
  * Insert the base tag before </head>, or before </body> for a fragment
- * with no head. A page that already names this id is left alone: an
+ * with no head. A page that already LOADS this id is left alone: an
  * agent that hand-rolled its own tag would otherwise double-count every
  * visit, and silently halving its own numbers is worse than an untagged
  * page.
  */
 export function injectMeasurement(html: string, id: string): string {
-  if (html.includes(id)) return html;
+  if (alreadyTagged(html, id)) return html;
   const tag = snippet(id);
   const head = html.search(/<\/head\s*>/i);
   if (head !== -1) return html.slice(0, head) + tag + html.slice(head);

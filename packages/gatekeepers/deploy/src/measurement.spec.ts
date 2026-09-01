@@ -32,11 +32,20 @@ describe("injectMeasurement", () => {
     expect(injectMeasurement("<p>hi</p>", id)).toContain("gtag/js");
   });
 
-  it("leaves a page that already carries the id alone", () => {
+  it("leaves a page that already LOADS the tag alone", () => {
     // An agent that hand-rolled its own tag would otherwise
     // double-count every visit, silently halving its own numbers.
-    const already = `<html><head><script src="https://www.googletagmanager.com/gtag/js?id=${id}"></script></head><body></body></html>`;
-    expect(injectMeasurement(already, id)).toBe(already);
+    const loader = `<html><head><script src="https://www.googletagmanager.com/gtag/js?id=${id}"></script></head><body></body></html>`;
+    expect(injectMeasurement(loader, id)).toBe(loader);
+    const config = `<html><head><script>gtag('config', '${id}');</script></head><body></body></html>`;
+    expect(injectMeasurement(config, id)).toBe(config);
+  });
+
+  it("still tags a page that only MENTIONS the id", () => {
+    // Prose, a comment, or a dataLayer push is not a loader; treating
+    // one as a loader would serve that page untagged forever.
+    const mentions = `<html><head><!-- analytics ${id} pending --></head><body>our id is ${id}</body></html>`;
+    expect(injectMeasurement(mentions, id)).toContain("gtag/js?id=");
   });
 
   it("is case-insensitive about the closing tag", () => {

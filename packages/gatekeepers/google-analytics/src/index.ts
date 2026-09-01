@@ -45,6 +45,26 @@ function ledger(env: Env) {
   return env.LEDGER.get(env.LEDGER.idFromName("google-analytics"));
 }
 
+/**
+ * The token source outlives the request, because the isolate does.
+ * MCP here is stateless per request by design, but a token is not
+ * request state: rebuilding it per call would re-sign an RSA assertion
+ * and re-ask Google for every tool call in a turn, which is exactly
+ * the burst the single-flight cache exists for.
+ *
+ * Keyed on the raw secret so a rotated key builds a new source rather
+ * than serving tokens minted from the old one.
+ */
+let tokenCache: { raw: string; source: GoogleTokenSource } | null = null;
+
+function tokensFor(raw: string | undefined): GoogleTokenSource {
+  const account = parseServiceAccount(raw);
+  if (!tokenCache || tokenCache.raw !== raw) {
+    tokenCache = { raw: raw as string, source: new GoogleTokenSource(account) };
+  }
+  return tokenCache.source;
+}
+
 /** The operator's binding-only view of this ledger (spec 0003 step 3). */
 export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
@@ -222,7 +242,7 @@ export default {
     let propertyId: string;
     try {
       propertyId = property(env);
-      const tokens = new GoogleTokenSource(parseServiceAccount(env.GA_SERVICE_ACCOUNT));
+      const tokens = tokensFor(env.GA_SERVICE_ACCOUNT);
       api = { token: () => tokens.token() };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
