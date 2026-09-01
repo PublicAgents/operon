@@ -1,6 +1,6 @@
 import { parseRoster } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
-import { injectMeasurement, validMeasurementId } from "./measurement.js";
+import { injectMeasurementResponse, validMeasurementId } from "./measurement.js";
 import {
   hostLabel,
   storagePath,
@@ -119,16 +119,16 @@ async function serve(request: Request, env: Env): Promise<Response> {
     });
   }
   const contentType = entry.metadata?.contentType ?? "application/octet-stream";
-  const measurementId = validMeasurementId(env.GA_MEASUREMENT_ID);
-  if (measurementId && contentType.startsWith("text/html")) {
-    const html = injectMeasurement(new TextDecoder().decode(entry.value), measurementId);
-    return new Response(html, {
-      headers: { "content-type": contentType, "cache-control": "public, max-age=60" }
-    });
-  }
-  return new Response(entry.value, {
+  const response = new Response(entry.value, {
     headers: { "content-type": contentType, "cache-control": "public, max-age=60" }
   });
+  // Analytics on every published page (spec 0008 §5), inserted here so
+  // coverage is uniform over everything ever published and the id can
+  // change without a republish.
+  const measurementId = validMeasurementId(env.GA_MEASUREMENT_ID);
+  return measurementId && contentType.startsWith("text/html")
+    ? injectMeasurementResponse(response, measurementId)
+    : response;
 }
 
 export default {

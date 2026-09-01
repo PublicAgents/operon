@@ -31,35 +31,52 @@ function snippet(id: string): string {
 }
 
 /**
- * Does this page already LOAD gtag for this id? Naming the id in prose,
- * a comment, or a dataLayer push is not a loader, and treating it as
- * one would serve the page untagged forever. So look for the two forms
- * that actually start measurement: the loader script, and a config
- * call.
+ * The base tag, as HTML. Only the id varies, and it is validated
+ * against a strict pattern before it reaches here, so nothing in it can
+ * close the script element.
  */
-function alreadyTagged(html: string, id: string): boolean {
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return (
-    new RegExp(`googletagmanager\\.com/gtag/js\\?[^"'\\s>]*id=${escaped}`, "i").test(html) ||
-    new RegExp(`gtag\\s*\\(\\s*['"]config['"]\\s*,\\s*['"]${escaped}['"]`, "i").test(html)
-  );
+export function measurementSnippet(id: string): string {
+  return snippet(id);
 }
 
 /**
- * Insert the base tag before </head>, or before </body> for a fragment
- * with no head. A page that already LOADS this id is left alone: an
- * agent that hand-rolled its own tag would otherwise double-count every
- * visit, and silently halving its own numbers is worse than an untagged
- * page.
+ * Insert the base tag into one HTML response unless the page already
+ * loads it.
+ *
+ * This asks HTMLRewriter rather than a regex because the question is
+ * genuinely about HTML STRUCTURE: an id named in a comment, in prose,
+ * or inside a string is not a tag, and each round of regex refinement
+ * here traded one wrong answer for another. A parser answers it
+ * exactly, and streams instead of buffering the body.
+ *
+ * Double-counting is the failure this avoids. A page that already loads
+ * gtag for this id and gets a second loader reports every visit twice,
+ * silently halving whatever the operator reads; an untagged page is
+ * visibly missing instead.
  */
-export function injectMeasurement(html: string, id: string): string {
-  if (alreadyTagged(html, id)) return html;
-  const tag = snippet(id);
-  const head = html.search(/<\/head\s*>/i);
-  if (head !== -1) return html.slice(0, head) + tag + html.slice(head);
-  const body = html.search(/<\/body\s*>/i);
-  if (body !== -1) return html.slice(0, body) + tag + html.slice(body);
-  // No head and no body: an HTML fragment. Appending still runs, and a
-  // fragment nobody wrapped is not a page we should refuse to serve.
-  return html + tag;
+export function injectMeasurementResponse(response: Response, id: string): Response {
+  let alreadyLoaded = false;
+  return new HTMLRewriter()
+    .on("script", {
+      element(element) {
+        const src = element.getAttribute("src") ?? "";
+        if (src.includes("googletagmanager.com/gtag/js") && src.includes(`id=${id}`)) {
+          alreadyLoaded = true;
+        }
+      },
+      text(chunk) {
+        // An inline config call for this id counts as loaded: the page
+        // is already measuring itself.
+        const names = chunk.text.includes(`'${id}'`) || chunk.text.includes(`"${id}"`);
+        if (names && /gtag\s*\(\s*['"]config['"]/.test(chunk.text)) alreadyLoaded = true;
+      }
+    })
+    .on("head", {
+      element(element) {
+        element.onEndTag(end => {
+          if (!alreadyLoaded) end.before(snippet(id), { html: true });
+        });
+      }
+    })
+    .transform(response);
 }
