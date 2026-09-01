@@ -117,9 +117,8 @@ Validation lives in ONE place, core `parseRoster`, which the fleet
 `--check`, the deployed `ROSTER` var, and every Worker that reads the
 roster all ride. Named refusals: an `agents[].mcp` entry naming an
 undefined server; unknown keys in a server definition or an env entry;
-a stdio arg containing `latest`; a stdio env value that looks like a
-secret reference (stdio is credential-less BY VALIDATION, not by
-convention); a `tools:` list on a stdio def; a repo not shaped
+a stdio arg containing `latest`; a stdio env value that fails the public-literal fence of section 4
+(`stdio_env_not_public`); a `tools:` list on a stdio def; a repo not shaped
 `owner/repo`; a secret name not shaped `MCP_*`. `parseAgent` also
 gains the unknown-key refusal `validatePolicy` already has: a
 misspelled grant must fail the check, not silently grant nothing.
@@ -140,7 +139,17 @@ Entries by type:
 - `stdio`: the definition verbatim. It runs in the container as the
   mind's uid with only the literal env the manifest declared. What it
   can reach, the mind could reach anyway (egress is audited, spec 0004
-  section 8); what it cannot have is a credential, by validation.
+  section 8); what it cannot have is a credential, structurally: the
+  manifest is a git-committed file, so its literals are PUBLIC by
+  definition, and stdio defs offer no secret-reference mechanism at
+  all. Validation backs the doctrine with a mechanical fence rather
+  than trusting it: an env value longer than 64 characters, or
+  matching known credential shapes (long hex or base64 runs, `ghp_`,
+  `github_pat_`, `sk-`, `AKIA`, `xox`, a PEM header), refuses with
+  `stdio_env_not_public`, naming the alternative (a gatekeeper or
+  portal server). The fence is a tripwire, not the boundary: the
+  boundary is that a value an operator would mind committing to git
+  has no place in a stdio def.
 - `gatekeeper`, `portal`, `http`: an entry of the form
   `{"type": "http", "url": "http://mcp-<name>.operon.internal/mcp",
   "headers": {"authorization": "Bearer <wake nonce>"}}`. The container
@@ -200,9 +209,17 @@ a server once in the dashboard. This Worker authenticates to the
 portal with a Cloudflare Access service token
 (`MCP_PORTAL_CLIENT_ID`/`MCP_PORTAL_CLIENT_SECRET`; the portal URL is
 a policy var). A grant is always scoped to ONE upstream server behind
-the portal, recovered syntactically from the portal's
-`<server>_`-prefixed tool names, so the scope check never depends on
-reaching the network. `portal_*` tools are never grantable at any
+the portal. Attribution of a tool to its server uses the portal's
+`<server>_` name prefixes, and prefix grammars are ambiguous when one
+server id prefixes another (`foo` vs `foo_bar`), so two rules make it
+exact. At validation time, two declared portal defs whose server ids
+are prefixes of one another refuse (`portal_server_ambiguous`). At
+call time, a tool belongs to granted server S iff its name starts
+with `S_` AND does not start with `T_` for any LONGER server id known
+from the manifest or the portal's own server listing: longest match
+wins, so `foo_bar_create` can never ride a grant for `foo`. The
+syntactic check is the pre-network gate; the cached catalog is the
+authority when they disagree, and a disagreement is ledgered. `portal_*` tools are never grantable at any
 scope: they change which upstream servers a session reaches, which is
 this manifest's decision, not a tool call's. Portal upstreams are
 administrator-vetted, so classification runs at the `vetted` tier:
