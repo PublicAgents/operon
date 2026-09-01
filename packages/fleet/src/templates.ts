@@ -56,6 +56,7 @@ export const DEPLOY_ORDER = [
   "gatekeeper-asks",
   // Before the scheduler, which binds every MCP server Worker.
   "gatekeeper-mcp",
+  "gatekeeper-google-analytics",
   "scheduler",
   "gatekeeper-telegram",
   "gatekeeper-ops"
@@ -322,6 +323,18 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         durable_objects: { bindings: [ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
         vars: policyVars(manifest, "mcp")
+      }
+    },
+    {
+      key: "gatekeeper-google-analytics",
+      config: {
+        ...common("gatekeeper-google-analytics"),
+        ...chronicleD1,
+        // No route: reached only through the umbilical, so the service
+        // binding is the authorization (spec 0008 §5).
+        durable_objects: { bindings: [ledger] },
+        migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
+        vars: policyVars(manifest, "google-analytics")
       }
     },
     {

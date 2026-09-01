@@ -65,6 +65,9 @@
     },
     {
       "path": "./packages/gatekeepers/mcp"
+    },
+    {
+      "path": "./packages/gatekeepers/google-analytics"
     }
   ]
 }
