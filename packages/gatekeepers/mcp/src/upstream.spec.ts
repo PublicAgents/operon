@@ -96,15 +96,39 @@ describe("a revision this client does not know", () => {
 });
 
 describe("hostile upstreams", () => {
-  it("refuses to replay a request body to another origin", async () => {
+  it("refuses to send a request body to another origin, whatever the redirect code", async () => {
+    // 307/308 replay the body outright; 301/302/303 would either replay
+    // it or silently become a GET. For an MCP call the body carries the
+    // tool name and its arguments, so all of them are refused.
+    for (const status of [301, 302, 303, 307, 308]) {
+      const mock = mockUpstream({
+        revision: "stateless",
+        tools: TOOLS,
+        redirectTo: "https://elsewhere.example.net/mcp",
+        redirectStatus: status
+      });
+      await expect(
+        withUpstream({ url: URL_ }, { fetch: mock.fetch }, listUpstreamTools)
+      ).rejects.toMatchObject({ code: "mcp_upstream_unreachable" });
+      // The other origin was never contacted at all.
+      expect(mock.requests.map(request => request.url)).not.toContain(
+        "https://elsewhere.example.net/mcp"
+      );
+    }
+  });
+
+  it("stops reading an oversized body instead of buffering it first", async () => {
+    // An upstream that omits or under-declares content-length must not
+    // get the whole body buffered before the bound is applied.
     const mock = mockUpstream({
       revision: "stateless",
       tools: TOOLS,
-      redirectTo: "https://elsewhere.example.net/mcp"
+      padBytes: 5000,
+      hideContentLength: true
     });
     await expect(
-      withUpstream({ url: URL_ }, { fetch: mock.fetch }, listUpstreamTools)
-    ).rejects.toBeInstanceOf(UpstreamError);
+      withUpstream({ url: URL_ }, { fetch: mock.fetch, maxBytes: 500 }, listUpstreamTools)
+    ).rejects.toMatchObject({ code: "mcp_upstream_unreachable" });
   });
 
   it("refuses a catalog larger than the bound instead of truncating it", async () => {

@@ -40,6 +40,10 @@ export interface MockOptions {
   expireAfterInitialize?: boolean;
   /** Redirect the first request here before serving. */
   redirectTo?: string;
+  /** Which redirect code to answer with (default 307). */
+  redirectStatus?: number;
+  /** Answer in chunks with no content-length, as a streaming server does. */
+  hideContentLength?: boolean;
   /** Pad the tools/list response past the body bound. */
   padBytes?: number;
 }
@@ -67,11 +71,25 @@ export function mockUpstream(options: MockOptions): MockServer {
   const requests: MockServer["requests"] = [];
   let initialized = false;
 
-  const respond = (body: unknown, extraHeaders: Record<string, string> = {}): Response =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json", ...extraHeaders }
+  const respond = (body: unknown, extraHeaders: Record<string, string> = {}): Response => {
+    const text = JSON.stringify(body);
+    const headers = { "content-type": "application/json", ...extraHeaders };
+    if (!options.hideContentLength) {
+      return new Response(text, { status: 200, headers });
+    }
+    // Streamed in pieces with no content-length, which is what a real
+    // chunked server does and what the byte bound must survive.
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < text.length; i += 256) {
+          controller.enqueue(encoder.encode(text.slice(i, i + 256)));
+        }
+        controller.close();
+      }
     });
+    return new Response(stream, { status: 200, headers });
+  };
 
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -82,7 +100,10 @@ export function mockUpstream(options: MockOptions): MockServer {
     requests.push({ url, method, sessionId: headers.get("mcp-session-id"), body });
 
     if (options.redirectTo && requests.length === 1) {
-      return new Response(null, { status: 307, headers: { location: options.redirectTo } });
+      return new Response(null, {
+        status: options.redirectStatus ?? 307,
+        headers: { location: options.redirectTo }
+      });
     }
     if (options.unauthorized) return new Response("unauthorized", { status: 401 });
     // A GET opens the server-to-client stream; nothing here pushes.

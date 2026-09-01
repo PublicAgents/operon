@@ -45,6 +45,7 @@ export async function guardedFetch(
 ): Promise<{ status: number; headers: Headers; text: string }> {
   const doFetch = options.fetch ?? fetch;
   const maxBytes = options.maxBytes ?? MAX_BODY_BYTES;
+  const hasBody = init.body !== undefined && init.body !== null;
   let url = input;
   let headers = new Headers(init.headers);
 
@@ -58,38 +59,68 @@ export async function guardedFetch(
     }
     const next = new URL(location, url).toString();
     if (!sameOrigin(next, url)) {
-      // A cross-origin hop must not carry the credential. The request
-      // may still be legitimate, so follow it stripped rather than
-      // refusing: an upstream that needs auth there will say so.
+      // A cross-origin hop must not carry the request. Stripping the
+      // credential is not enough: for an MCP call the BODY is the
+      // secret-adjacent part, carrying the tool name and its arguments,
+      // and 301/302/303 would replay it (or, followed as fetch would,
+      // silently turn a tool call into a GET). There is no legitimate
+      // reason for an MCP endpoint to bounce a call to another origin,
+      // so refuse rather than guess which of those is meant.
+      if (hasBody) {
+        throw new UpstreamError(
+          "mcp_upstream_unreachable",
+          "upstream redirected a request body to another origin"
+        );
+      }
       headers = new Headers(headers);
       headers.delete("authorization");
       headers.delete("cf-access-client-id");
       headers.delete("cf-access-client-secret");
-    }
-    // A 307/308 replays the body; anything else becomes a GET, which is
-    // what fetch would do, and replaying a tool call cross-origin is
-    // not something we do at all.
-    if ((response.status === 307 || response.status === 308) && !sameOrigin(next, url)) {
-      throw new UpstreamError(
-        "mcp_upstream_unreachable",
-        "upstream redirected a request body to another origin"
-      );
     }
     url = next;
   }
   throw new UpstreamError("mcp_upstream_unreachable", "too many redirects");
 }
 
+/**
+ * Read the body while counting bytes, and stop the moment the bound is
+ * crossed. Checking after `text()` would mean an upstream that omits or
+ * lies about content-length gets the whole thing buffered first, which
+ * is the memory exhaustion the bound exists to prevent.
+ */
 async function readBounded(response: Response, maxBytes: number): Promise<string> {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (declared > maxBytes) {
     throw new UpstreamError("mcp_upstream_unreachable", `upstream body exceeds ${maxBytes} bytes`);
   }
-  const text = await response.text();
-  // Bytes, not characters: a multibyte body can pass a length check it
-  // should fail.
-  if (new TextEncoder().encode(text).length > maxBytes) {
-    throw new UpstreamError("mcp_upstream_unreachable", `upstream body exceeds ${maxBytes} bytes`);
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // Cancel rather than drain: the rest of an oversized body is
+        // bandwidth we have already decided not to accept.
+        await reader.cancel().catch(() => undefined);
+        throw new UpstreamError(
+          "mcp_upstream_unreachable",
+          `upstream body exceeds ${maxBytes} bytes`
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
   }
-  return text;
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
 }
