@@ -107,6 +107,13 @@ the fallback for agents without a `github:` block; a manifest that
 sets both for the same agent refuses at `--check`, because two sources
 of the same truth is how allowlists rot.
 
+The switch is the PRESENCE OF THE BLOCK, not of a key inside it, and
+every layer keys on the same thing: an agent whose entry says
+`github:` has per-agent grants, and a list missing from inside that
+block means nothing rather than the fleet's. Reading a missing `pr:`
+as a fallback would hand an agent granted only `write:` the entire
+fleet allowlist, and an explicit `pr: []` must mean what it says.
+
 `github.write` names repos where the agent may commit to non-default
 branches through the App (section 6). The App installation must cover
 those repos; that cannot be validated offline, so it refuses at mint

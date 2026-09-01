@@ -20,20 +20,28 @@ function fleetRepos(env: GrantSource): string[] {
 }
 
 /**
- * The agent's own `github.pr` grant when the roster carries one, else
- * the fleet-wide PR_REPOS for one release. An unparseable roster falls
- * back rather than widening: the fleet list is what this Worker
- * enforced before grants existed, and "everything" is never the safe
- * reading of a broken input.
+ * The agent's own grant when the roster carries one, else the
+ * fleet-wide PR_REPOS for one release.
+ *
+ * The switch is the PRESENCE OF A `github:` BLOCK, not of a `pr` key
+ * inside it. An operator who wrote `github: { write: [...] }` said what
+ * this agent may reach; reading the missing `pr` as "and also
+ * everything the fleet allows" would hand a write-only agent the whole
+ * fleet list. The container's copy of this rule keys on exactly the
+ * same thing, so the pre-check and the authority agree.
+ *
+ * An unparseable roster falls back rather than widening: the fleet list
+ * is what this Worker enforced before grants existed, and "everything"
+ * is never the safe reading of a broken input.
  */
 export function grantedRepos(env: GrantSource, agentId: string): string[] {
   if (typeof env.ROSTER === "string" && env.ROSTER.length > 0) {
     try {
       const agent = findAgent(parseRoster(env.ROSTER), agentId);
-      if (agent?.github?.pr) return agent.github.pr;
-      // A known agent with no grant, and an unknown agent, both fall
-      // through to the fleet list; an unknown agent gets nothing from
-      // it only because it has no PAT either (credential_unconfigured).
+      if (agent?.github) return agent.github.pr ?? [];
+      // No block at all: this agent predates grants, so the fleet list
+      // still binds. An unknown agent falls through too, and gets
+      // nothing from it because it has no PAT either.
     } catch {
       /* fall through to the fleet list */
     }

@@ -128,15 +128,17 @@ export async function prepareLaunch(
   // pre-check them and the living help can state them (spec 0008 §6).
   // The Gatekeepers re-read the roster and remain authoritative; this
   // is the container's copy, not its authority.
-  const githubGrants =
-    agent.github?.pr || agent.github?.write
-      ? {
-          githubGrants: JSON.stringify({
-            pr: agent.github.pr ?? [],
-            write: agent.github.write ?? []
-          })
-        }
-      : {};
+  // The switch is the presence of the block, not of a key inside it:
+  // an agent whose roster entry says `github:` has per-agent grants,
+  // and a missing list inside means nothing rather than the fleet's.
+  const githubGrants = agent.github
+    ? {
+        githubGrants: JSON.stringify({
+          pr: agent.github.pr ?? [],
+          write: agent.github.write ?? []
+        })
+      }
+    : {};
 
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is

@@ -81,9 +81,21 @@ describe("prepareLaunch", () => {
       pr: ["demo/product"],
       write: ["demo/product"]
     });
-    // An agent with no grants carries no variable at all, so the porch
-    // falls back to the fleet list rather than reading an empty grant
-    // as "granted nothing".
+    // A write-only grant still carries an explicit empty pr list, so
+    // the container refuses PR repos the Gatekeeper would also refuse.
+    const writeOnly = await prepareLaunch(
+      { ...agent, github: { write: ["demo/product"] } },
+      "cron",
+      "wake-write",
+      context()
+    );
+    expect(JSON.parse(writeOnly.env[WAKE_ENV.githubGrants] as string)).toEqual({
+      pr: [],
+      write: ["demo/product"]
+    });
+    // An agent with no github block carries no variable at all, so the
+    // porch falls back to the fleet list rather than reading a missing
+    // grant as "granted nothing".
     const plain = await prepareLaunch(agent, "cron", "wake-plain", context());
     expect(plain.env[WAKE_ENV.githubGrants]).toBeUndefined();
   });

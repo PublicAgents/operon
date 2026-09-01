@@ -37,6 +37,24 @@ describe("grantedRepos (spec 0008 §3)", () => {
     expect(grantedRepos(env, "scout")).toEqual(["demo/product", "demo/docs"]);
   });
 
+  it("does not hand a write-only agent the fleet's PR list", () => {
+    // The operator said what this agent may reach; a missing pr list
+    // inside a github block means nothing, not "and also the fleet's".
+    const env: GrantSource = {
+      PR_REPOS: "demo/everything",
+      ROSTER: roster([{ id: "scout", github: { write: ["demo/product"] } }])
+    };
+    expect(grantedRepos(env, "scout")).toEqual([]);
+  });
+
+  it("reads an explicit empty grant as nothing", () => {
+    const env: GrantSource = {
+      PR_REPOS: "demo/everything",
+      ROSTER: roster([{ id: "scout", github: { pr: [] } }])
+    };
+    expect(grantedRepos(env, "scout")).toEqual([]);
+  });
+
   it("grants nothing to an agent the roster does not know", () => {
     const env: GrantSource = { ROSTER: roster([{ id: "scout", github: { pr: ["demo/product"] } }]) };
     expect(grantedRepos(env, "stranger")).toEqual([]);
