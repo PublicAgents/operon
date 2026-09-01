@@ -61,6 +61,13 @@ export function measurementSnippet(id: string): string {
 export function injectMeasurementResponse(response: Response, id: string): Response {
   let alreadyLoaded = false;
   let inserted = false;
+  // HTMLRewriter delivers a script's text in CHUNKS, so a config call
+  // can be split mid-statement; accumulate the element's text and judge
+  // it once, at the end. And only a script the browser would RUN counts:
+  // a JSON or template block containing the same characters is data.
+  let executable = false;
+  let scriptText = "";
+
   /** One insertion per document, and never when the page tags itself. */
   const insertOnce = (emit: () => void): void => {
     if (alreadyLoaded || inserted) return;
@@ -70,16 +77,27 @@ export function injectMeasurementResponse(response: Response, id: string): Respo
   return new HTMLRewriter()
     .on("script", {
       element(element) {
+        scriptText = "";
+        const type = (element.getAttribute("type") ?? "").toLowerCase().trim();
+        executable = type === "" || type === "module" || /javascript|ecmascript/.test(type);
         const src = element.getAttribute("src") ?? "";
-        if (src.includes("googletagmanager.com/gtag/js") && src.includes(`id=${id}`)) {
+        if (
+          executable &&
+          src.includes("googletagmanager.com/gtag/js") &&
+          src.includes(`id=${id}`)
+        ) {
           alreadyLoaded = true;
         }
       },
       text(chunk) {
+        if (!executable) return;
+        scriptText += chunk.text;
+        if (!chunk.lastInTextNode) return;
         // An inline config call for this id counts as loaded: the page
         // is already measuring itself.
-        const names = chunk.text.includes(`'${id}'`) || chunk.text.includes(`"${id}"`);
-        if (names && /gtag\s*\(\s*['"]config['"]/.test(chunk.text)) alreadyLoaded = true;
+        const names = scriptText.includes(`'${id}'`) || scriptText.includes(`"${id}"`);
+        if (names && /gtag\s*\(\s*['"]config['"]/.test(scriptText)) alreadyLoaded = true;
+        scriptText = "";
       }
     })
     .on("body", {
