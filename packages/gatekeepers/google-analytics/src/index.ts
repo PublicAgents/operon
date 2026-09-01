@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { errorResponse, json, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { GoogleAuthError, GoogleTokenSource, parseServiceAccount } from "./google-auth.js";
+import { isMcpPath } from "./paths.js";
 import {
   AnalyticsError,
   ReportInputError,
@@ -17,6 +18,7 @@ import {
 export { Ledger };
 export * from "./reports.js";
 export * from "./google-auth.js";
+export { isMcpPath } from "./paths.js";
 
 /**
  * The Google Analytics Gatekeeper (spec 0008 §5): read-only GA
@@ -232,7 +234,7 @@ export function createAnalyticsServer(
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== "/mcp") return errorResponse(404, "not_found");
+    if (!isMcpPath(url.pathname)) return errorResponse(404, "not_found");
     // The binding IS the authorization (this Worker has no public
     // route); the agent id rides along only so the ledger can name who
     // asked.
