@@ -695,7 +695,7 @@ async function runSession(
             mcpConfigPath(),
             mergedMcpConfigJson(config.mcpServers, {
               ...(hasBrowser ? { porchUrl } : {}),
-              ...(config.webToken ? { nonce: config.webToken } : {})
+              ...(config.mcpToken ? { nonce: config.mcpToken } : {})
             }),
             { encoding: "utf8", mode: 0o600 }
           );

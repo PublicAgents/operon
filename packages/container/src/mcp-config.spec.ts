@@ -47,8 +47,11 @@ describe("mergedMcpConfig", () => {
   });
 
   it("stages the granted servers even when the web door is closed", () => {
+    // MCP access must not depend on browser access: an agent with a
+    // grant and no web door still carries the wake nonce.
     const config = mergedMcpConfig([remote], { nonce: NONCE });
     expect(Object.keys(config.mcpServers)).toEqual(["google-analytics"]);
+    expect(config.mcpServers["google-analytics"].headers?.authorization).toBe(`Bearer ${NONCE}`);
   });
 
   it("refuses a colony server that would displace a chassis door", () => {

@@ -40,6 +40,7 @@ export const ENV = {
   asksUrl: "OPERON_ASKS_URL",
   asksToken: "OPERON_ASKS_TOKEN",
   mcpServers: "OPERON_MCP_SERVERS",
+  mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
@@ -97,6 +98,8 @@ export interface WakeConfig {
   asksToken?: string;
   /** Staged MCP servers (spec 0008 §4): stdio defs, or a name plus virtual host. */
   mcpServers: StagedMcpServer[];
+  /** The wake nonce the MCP doors carry; absent when none are granted. */
+  mcpToken?: string;
   /**
    * This agent's GitHub grants (spec 0008 §6), or undefined when the
    * roster carries none. The difference is load-bearing: an EXPLICIT
@@ -249,6 +252,7 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     asksUrl: env[ENV.asksUrl],
     asksToken: env[ENV.asksToken],
     mcpServers: parseMcpServers(env[ENV.mcpServers]),
+    mcpToken: env[ENV.mcpToken],
     githubGrants: parseGithubGrants(env[ENV.githubGrants]),
     chronicleUrl: env[ENV.chronicleUrl],
     chronicleToken: env[ENV.chronicleToken],

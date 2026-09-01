@@ -67,6 +67,12 @@ export interface WakeOptions {
    * and nothing more. No URLs and no secrets ride this variable.
    */
   mcpServers?: string;
+  /**
+   * The wake nonce, as the MCP doors' bearer. Its own variable rather
+   * than a borrowed one: every other door has a token of its own, and
+   * reading the web door's would tie MCP access to browser access.
+   */
+  mcpToken?: string;
   /** The agent's GitHub grants (spec 0008 §6) as JSON {pr, write}. */
   githubGrants?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
@@ -122,6 +128,7 @@ export const WAKE_ENV = {
   asksUrl: "OPERON_ASKS_URL",
   asksToken: "OPERON_ASKS_TOKEN",
   mcpServers: "OPERON_MCP_SERVERS",
+  mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
@@ -171,6 +178,7 @@ export function wakeEnv(
   if (options.asksUrl) env[WAKE_ENV.asksUrl] = options.asksUrl;
   if (options.asksToken) env[WAKE_ENV.asksToken] = options.asksToken;
   if (options.mcpServers) env[WAKE_ENV.mcpServers] = options.mcpServers;
+  if (options.mcpToken) env[WAKE_ENV.mcpToken] = options.mcpToken;
   if (options.githubGrants) env[WAKE_ENV.githubGrants] = options.githubGrants;
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
