@@ -44,18 +44,29 @@ export function measurementSnippet(id: string): string {
  * loads it.
  *
  * This asks HTMLRewriter rather than a regex because the question is
- * genuinely about HTML STRUCTURE: an id named in a comment, in prose,
- * or inside a string is not a tag, and each round of regex refinement
- * here traded one wrong answer for another. A parser answers it
- * exactly, and streams instead of buffering the body.
+ * about HTML STRUCTURE: an id named in a comment, in prose, or inside a
+ * string is not a tag, and each round of regex refinement here traded
+ * one wrong answer for another. A parser answers it exactly, and
+ * streams instead of buffering the body.
  *
- * Double-counting is the failure this avoids. A page that already loads
- * gtag for this id and gets a second loader reports every visit twice,
- * silently halving whatever the operator reads; an untagged page is
- * visibly missing instead.
+ * The tag goes at the END of the document rather than in the head, for
+ * a reason worth stating: whether the page already loads gtag is only
+ * fully known once every script has been seen, and a page whose own tag
+ * sits at the bottom of the body would otherwise get a second one
+ * inserted above it. Late is a few milliseconds; double-counting is
+ * silent and halves whatever the operator reads. The fallbacks below
+ * also mean a body-only page or a bare fragment is measured, rather
+ * than only pages that happen to carry a literal <head>.
  */
 export function injectMeasurementResponse(response: Response, id: string): Response {
   let alreadyLoaded = false;
+  let inserted = false;
+  /** One insertion per document, and never when the page tags itself. */
+  const insertOnce = (emit: () => void): void => {
+    if (alreadyLoaded || inserted) return;
+    inserted = true;
+    emit();
+  };
   return new HTMLRewriter()
     .on("script", {
       element(element) {
@@ -71,11 +82,18 @@ export function injectMeasurementResponse(response: Response, id: string): Respo
         if (names && /gtag\s*\(\s*['"]config['"]/.test(chunk.text)) alreadyLoaded = true;
       }
     })
-    .on("head", {
+    .on("body", {
       element(element) {
         element.onEndTag(end => {
-          if (!alreadyLoaded) end.before(snippet(id), { html: true });
+          insertOnce(() => end.before(snippet(id), { html: true }));
         });
+      }
+    })
+    .onDocument({
+      end(end) {
+        // No body element at all (a fragment, or a head-only document):
+        // appending still measures the page.
+        insertOnce(() => end.append(snippet(id), { html: true }));
       }
     })
     .transform(response);
