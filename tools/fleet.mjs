@@ -308,7 +308,14 @@ for (const manifest of manifests) {
   // resume always runs when a pause was taken, and the final report
   // names every failure that occurred, the stuck-pause recovery first
   // because it is the one that costs wakes every hour it is missed.
-  const rosterVar = JSON.stringify({ zone: manifest.roster.zone, agents: manifest.roster.agents });
+  // The WHOLE roster, mcp defs included: the scheduler resolves MCP
+  // grants and the umbilical routes from this var, so an entry dropped
+  // here is a capability that validates at check and vanishes in prod.
+  const rosterVar = JSON.stringify({
+    zone: manifest.roster.zone,
+    agents: manifest.roster.agents,
+    ...(manifest.roster.mcp !== undefined ? { mcp: manifest.roster.mcp } : {})
+  });
   let deployError = null;
   try {
     if (paused) await waitForQuiet(manifest);

@@ -61,6 +61,14 @@ export interface WakeOptions {
   /** asks Gatekeeper endpoint + this agent's OWN asks bearer (per-agent). */
   asksUrl?: string;
   asksToken?: string;
+  /**
+   * The wake's staged MCP servers (spec 0008 §4), resolved JSON: stdio
+   * defs verbatim, everything else as {name, virtual} — a virtual host
+   * and nothing more. No URLs and no secrets ride this variable.
+   */
+  mcpServers?: string;
+  /** The agent's GitHub grants (spec 0008 §6) as JSON {pr, write}. */
+  githubGrants?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -113,6 +121,8 @@ export const WAKE_ENV = {
   vaultToken: "OPERON_VAULT_TOKEN",
   asksUrl: "OPERON_ASKS_URL",
   asksToken: "OPERON_ASKS_TOKEN",
+  mcpServers: "OPERON_MCP_SERVERS",
+  githubGrants: "OPERON_GITHUB_GRANTS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -160,6 +170,8 @@ export function wakeEnv(
   if (options.vaultToken) env[WAKE_ENV.vaultToken] = options.vaultToken;
   if (options.asksUrl) env[WAKE_ENV.asksUrl] = options.asksUrl;
   if (options.asksToken) env[WAKE_ENV.asksToken] = options.asksToken;
+  if (options.mcpServers) env[WAKE_ENV.mcpServers] = options.mcpServers;
+  if (options.githubGrants) env[WAKE_ENV.githubGrants] = options.githubGrants;
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
   if (options.xUrl) env[WAKE_ENV.xUrl] = options.xUrl;
