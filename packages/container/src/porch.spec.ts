@@ -33,7 +33,6 @@ function config(overrides: Partial<WakeConfig> = {}): WakeConfig {
     hosts: ["@"],
     prRepos: [],
     mcpServers: [],
-    githubGrants: { pr: [], write: [] },
     ...overrides
   };
 }
@@ -360,6 +359,25 @@ describe("porch doors", () => {
     });
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as { detail: string }).detail).toContain("org/mine");
+  });
+
+  it("an explicit empty grant means nothing, not the fleet list", async () => {
+    // The Gatekeeper reads github.pr: [] as "granted nothing"; the
+    // container must agree, or it admits what the Gatekeeper refuses.
+    const { url } = await startPorch(
+      config({
+        prUrl: "http://unused",
+        prToken: "b",
+        prRepos: ["org/allowed"],
+        githubGrants: { pr: [], write: [] }
+      })
+    );
+    const response = await fetch(`${url}/github/pr`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1" },
+      body: JSON.stringify({ repo: "org/allowed", title: "t", body: "b" })
+    });
+    expect(((await response.json()) as { error: string }).error).toBe("pr_not_wired");
   });
 
   it("refuses a branch commit to a repo with no write grant, without a round trip", async () => {

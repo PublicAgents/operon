@@ -129,7 +129,7 @@ function fail(status: number, error: string, detail?: string): JsonResult {
  * door tells the mind the same thing.
  */
 export function prRepos(config: WakeConfig): string[] {
-  return config.githubGrants.pr.length > 0 ? config.githubGrants.pr : config.prRepos;
+  return config.githubGrants ? config.githubGrants.pr : config.prRepos;
 }
 
 export function capabilities(config: WakeConfig): Record<string, unknown> {
@@ -147,7 +147,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     web: Boolean(config.webUrl && config.webToken),
     hosts: config.hosts,
     prRepos: prRepos(config),
-    githubWrite: config.githubGrants.write,
+    githubWrite: config.githubGrants?.write ?? [],
     mcp: config.mcpServers.map(server => server.name)
   };
 }
@@ -736,12 +736,9 @@ export class Porch {
     const { repo, branch, message } = body;
     if (typeof repo !== "string" || typeof branch !== "string") return fail(400, "invalid_request");
     if (typeof message !== "string" || message.length === 0) return fail(400, "missing_message");
-    if (!config.githubGrants.write.includes(repo)) {
-      return fail(
-        403,
-        "write_not_granted",
-        `granted: ${config.githubGrants.write.join(", ") || "nothing"}`
-      );
+    const writable = config.githubGrants?.write ?? [];
+    if (!writable.includes(repo)) {
+      return fail(403, "write_not_granted", `granted: ${writable.join(", ") || "nothing"}`);
     }
     {
       const blocked = this.sweepFields({ message, branch });
