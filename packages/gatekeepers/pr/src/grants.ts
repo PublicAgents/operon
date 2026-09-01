@@ -48,3 +48,26 @@ export function grantedRepos(env: GrantSource, agentId: string): string[] {
   }
   return fleetRepos(env);
 }
+
+/**
+ * Whether the roster knows this agent at all.
+ *
+ * The caller names the agent in its request body, so the name is a
+ * CLAIM: it selects both the repo grant and the GitHub credential, and
+ * a name nobody put in the roster must select neither. "no-roster" is
+ * kept distinct from "unknown" because a deployment whose ROSTER var is
+ * missing or unparseable cannot answer the question, and refusing every
+ * door there would take out a working colony to fix a claim we cannot
+ * check anyway.
+ */
+export function rosterVerdict(
+  env: GrantSource,
+  agentId: string
+): "known" | "unknown" | "no-roster" {
+  if (typeof env.ROSTER !== "string" || env.ROSTER.length === 0) return "no-roster";
+  try {
+    return findAgent(parseRoster(env.ROSTER), agentId) ? "known" : "unknown";
+  } catch {
+    return "no-roster";
+  }
+}

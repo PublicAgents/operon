@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { grantedRepos, type GrantSource } from "./grants.js";
+import { grantedRepos, rosterVerdict, type GrantSource } from "./grants.js";
 
 function roster(agents: Array<Record<string, unknown>>): string {
   return JSON.stringify({
@@ -69,5 +69,21 @@ describe("grantedRepos (spec 0008 §3)", () => {
 
   it("grants nothing when neither a grant nor a fleet list exists", () => {
     expect(grantedRepos({}, "scout")).toEqual([]);
+  });
+});
+
+describe("rosterVerdict (an agent id is a claim)", () => {
+  const env: GrantSource = { PR_REPOS: "demo/everything", ROSTER: roster([{ id: "scout" }]) };
+
+  it("knows the roster's agents and refuses the rest", () => {
+    expect(rosterVerdict(env, "scout")).toBe("known");
+    expect(rosterVerdict(env, "stranger")).toBe("unknown");
+  });
+
+  it("cannot answer without a parseable roster, and says so", () => {
+    // Distinct from "unknown": a colony whose ROSTER is missing or
+    // broken must keep working, not have every door refuse.
+    expect(rosterVerdict({ PR_REPOS: "demo/x" }, "scout")).toBe("no-roster");
+    expect(rosterVerdict({ ROSTER: "{not json" }, "scout")).toBe("no-roster");
   });
 });

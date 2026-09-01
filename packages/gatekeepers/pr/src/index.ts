@@ -1,4 +1,4 @@
-import { grantedRepos } from "./grants.js";
+import { grantedRepos, rosterVerdict } from "./grants.js";
 import {
   errorResponse,
   json,
@@ -75,6 +75,24 @@ function patForAgent(env: Env, agentId: string): { token: string; shared: boolea
 
 function ledger(env: Env) {
   return env.LEDGER.get(env.LEDGER.idFromName("pr"));
+}
+
+/**
+ * The one place an agent's claimed identity becomes a credential. The
+ * name arrives in the request body, so it is checked against the roster
+ * before it selects anything: an unknown name must not pick up the
+ * shared PAT and the fleet repo list on its way past.
+ */
+function identify(env: Env, agentId: unknown): { token: string; shared: boolean } | Response {
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return errorResponse(400, "missing_agent_id");
+  }
+  if (rosterVerdict(env, agentId) === "unknown") {
+    return errorResponse(404, "unknown_agent", agentId);
+  }
+  const pat = patForAgent(env, agentId);
+  if (!pat) return errorResponse(500, "credential_unconfigured");
+  return pat;
 }
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -162,10 +180,10 @@ async function handlePr(request: Request, env: Env): Promise<Response> {
       return errorResponse(400, "invalid_file", String(file?.path));
     }
   }
-  const pat = typeof agentId === "string" ? patForAgent(env, agentId) : undefined;
-  if (!pat) {
-    await ledger(env).append("pr_failed", { reason: "credential_unconfigured", repo });
-    return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) {
+    await ledger(env).append("pr_failed", { reason: "identity_refused", agentId, repo });
+    return pat;
   }
 
   try {
@@ -218,8 +236,8 @@ async function handleIssue(request: Request, env: Env): Promise<Response> {
     await ledger(env).append("issue_failed", { reason: "missing_title_or_body", repo });
     return errorResponse(400, "missing_title_or_body");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const result = await openIssue(
       { token: pat.token, userAgent: "operon-gatekeeper-pr" },
@@ -246,8 +264,8 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   if (denied) return denied;
   const body = await readJson<{ agentId?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
-  const pat = typeof body.value.agentId === "string" ? patForAgent(env, body.value.agentId) : undefined;
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, body.value.agentId);
+  if (pat instanceof Response) return pat;
   try {
     const activity = await listActivity(
       { token: pat.token, userAgent: "operon-gatekeeper-pr" },
@@ -296,8 +314,8 @@ async function handleThread(request: Request, env: Env): Promise<Response> {
   if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
     return errorResponse(400, "invalid_request");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) return access;
@@ -327,8 +345,8 @@ async function handleComment(request: Request, env: Env): Promise<Response> {
     return errorResponse(400, "invalid_request");
   }
   if (typeof text !== "string" || !text) return errorResponse(400, "missing_body");
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) {
@@ -373,8 +391,8 @@ async function handleUpdate(request: Request, env: Env): Promise<Response> {
   if (typeof text === "string" && text) patch.body = text;
   if (state) patch.state = state;
   if (Object.keys(patch).length === 0) return errorResponse(400, "empty_patch");
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const access = await conversationAccess(env, agentId as string, pat.token, repo, number);
     if (access instanceof Response) return access;
@@ -430,8 +448,8 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       return errorResponse(400, "invalid_file", String(file?.path));
     }
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const api = { token: pat.token, userAgent: "operon-gatekeeper-pr" };
     const login = await authenticatedLogin(api);
@@ -490,8 +508,8 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   ) {
     return errorResponse(400, "invalid_path");
   }
-  const pat = patForAgent(env, agentId as string);
-  if (!pat) return errorResponse(500, "credential_unconfigured");
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
   try {
     const file = await getUpstreamFile({ token: pat.token, userAgent: "operon-gatekeeper-pr" }, repo, path);
     return json({ ok: true, ...file });
