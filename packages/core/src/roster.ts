@@ -203,15 +203,18 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
       // is whatever the registry serves that morning. Some arg must name
       // an EXACT version (npm's pkg@1.2.3 or pip's pkg==1.2.3), and no
       // arg may carry a range or a floating tag.
-      const EXACT_PIN = /(@\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|==\d+(?:\.\d+)*)$/;
-      const FLOATING = /@(?:latest$|next$|[\^~><=*])|(^|[^=])=\d[^=]*\*/;
+      // Full three-part versions on both ecosystems: pip's ==1.2 is
+      // exact per PEP 440 but ==1.2.* floats, and a rule a reviewer
+      // must squint at is a rule that rots; demand the unambiguous form.
+      const EXACT_PIN = /(@\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|==\d+\.\d+\.\d+(?:[.!+-][0-9A-Za-z.]+)?)$/;
+      const FLOATING = /@(?:latest$|next$|[\^~><=*])/;
       for (const arg of args) {
-        if (FLOATING.test(arg)) {
+        if (FLOATING.test(arg) || ((arg.includes("@") || arg.includes("==")) && arg.includes("*"))) {
           fail(`${path}.args`, `"${arg}" is a range or floating tag; name an exact version`);
         }
       }
       if (!args.some(arg => EXACT_PIN.test(arg))) {
-        fail(`${path}.args`, `no exact version pin found; name one (pkg@1.2.3 or pkg==1.2.3)`);
+        fail(`${path}.args`, `no exact version pin found; name one in full (pkg@1.2.3 or pkg==1.2.3)`);
       }
       return { type: "stdio", command, args };
     }

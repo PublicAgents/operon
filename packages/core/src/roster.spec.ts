@@ -152,6 +152,12 @@ describe("capability grants (spec 0008)", () => {
     expect(() => parseRoster(withArgs(["-y", "some-mcp@next"]))).toThrowError(/floating/);
     // No version at all: nothing pinned anywhere refuses too.
     expect(() => parseRoster(withArgs(["-y", "some-mcp"]))).toThrowError(/no exact version pin/);
+    // Partial and wildcard pip specs: ==1.2 is exact per PEP 440 but
+    // ==1.2.* floats; the rule demands the unambiguous full form.
+    expect(() => parseRoster(withArgs(["run", "analytics-mcp==1.2"]))).toThrowError(
+      /no exact version pin/
+    );
+    expect(() => parseRoster(withArgs(["run", "analytics-mcp==1.2.*"]))).toThrowError(/range/);
     // Exact pins pass, npm and pip shaped, scoped packages included.
     expect(() => parseRoster(withArgs(["-y", "@scope/some-mcp@1.2.3"]))).not.toThrow();
     expect(() => parseRoster(withArgs(["run", "analytics-mcp==1.0.0"]))).not.toThrow();
