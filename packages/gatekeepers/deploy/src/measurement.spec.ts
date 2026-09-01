@@ -16,15 +16,25 @@ describe("validMeasurementId", () => {
 describe("measurementSnippet", () => {
   const id = "G-ABC1234567";
 
-  it("loads gtag and configures exactly the given id", () => {
+  it("configures exactly the given id and loads gtag for it", () => {
     const tag = measurementSnippet(id);
-    expect(tag).toContain(`googletagmanager.com/gtag/js?id=${id}`);
     expect(tag).toContain(`gtag('config','${id}')`);
+    expect(tag).toContain(`googletagmanager.com/gtag/js?id=${id}`);
+  });
+
+  it("does nothing when the page already configured that id", () => {
+    // The guard the whole design rests on: whether a page measures
+    // itself is decided from window.dataLayer at runtime, which is true
+    // however the page's own tag was written.
+    expect(measurementSnippet(id)).toContain("a[0]==='config'");
+    expect(measurementSnippet(id)).toContain(`a[1]==='${id}'`);
+  });
+
+  it("does nothing twice, so a second copy of itself is harmless", () => {
+    expect(measurementSnippet(id)).toContain("if(window.__operonGa)return");
   });
 
   it("only ever renders a validated id, so it cannot be broken out of", () => {
-    // validMeasurementId is the fence, and the serving path calls it
-    // before this: an id that could close the script tag never arrives.
     expect(validMeasurementId("G-A'</script><script>evil()//")).toBeNull();
     expect(measurementSnippet(id)).not.toContain("evil");
   });

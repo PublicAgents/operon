@@ -21,97 +21,76 @@ export function validMeasurementId(id: string | undefined): string | null {
   return MEASUREMENT_ID.test(trimmed) ? trimmed : null;
 }
 
+/**
+ * The tag, guarded at RUNTIME rather than by inspecting the page.
+ *
+ * Whether a page already measures itself cannot be decided from its
+ * source: an id can arrive through a template literal, a variable, or
+ * another script entirely, and each attempt to detect it by reading the
+ * HTML traded one wrong answer for another (serve an untagged page, or
+ * double-count every visit). The page's own state answers it exactly:
+ * the standard GA snippet pushes ["config", id] into window.dataLayer
+ * synchronously, so a tag that looks there knows what actually
+ * happened, whatever the source looked like.
+ *
+ * So this always goes in, and decides in the browser. Idempotent twice
+ * over: it also marks the window, so two copies of itself do nothing.
+ */
 function snippet(id: string): string {
   return (
-    `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>` +
-    `<script>window.dataLayer=window.dataLayer||[];` +
-    `function gtag(){dataLayer.push(arguments);}` +
-    `gtag('js',new Date());gtag('config','${id}');</script>`
+    `<script>(function(){` +
+    `if(window.__operonGa)return;window.__operonGa=1;` +
+    `var d=window.dataLayer=window.dataLayer||[];` +
+    // A page that already configured this id measures itself; adding a
+    // second loader would report every visit twice.
+    `for(var i=0;i<d.length;i++){var a=d[i];` +
+    `if(a&&a[0]==='config'&&a[1]==='${id}')return;}` +
+    `function gtag(){d.push(arguments);}` +
+    `gtag('js',new Date());gtag('config','${id}');` +
+    `var s=document.createElement('script');s.async=1;` +
+    `s.src='https://www.googletagmanager.com/gtag/js?id=${id}';` +
+    `document.head.appendChild(s);` +
+    `})();</script>`
   );
 }
 
 /**
- * The base tag, as HTML. Only the id varies, and it is validated
- * against a strict pattern before it reaches here, so nothing in it can
- * close the script element.
+ * The tag, as HTML. Only the id varies, and it is validated against a
+ * strict pattern before it reaches here, so nothing in it can close the
+ * script element.
  */
 export function measurementSnippet(id: string): string {
   return snippet(id);
 }
 
 /**
- * Insert the base tag into one HTML response unless the page already
- * loads it.
+ * Insert the tag at the end of one HTML response.
  *
- * This asks HTMLRewriter rather than a regex because the question is
- * about HTML STRUCTURE: an id named in a comment, in prose, or inside a
- * string is not a tag, and each round of regex refinement here traded
- * one wrong answer for another. A parser answers it exactly, and
- * streams instead of buffering the body.
- *
- * The tag goes at the END of the document rather than in the head, for
- * a reason worth stating: whether the page already loads gtag is only
- * fully known once every script has been seen, and a page whose own tag
- * sits at the bottom of the body would otherwise get a second one
- * inserted above it. Late is a few milliseconds; double-counting is
- * silent and halves whatever the operator reads. The fallbacks below
- * also mean a body-only page or a bare fragment is measured, rather
- * than only pages that happen to carry a literal <head>.
+ * HTMLRewriter rather than string surgery because it streams instead of
+ * buffering the body, and because it knows where a document actually
+ * ends: a body-only page and a bare fragment both get measured, not
+ * only pages carrying a literal </head>. There is no detection pass
+ * here at all any more; the snippet decides for itself once the page is
+ * running, which is the only place the question has a true answer.
  */
 export function injectMeasurementResponse(response: Response, id: string): Response {
-  let alreadyLoaded = false;
   let inserted = false;
-  // HTMLRewriter delivers a script's text in CHUNKS, so a config call
-  // can be split mid-statement; accumulate the element's text and judge
-  // it once, at the end. And only a script the browser would RUN counts:
-  // a JSON or template block containing the same characters is data.
-  let executable = false;
-  let scriptText = "";
-
-  /** One insertion per document, and never when the page tags itself. */
-  const insertOnce = (emit: () => void): void => {
-    if (alreadyLoaded || inserted) return;
-    inserted = true;
-    emit();
-  };
   return new HTMLRewriter()
-    .on("script", {
-      element(element) {
-        scriptText = "";
-        const type = (element.getAttribute("type") ?? "").toLowerCase().trim();
-        executable = type === "" || type === "module" || /javascript|ecmascript/.test(type);
-        const src = element.getAttribute("src") ?? "";
-        if (
-          executable &&
-          src.includes("googletagmanager.com/gtag/js") &&
-          src.includes(`id=${id}`)
-        ) {
-          alreadyLoaded = true;
-        }
-      },
-      text(chunk) {
-        if (!executable) return;
-        scriptText += chunk.text;
-        if (!chunk.lastInTextNode) return;
-        // An inline config call for this id counts as loaded: the page
-        // is already measuring itself.
-        const names = scriptText.includes(`'${id}'`) || scriptText.includes(`"${id}"`);
-        if (names && /gtag\s*\(\s*['"]config['"]/.test(scriptText)) alreadyLoaded = true;
-        scriptText = "";
-      }
-    })
     .on("body", {
       element(element) {
         element.onEndTag(end => {
-          insertOnce(() => end.before(snippet(id), { html: true }));
+          if (inserted) return;
+          inserted = true;
+          end.before(snippet(id), { html: true });
         });
       }
     })
     .onDocument({
       end(end) {
-        // No body element at all (a fragment, or a head-only document):
-        // appending still measures the page.
-        insertOnce(() => end.append(snippet(id), { html: true }));
+        // No body element at all (a fragment, or a head-only document).
+        if (inserted) return;
+        inserted = true;
+        end.append(snippet(id), { html: true });
       }
     })
     .transform(response);
