@@ -285,8 +285,17 @@ existing colonies keep working, and its use is logged by name as a
 degradation, because with a shared login "authored by me" means
 "authored by everyone". All allowlist checks resolve the calling
 agent's `github.pr` grant from the roster; authorship checks resolve
-against that agent's own login. Refusals: `repo_not_granted`,
-`not_your_item`.
+against that agent's own login.
+
+The agent id arrives in the request body, so it is a CLAIM, and it
+selects both the repo grant and the credential. Both Gatekeepers
+therefore check it against the roster before it selects anything: an
+id the roster does not list is `unknown_agent`, and a Worker with no
+parseable `ROSTER` refuses with `roster_unavailable` rather than
+guessing, because every Worker is deployed with that var and its
+absence is a broken deployment, not a request to be served. Other
+refusals: `repo_not_granted`, `not_author`, `write_not_granted`,
+`default_branch_protected`.
 
 ### Branch write (github)
 

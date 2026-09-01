@@ -87,8 +87,14 @@ function identify(env: Env, agentId: unknown): { token: string; shared: boolean 
   if (typeof agentId !== "string" || agentId.length === 0) {
     return errorResponse(400, "missing_agent_id");
   }
-  if (rosterVerdict(env, agentId) === "unknown") {
-    return errorResponse(404, "unknown_agent", agentId);
+  const verdict = rosterVerdict(env, agentId);
+  if (verdict === "unknown") return errorResponse(404, "unknown_agent", agentId);
+  if (verdict === "no-roster") {
+    // Every Worker is deployed with the ROSTER var, so this is a broken
+    // deployment rather than a bad request. Fail closed and say which:
+    // an unverifiable claim must not reach the shared credential, and
+    // an operator reading "unknown_agent" would hunt the wrong thing.
+    return errorResponse(500, "roster_unavailable", "this Worker has no parseable ROSTER var");
   }
   const pat = patForAgent(env, agentId);
   if (!pat) return errorResponse(500, "credential_unconfigured");

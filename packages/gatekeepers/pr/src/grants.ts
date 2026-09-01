@@ -30,9 +30,10 @@ function fleetRepos(env: GrantSource): string[] {
  * fleet list. The container's copy of this rule keys on exactly the
  * same thing, so the pre-check and the authority agree.
  *
- * An unparseable roster falls back rather than widening: the fleet list
- * is what this Worker enforced before grants existed, and "everything"
- * is never the safe reading of a broken input.
+ * A caller that reached this function has already been identified
+ * against the roster (see rosterVerdict), so the unparseable-roster
+ * branch is defense in depth rather than a path the doors take: the
+ * doors refuse an unverifiable claim outright.
  */
 export function grantedRepos(env: GrantSource, agentId: string): string[] {
   if (typeof env.ROSTER === "string" && env.ROSTER.length > 0) {

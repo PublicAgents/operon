@@ -61,8 +61,9 @@ describe("grantedRepos (spec 0008 §3)", () => {
   });
 
   it("falls back rather than widening when the roster cannot be parsed", () => {
-    // A broken roster must never mean "everything": the fleet list is
-    // what this Worker enforced before grants existed.
+    // Defense in depth only: the doors refuse an unverifiable claim
+    // before they ever ask for a grant (see rosterVerdict). If this is
+    // ever reached, the fleet list is the narrower answer.
     const env: GrantSource = { PR_REPOS: "demo/product", ROSTER: "{not json" };
     expect(grantedRepos(env, "scout")).toEqual(["demo/product"]);
   });
@@ -81,8 +82,9 @@ describe("rosterVerdict (an agent id is a claim)", () => {
   });
 
   it("cannot answer without a parseable roster, and says so", () => {
-    // Distinct from "unknown": a colony whose ROSTER is missing or
-    // broken must keep working, not have every door refuse.
+    // Distinct from "unknown" so the door can fail closed with the
+    // right error: a missing ROSTER is a broken deployment, not a bad
+    // request, and every Worker is deployed with one.
     expect(rosterVerdict({ PR_REPOS: "demo/x" }, "scout")).toBe("no-roster");
     expect(rosterVerdict({ ROSTER: "{not json" }, "scout")).toBe("no-roster");
   });
