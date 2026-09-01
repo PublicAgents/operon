@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateManifest } from "./manifest.js";
-import { renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } from "./templates.js";
+import { renderWorkers, mcpBindings, DEPLOY_ORDER, D1_PLACEHOLDER } from "./templates.js";
 
 /**
  * The golden test: fed the livevariant colony's manifest, the templates
@@ -252,5 +252,58 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     const unresolved = renderWorkers(LIVEVARIANT, { chassisDir: CHASSIS });
     const deploy = unresolved.find(worker => worker.key === "gatekeeper-deploy");
     expect((deploy?.config.kv_namespaces as { id: string }[])[0].id).toBe(D1_PLACEHOLDER);
+  });
+});
+
+describe("MCP server bindings (spec 0008 §4)", () => {
+  // A validated manifest plus MCP defs, assembled the way the fleet
+  // does: parseRoster owns the roster half, so reuse LIVEVARIANT's.
+  const withMcp = validateManifest({
+    project: "livevariant",
+    accountId: "85c7962b4a17a841ef0689e0e7c2a050",
+    workerPrefix: "operon",
+    access: {
+      teamDomain: "https://floral-shape-360c.cloudflareaccess.com",
+      aud: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025"
+    },
+    resources: { d1Name: "operon-chronicle" },
+    zone: LIVEVARIANT.roster.zone,
+    mcp: {
+      "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" },
+      linear: { type: "portal", server: "linear" },
+      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" }
+    },
+    agents: LIVEVARIANT.roster.agents.map(agent => ({
+      ...agent,
+      mcp: ["google-analytics", "linear"]
+    }))
+  });
+
+  it("binds a bespoke server to its own Worker and every remote to the proxy", () => {
+    expect(mcpBindings(withMcp)).toEqual([
+      ["MCP_GOOGLE_ANALYTICS", "gatekeeper-google-analytics"],
+      ["MCP_GK", "gatekeeper-mcp"]
+    ]);
+  });
+
+  it("binds nothing when the colony declares no servers", () => {
+    expect(mcpBindings(LIVEVARIANT)).toEqual([]);
+  });
+
+  it("gives the scheduler those bindings, so a granted host resolves", () => {
+    const withServers = renderWorkers(withMcp, { chassisDir: CHASSIS });
+    const scheduler = withServers.find(worker => worker.key === "scheduler")!.config as {
+      services: Array<{ binding: string; service: string }>;
+    };
+    // resolveDoor picks these names; they are derived from the same
+    // manifest, so the router and the deployment cannot disagree.
+    expect(scheduler.services).toContainEqual({
+      binding: "MCP_GOOGLE_ANALYTICS",
+      service: "operon-gatekeeper-google-analytics"
+    });
+    expect(scheduler.services).toContainEqual({
+      binding: "MCP_GK",
+      service: "operon-gatekeeper-mcp"
+    });
   });
 });

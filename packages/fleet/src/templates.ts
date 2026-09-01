@@ -84,6 +84,25 @@ const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
   scheduler: { HARNESS_EXTRA_ARGS: HARNESS_EXTRA_ARGS_DEFAULT }
 };
 
+/**
+ * Which [binding, worker] pairs the manifest's MCP servers need (spec
+ * 0008 §4): a bespoke Worker gets its own MCP_<NAME>, and every remote
+ * server shares the generic proxy. Derived from the manifest, so the
+ * umbilical's binding names and the scheduler's cannot drift apart.
+ */
+export function mcpBindings(manifest: FleetManifest): Array<[string, string]> {
+  const bindings = new Map<string, string>();
+  for (const def of Object.values(manifest.roster.mcp ?? {})) {
+    if (def.type === "gatekeeper") {
+      const suffix = def.worker.replace(/^gatekeeper-/, "").toUpperCase().replace(/-/g, "_");
+      bindings.set(`MCP_${suffix}`, def.worker);
+    } else {
+      bindings.set("MCP_GK", "gatekeeper-mcp");
+    }
+  }
+  return [...bindings];
+}
+
 function policyVars(manifest: FleetManifest, worker: string): Record<string, string> {
   return { ...(POLICY_DEFAULTS[worker] ?? {}), ...(manifest.policy[worker] ?? {}) };
 }
@@ -339,7 +358,8 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           // ASKS_GK, not ASKS: the asks Gatekeeper's own Durable Object
           // binding already owns that name inside its Worker, and a
           // reader moving between the two should not have to wonder.
-          service("ASKS_GK", "gatekeeper-asks")
+          service("ASKS_GK", "gatekeeper-asks"),
+          ...mcpBindings(manifest).map(([binding, worker]) => service(binding, worker))
         ],
         vars: {
           ...policyVars(manifest, "scheduler"),

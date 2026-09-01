@@ -74,6 +74,12 @@ export interface PreparedLaunch {
    * forwards over a binding, so no door credential enters the container.
    */
   umbilicalNonce: string;
+  /**
+   * Virtual hosts for the MCP servers this agent was granted (spec 0008
+   * §4). The WakeContainer intercepts exactly these, so an ungranted
+   * server's host routes nowhere at all.
+   */
+  mcpHosts: string[];
 }
 
 export async function prepareLaunch(
@@ -140,6 +146,17 @@ export async function prepareLaunch(
       }
     : {};
 
+  // The servers this agent may reach, resolved once here so the
+  // WakeContainer intercepts exactly them and the container is handed
+  // their virtual hosts and nothing else (spec 0008 §4).
+  const mcpServers = (agent.mcp ?? []).map(name => ({
+    name,
+    virtual: `mcp-${name}.operon.internal`
+  }));
+  const mcpEnv = mcpServers.length > 0
+    ? { mcpServers: JSON.stringify(mcpServers.map(s => ({ ...s, type: "http" as const }))) }
+    : {};
+
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is
   // configured in the scheduler env; the container then carries the nonce
@@ -159,8 +176,9 @@ export async function prepareLaunch(
     env: wakeEnv(
       { wakeId, trigger, agent },
       secrets,
-      { ...context.options, ...doorOptions, ...perAgent, ...githubGrants }
+      { ...context.options, ...doorOptions, ...perAgent, ...githubGrants, ...mcpEnv }
     ),
-    umbilicalNonce
+    umbilicalNonce,
+    mcpHosts: mcpServers.map(server => server.virtual)
   };
 }
