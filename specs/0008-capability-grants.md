@@ -246,9 +246,13 @@ lives on this Worker, and classification runs at the `byo` tier, where
 no annotation is trusted and ONLY pinned tools are callable.
 
 The upstream client is the official MCP SDK client over Streamable
-HTTP, which owns protocol-revision negotiation (the 2025-era stateful
-initialize with `Mcp-Session-Id`, and the stateless 2026-07-28
-revision) and accepts a custom fetch. That fetch is the guarded one:
+HTTP, which owns protocol-revision negotiation and accepts a custom
+fetch. Which revisions can be spoken is the SDK's fact rather than
+ours: it publishes the list, negotiates within it (the stateful
+handshake with `Mcp-Session-Id`, and the same protocol stateless), and
+refuses a revision it does not know rather than guessing. Bumping the
+SDK is therefore how a newer revision becomes speakable, and the mock
+matrix below is what says whether the bump changed anything. That fetch is the guarded one:
 redirects followed by hand and re-checked per hop, authorization
 dropped cross-origin, response sizes capped; the Worker sets
 `global_fetch_strictly_public` so resolved-private addresses are

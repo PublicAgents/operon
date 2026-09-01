@@ -43,6 +43,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   pr: ["PR_REPOS"],
   deploy: ["DISCLOSURE_MARKER", "GA_MEASUREMENT_ID"],
   "google-analytics": ["GA_PROPERTY_ID"],
+  mcp: ["MCP_PORTAL_URL"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
   scheduler: ["HARNESS_EXTRA_ARGS"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]

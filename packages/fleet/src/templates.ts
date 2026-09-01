@@ -54,6 +54,8 @@ export const DEPLOY_ORDER = [
   "gatekeeper-browser",
   // Before the scheduler, which binds it for the agent's ask door.
   "gatekeeper-asks",
+  // Before the scheduler, which binds every MCP server Worker.
+  "gatekeeper-mcp",
   "scheduler",
   "gatekeeper-telegram",
   "gatekeeper-ops"
@@ -306,6 +308,20 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         },
         migrations: [{ tag: "v1", new_sqlite_classes: ["AskBox", "Ledger"] }],
         vars: { ...policyVars(manifest, "asks"), NOTIFY_URL: notifyUrl }
+      }
+    },
+    {
+      key: "gatekeeper-mcp",
+      config: {
+        ...common("gatekeeper-mcp"),
+        ...chronicleD1,
+        // The runtime refuses private and loopback addresses after DNS,
+        // which a hostname blocklist cannot do (spec 0008 §5).
+        compatibility_flags: ["global_fetch_strictly_public"],
+        // No route: reached only through the umbilical.
+        durable_objects: { bindings: [ledger] },
+        migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
+        vars: policyVars(manifest, "mcp")
       }
     },
     {
