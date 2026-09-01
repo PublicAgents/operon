@@ -284,9 +284,11 @@ raw credentials outward.
   mind-writable repo is an inherently leaky arrangement (it produced a
   series of privilege-boundary findings), so the credential was moved out
   of the container entirely.
-- **github**: mints short-lived scoped credentials for state-repo clone/push;
-  opens PRs on product repos on an agent's behalf. Push to anything except
-  the agent's own state repo is structurally impossible.
+- **github**: mints short-lived installation tokens scoped to one repo and
+  one permission, for state-repo clone and commit. Push to anything except
+  the agent's own state repo is structurally impossible. (Opening PRs on
+  product repos is the separate pr Gatekeeper's job, with the machine
+  account; the split is by credential blast radius.)
 - **spend** (stub in v1): accepts spend proposals (what, why, amount,
   destination), ledgers them, forwards to the operator, records the decision.
   No execution rails in v1.
@@ -378,9 +380,11 @@ the primary approval channel.
 1. The SESSION environment contains exactly one credential: the mind
    credential (plus OPERON_PORCH, a loopback address, not a secret). All
    other tokens are held by the entrypoint and its porch: the short-lived
-   state-repo token, the notify and publish bearers, and the machine-user
-   PR token (fork-push and private read only; upstream write access is
-   zero by construction). Full CONTAINER compromise therefore reaches:
+   state-repo token and the internal door bearers (notify, publish, PR,
+   and the rest). The machine-user PAT itself never enters the container;
+   it lives only in the pr Gatekeeper, which is fork-push and private
+   read only, so upstream write access from a wake is zero by
+   construction. Full CONTAINER compromise therefore reaches:
    the agent's own state repo, its own assigned hosts through the gated
    publish door, operator messages, fork branches and reviewable PRs, and
    bounded inference. No production system, no other agent's anything.
