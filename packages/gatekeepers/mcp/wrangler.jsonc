@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "operon-gatekeeper-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }]
+  // ROSTER injected at deploy; the fleet templates own the real
+  // deployment config (spec 0006 §2). This file is the dev target.
+  // Vars:    MCP_PORTAL_URL  the deployment's Cloudflare MCP portal
+  // Secrets: MCP_PORTAL_CLIENT_ID / MCP_PORTAL_CLIENT_SECRET
+  //            the Access service token this Worker authenticates with
+  //          MCP_<NAME>_TOKEN  bearer for a type:http server called <name>
+}

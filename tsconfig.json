@@ -62,6 +62,9 @@
     },
     {
       "path": "./packages/gatekeepers/asks"
+    },
+    {
+      "path": "./packages/gatekeepers/mcp"
     }
   ]
 }
