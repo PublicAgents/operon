@@ -66,12 +66,34 @@ function requireString(value: unknown, path: string): string {
   return value;
 }
 
+const AGENT_KEYS = new Set([
+  "id",
+  "stateRepo",
+  "cadence",
+  "harness",
+  "model",
+  "fallbackModel",
+  "maxWakeMinutes",
+  "hosts",
+  "web",
+  "enabled"
+]);
+
 function parseAgent(value: unknown, index: number): RosterAgent {
   const path = `agents[${index}]`;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail(path, "must be an object");
   }
   const raw = value as Record<string, unknown>;
+
+  // Unknown keys refuse rather than vanish: a misspelled field is a
+  // grant or a policy the operator BELIEVES is in force, and silently
+  // dropping it is how "this agent may not X" quietly becomes "may X".
+  for (const key of Object.keys(raw)) {
+    if (!AGENT_KEYS.has(key)) {
+      fail(`${path}.${key}`, `is not a roster field (known: ${[...AGENT_KEYS].join(", ")})`);
+    }
+  }
 
   const id = requireString(raw.id, `${path}.id`);
   if (!AGENT_ID.test(id)) fail(`${path}.id`, `"${id}" is not a valid slug`);
