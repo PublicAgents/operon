@@ -34,6 +34,7 @@ export function renderSkills(
 ): string {
   void config; // reserved: future per-colony guidance (hosts, PR targets)
   const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
+  const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
   const askCeiling = askLimits
     ? `at most ${askLimits.perWake} per wake, ${askLimits.perDay} per day`
     : "there is a per-wake ceiling; the door names it if you reach it";
@@ -116,7 +117,19 @@ PUBLISHING AND MONEY
                                          allowances, across wakes: check here
                                          BEFORE re-asking the operator${mark(caps.pay)}
 
-ASKS (a decision you need from your operator, durable across wakes)
+${
+  mcpServers.length > 0
+    ? `MCP SERVERS (this wake's, already wired into your harness)
+  ${mcpServers.join(", ")}
+                                         Their tools appear as mcp__<server>__*
+                                         in your tool list; you need no config
+                                         and hold no credential for them. A tool
+                                         the operator has not granted answers a
+                                         named refusal rather than vanishing.
+
+`
+    : ""
+}ASKS (a decision you need from your operator, durable across wakes)
   operon ask <decision|request|question> --title <t> --body <b> [--link <url>]
                                          file it in the operator's queue: a
                                          decision (allow or decline), a request
