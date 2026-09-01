@@ -81,3 +81,62 @@ describe("validateManifest", () => {
     expect(parseManifest(yaml).workerPrefix).toBe("operon-demo");
   });
 });
+
+describe("capability grants through the manifest (spec 0008)", () => {
+  const withGrants = () => ({
+    ...structuredClone(BASE),
+    mcp: {
+      "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" }
+    },
+    agents: [
+      {
+        ...structuredClone(BASE.agents[0]),
+        mcp: ["google-analytics"],
+        github: { pr: ["demo/product"] }
+      }
+    ]
+  });
+
+  it("carries mcp defs into the roster, and they survive the deployed ROSTER var shape", () => {
+    const manifest = validateManifest(withGrants());
+    expect(manifest.roster.mcp?.["google-analytics"]).toEqual({
+      type: "gatekeeper",
+      worker: "gatekeeper-google-analytics"
+    });
+    // What fleet.mjs actually deploys: the round trip must preserve
+    // the defs, or a grant validates at check and vanishes in prod.
+    const rosterVar = JSON.stringify({
+      zone: manifest.roster.zone,
+      agents: manifest.roster.agents,
+      ...(manifest.roster.mcp !== undefined ? { mcp: manifest.roster.mcp } : {})
+    });
+    const redeployed = validateManifest({
+      ...withGrants(),
+      ...JSON.parse(rosterVar)
+    });
+    expect(redeployed.roster.mcp).toEqual(manifest.roster.mcp);
+    expect(redeployed.roster.agents[0].mcp).toEqual(["google-analytics"]);
+  });
+
+  it("refuses PR_REPOS alongside a per-agent github.pr grant", () => {
+    const conflicted = {
+      ...withGrants(),
+      policy: { pr: { PR_REPOS: "demo/product" } }
+    };
+    expect(() => validateManifest(conflicted)).toThrow(/conflicts with agents.scout.github.pr/);
+  });
+
+  it("keeps PR_REPOS working for agents without a github block", () => {
+    const legacy = {
+      ...structuredClone(BASE),
+      policy: { pr: { PR_REPOS: "demo/product" } }
+    };
+    expect(validateManifest(legacy).policy.pr?.PR_REPOS).toBe("demo/product");
+  });
+
+  it("roster refusals surface through the manifest (one validator)", () => {
+    const bad = withGrants();
+    (bad.agents[0].mcp as string[]).push("ghost");
+    expect(() => validateManifest(bad)).toThrow(/names no server/);
+  });
+});

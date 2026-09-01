@@ -39,6 +39,8 @@ export const ENV = {
   vaultToken: "OPERON_VAULT_TOKEN",
   asksUrl: "OPERON_ASKS_URL",
   asksToken: "OPERON_ASKS_TOKEN",
+  mcpServers: "OPERON_MCP_SERVERS",
+  githubGrants: "OPERON_GITHUB_GRANTS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -93,6 +95,10 @@ export interface WakeConfig {
   /** asks Gatekeeper endpoint + this agent's own decision-queue bearer. */
   asksUrl?: string;
   asksToken?: string;
+  /** Staged MCP servers (spec 0008 §4): stdio defs, or a name plus virtual host. */
+  mcpServers: StagedMcpServer[];
+  /** This agent's GitHub grants (spec 0008 §6); empty lists grant nothing. */
+  githubGrants: { pr: string[]; write: string[] };
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -106,6 +112,52 @@ export interface WakeConfig {
 
 export class ConfigError extends Error {
   override name = "ConfigError";
+}
+
+/**
+ * What the scheduler staged for this wake (spec 0008 §4): a stdio
+ * definition to spawn, or a name whose only address is a virtual host
+ * through the umbilical. The container never sees more.
+ */
+export type StagedMcpServer =
+  | { name: string; type: "stdio"; command: string; args: string[] }
+  | { name: string; type: "http"; virtual: string };
+
+function parseMcpServers(raw: string | undefined): StagedMcpServer[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`invalid_env: ${ENV.mcpServers} must be a JSON array`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ConfigError(`invalid_env: ${ENV.mcpServers} must be a JSON array`);
+  }
+  for (const entry of parsed as Array<Record<string, unknown>>) {
+    const ok =
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof entry.name === "string" &&
+      ((entry.type === "stdio" && typeof entry.command === "string" && Array.isArray(entry.args)) ||
+        (entry.type === "http" && typeof entry.virtual === "string"));
+    if (!ok) throw new ConfigError(`invalid_env: ${ENV.mcpServers} entry is malformed`);
+  }
+  return parsed as StagedMcpServer[];
+}
+
+function parseGithubGrants(raw: string | undefined): { pr: string[]; write: string[] } {
+  if (!raw) return { pr: [], write: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`invalid_env: ${ENV.githubGrants} must be JSON`);
+  }
+  const record = parsed as { pr?: unknown; write?: unknown };
+  const list = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return { pr: list(record?.pr), write: list(record?.write) };
 }
 
 type EnvSource = Record<string, string | undefined>;
@@ -178,6 +230,8 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     vaultToken: env[ENV.vaultToken],
     asksUrl: env[ENV.asksUrl],
     asksToken: env[ENV.asksToken],
+    mcpServers: parseMcpServers(env[ENV.mcpServers]),
+    githubGrants: parseGithubGrants(env[ENV.githubGrants]),
     chronicleUrl: env[ENV.chronicleUrl],
     chronicleToken: env[ENV.chronicleToken],
     xUrl: env[ENV.xUrl],

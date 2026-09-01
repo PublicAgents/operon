@@ -174,7 +174,28 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   // scheduler will parse out of the ROSTER var.
   if (root.zone === undefined) fail("zone", "is required");
   if (root.agents === undefined) fail("agents", "is required");
-  const roster = parseRoster(JSON.stringify({ zone: root.zone, agents: root.agents }));
+  const roster = parseRoster(
+    JSON.stringify({
+      zone: root.zone,
+      agents: root.agents,
+      ...(root.mcp !== undefined ? { mcp: root.mcp } : {})
+    })
+  );
+
+  // The per-agent github.pr grant and the fleet-wide PR_REPOS var are
+  // two sources of the same truth; both at once is how allowlists rot
+  // (spec 0008 §3). PR_REPOS remains the fallback for agents with no
+  // github: block, for one release.
+  if (policy.pr?.PR_REPOS !== undefined) {
+    for (const agent of roster.agents) {
+      if (agent.github?.pr !== undefined) {
+        fail(
+          "policy.pr.PR_REPOS",
+          `conflicts with agents.${agent.id}.github.pr; grant repos per agent OR fleet-wide, not both`
+        );
+      }
+    }
+  }
 
   return {
     project,

@@ -95,3 +95,92 @@ describe("findAgent", () => {
     expect(findAgent(roster, "missing")).toBeUndefined();
   });
 });
+
+describe("capability grants (spec 0008)", () => {
+  const granted = () => {
+    const roster = structuredClone(valid) as Record<string, unknown> & {
+      agents: Array<Record<string, unknown>>;
+    };
+    roster.mcp = {
+      "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" },
+      linear: { type: "portal", server: "linear", tools: ["linear_create_issue"] },
+      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "bearer" },
+      somelocal: { type: "stdio", command: "npx", args: ["-y", "some-mcp@1.2.3"] }
+    };
+    roster.agents[0].mcp = ["google-analytics", "linear"];
+    roster.agents[0].github = {
+      pr: ["example-org/product"],
+      write: ["example-org/product"]
+    };
+    return roster;
+  };
+
+  it("parses every def type and the per-agent grants", () => {
+    const roster = parseRoster(JSON.stringify(granted()));
+    expect(Object.keys(roster.mcp ?? {})).toHaveLength(4);
+    expect(roster.agents[0].mcp).toEqual(["google-analytics", "linear"]);
+    expect(roster.agents[0].github?.write).toEqual(["example-org/product"]);
+  });
+
+  it("refuses an agent grant naming no defined server", () => {
+    const roster = granted();
+    (roster.agents[0].mcp as string[]).push("ghost");
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/names no server/);
+  });
+
+  it("refuses unknown keys in a def instead of dropping them", () => {
+    const roster = granted();
+    (roster.mcp as Record<string, Record<string, unknown>>).plain.headerSecret = "X";
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/headerSecret/);
+  });
+
+  it("refuses env on stdio by name: credential-less by construction", () => {
+    const roster = granted();
+    (roster.mcp as Record<string, Record<string, unknown>>).somelocal.env = { A: "1" };
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/stdio_env_unsupported/);
+  });
+
+  it("refuses an unpinned stdio package", () => {
+    const roster = granted();
+    (roster.mcp as Record<string, Record<string, unknown>>).somelocal.args = [
+      "-y",
+      "some-mcp@latest"
+    ];
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/not pinned/);
+  });
+
+  it("never grants portal_* tools at any scope", () => {
+    const roster = granted();
+    (roster.mcp as Record<string, Record<string, unknown>>).linear.tools = ["portal_ls"];
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/never grantable/);
+  });
+
+  it("refuses portal server ids that prefix one another", () => {
+    // "foo" vs "foo_bar": foo_bar_create would ride a grant for foo.
+    const roster = granted();
+    (roster.mcp as Record<string, unknown>).foo = { type: "portal", server: "foo" };
+    (roster.mcp as Record<string, unknown>).foobar = { type: "portal", server: "foo_bar" };
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/portal_server_ambiguous/);
+  });
+
+  it("refuses malformed github grants and unknown grant keys", () => {
+    const roster = granted();
+    (roster.agents[0].github as Record<string, unknown>).write = ["not-a-repo"];
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/owner\/repo/);
+    const roster2 = granted();
+    (roster2.agents[0].github as Record<string, unknown>).push = ["a/b"];
+    expect(() => parseRoster(JSON.stringify(roster2))).toThrowError(/not a github grant/);
+  });
+
+  it("refuses an unknown agent field instead of dropping it", () => {
+    const roster = granted();
+    roster.agents[0].mpc = ["google-analytics"];
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/mpc/);
+  });
+
+  it("refuses http urls that are not https", () => {
+    const roster = granted();
+    (roster.mcp as Record<string, Record<string, unknown>>).plain.url = "http://mcp.example.com";
+    expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/https/);
+  });
+});
