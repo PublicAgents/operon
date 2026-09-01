@@ -39,6 +39,12 @@ export interface LaunchArgs {
    * porch (not the mind, not a browser page) can reach the doors.
    */
   umbilicalNonce?: string;
+  /**
+   * Virtual hosts for the MCP servers THIS agent was granted (spec 0008
+   * §4). Intercepted alongside the fixed doors, so an ungranted server
+   * is not merely refused: its host never routes anywhere at all.
+   */
+  mcpHosts?: string[];
 }
 
 export type LaunchResult =
@@ -178,7 +184,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         const intercept = this.ctx.container as unknown as {
           interceptOutboundHttp(host: string, worker: Fetcher): Promise<void>;
         };
-        for (const host of allDoorHosts()) {
+        for (const host of [...allDoorHosts(), ...(args.mcpHosts ?? [])]) {
           await intercept.interceptOutboundHttp(host, router);
         }
       }

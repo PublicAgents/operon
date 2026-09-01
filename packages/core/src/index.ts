@@ -3,7 +3,9 @@ export {
   findAgent,
   RosterError,
   type Roster,
-  type RosterAgent
+  type RosterAgent,
+  type McpServerDef,
+  type GithubGrants
 } from "./roster.js";
 export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
 export {

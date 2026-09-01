@@ -3,6 +3,7 @@
  * unit-tested without the Workers runtime. The entrypoint in umbilical.ts
  * wraps it.
  */
+import { findAgent, parseRoster, type McpServerDef } from "@operon/core";
 
 interface DoorRoute {
   binding: string;
@@ -35,6 +36,52 @@ export const DOOR_ROUTES: Record<string, DoorRoute> = {
 
 export const INTERNAL_SUFFIX = ".operon.internal";
 
+/** MCP servers get their own host space: mcp-<name>.operon.internal. */
+const MCP_PREFIX = "mcp-";
+
+/**
+ * The binding that fronts one MCP server (spec 0008 §4): a bespoke
+ * Worker for a `gatekeeper` def, and the generic proxy for everything
+ * remote. The name is derived, never taken from the request.
+ */
+function mcpBinding(def: McpServerDef): string {
+  return def.type === "gatekeeper"
+    ? `MCP_${def.worker.replace(/^gatekeeper-/, "").toUpperCase().replace(/-/g, "_")}`
+    : "MCP_GK";
+}
+
+/**
+ * Which MCP servers this agent may reach, as virtual hosts. The
+ * WakeContainer intercepts exactly these, so an ungranted server is
+ * unreachable twice over: unintercepted here, and refused by
+ * resolveDoor if it somehow arrives anyway.
+ */
+export function mcpHostsFor(rosterJson: string | undefined, agentId: string): string[] {
+  const granted = grantedServers(rosterJson, agentId);
+  return [...granted.keys()].map(name => `${MCP_PREFIX}${name}${INTERNAL_SUFFIX}`);
+}
+
+/** The agent's granted server definitions, by name; empty on any doubt. */
+function grantedServers(
+  rosterJson: string | undefined,
+  agentId: string
+): Map<string, McpServerDef> {
+  const out = new Map<string, McpServerDef>();
+  if (typeof rosterJson !== "string" || rosterJson.length === 0) return out;
+  try {
+    const roster = parseRoster(rosterJson);
+    const agent = findAgent(roster, agentId);
+    for (const name of agent?.mcp ?? []) {
+      const def = roster.mcp?.[name];
+      if (def) out.set(name, def);
+    }
+  } catch {
+    // An unparseable roster grants nothing: unlike a repo allowlist,
+    // there is no narrower previous behaviour to fall back to.
+  }
+  return out;
+}
+
 /** The virtual host for a door, e.g. "email" -> "email.operon.internal". */
 export function doorHost(door: string): string {
   return `${door}${INTERNAL_SUFFIX}`;
@@ -58,6 +105,17 @@ export function resolveDoor(
 ): { binding: string; bearer?: string } | { error: string } {
   if (!hostname.endsWith(INTERNAL_SUFFIX)) return { error: "not_internal" };
   const door = hostname.slice(0, -INTERNAL_SUFFIX.length);
+  // MCP servers (spec 0008 §4): the grant is checked HERE, outside the
+  // container, before any binding is touched. The container carries a
+  // name; whether that name is granted is the supervisor's fact.
+  if (door.startsWith(MCP_PREFIX)) {
+    const name = door.slice(MCP_PREFIX.length);
+    const def = grantedServers(env.ROSTER as string | undefined, agentId).get(name);
+    if (!def) return { error: "mcp_not_granted" };
+    // Identity rides x-operon-agent, as the web door does: the target
+    // Worker is private and the binding is the authorization.
+    return { binding: mcpBinding(def) };
+  }
   const route = DOOR_ROUTES[door];
   if (!route) return { error: "unknown_door" };
   if (route.bearerless) return { binding: route.binding };
