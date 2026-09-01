@@ -305,5 +305,17 @@ describe("MCP server bindings (spec 0008 §4)", () => {
       binding: "MCP_GK",
       service: "operon-gatekeeper-mcp"
     });
+    const order = (key: string) => DEPLOY_ORDER.indexOf(key as (typeof DEPLOY_ORDER)[number]);
+    expect(order("gatekeeper-google-analytics")).toBeLessThan(order("scheduler"));
+  });
+
+  it("ships the analytics Worker with no public route: the binding is the auth", () => {
+    const withServers = renderWorkers(withMcp, { chassisDir: CHASSIS });
+    const ga = withServers.find(worker => worker.key === "gatekeeper-google-analytics")!.config as {
+      routes?: unknown;
+      vars: Record<string, string>;
+    };
+    expect(ga.routes).toBeUndefined();
+    expect(ga.vars).toEqual({});
   });
 });

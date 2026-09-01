@@ -1,5 +1,6 @@
 import { parseRoster } from "@operon/core";
 import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { injectMeasurement, validMeasurementId } from "./measurement.js";
 import {
   hostLabel,
   storagePath,
@@ -33,6 +34,8 @@ interface Env {
   DISCLOSURE_MARKER?: string;
   SECRET_DENYLIST?: string;
   SITE_STORE: KVNamespace;
+  /** Public GA measurement id; injected into served HTML (spec 0008 §5). */
+  GA_MEASUREMENT_ID?: string;
   SITE_PUBLISHER: DurableObjectNamespace<SitePublisher>;
   LEDGER: DurableObjectNamespace<Ledger>;
 }
@@ -115,11 +118,16 @@ async function serve(request: Request, env: Env): Promise<Response> {
       headers: { "content-type": "text/plain; charset=utf-8" }
     });
   }
+  const contentType = entry.metadata?.contentType ?? "application/octet-stream";
+  const measurementId = validMeasurementId(env.GA_MEASUREMENT_ID);
+  if (measurementId && contentType.startsWith("text/html")) {
+    const html = injectMeasurement(new TextDecoder().decode(entry.value), measurementId);
+    return new Response(html, {
+      headers: { "content-type": contentType, "cache-control": "public, max-age=60" }
+    });
+  }
   return new Response(entry.value, {
-    headers: {
-      "content-type": entry.metadata?.contentType ?? "application/octet-stream",
-      "cache-control": "public, max-age=60"
-    }
+    headers: { "content-type": contentType, "cache-control": "public, max-age=60" }
   });
 }
 
