@@ -85,10 +85,9 @@ mcp:
     auth: bearer                     # bearer -> secret MCP_PLAIN_TOKEN on gatekeeper-mcp
     tools: [some_tool]               # byo tier: ONLY pinned tools are callable
   somelocal:
-    type: stdio                      # in-container, credential-less by validation
+    type: stdio                      # in-container, credential-less by construction
     command: npx
     args: ["-y", "some-mcp@1.2.3"]   # a version pin is required; "latest" refuses
-    env: { SOME_FLAG: "1" }          # literals only; no secret references exist
 
 agents:
   - id: promoter
@@ -117,8 +116,8 @@ Validation lives in ONE place, core `parseRoster`, which the fleet
 `--check`, the deployed `ROSTER` var, and every Worker that reads the
 roster all ride. Named refusals: an `agents[].mcp` entry naming an
 undefined server; unknown keys in a server definition or an env entry;
-a stdio arg containing `latest`; a stdio env value that fails the public-literal fence of section 4
-(`stdio_env_not_public`); a `tools:` list on a stdio def; a repo not shaped
+a stdio arg containing `latest`; an `env` field on a stdio def
+(`stdio_env_unsupported`, see section 4); a `tools:` list on a stdio def; a repo not shaped
 `owner/repo`; a secret name not shaped `MCP_*`. `parseAgent` also
 gains the unknown-key refusal `validatePolicy` already has: a
 misspelled grant must fail the check, not silently grant nothing.
@@ -136,20 +135,15 @@ same merged file.
 
 Entries by type:
 
-- `stdio`: the definition verbatim. It runs in the container as the
-  mind's uid with only the literal env the manifest declared. What it
-  can reach, the mind could reach anyway (egress is audited, spec 0004
-  section 8); what it cannot have is a credential, structurally: the
-  manifest is a git-committed file, so its literals are PUBLIC by
-  definition, and stdio defs offer no secret-reference mechanism at
-  all. Validation backs the doctrine with a mechanical fence rather
-  than trusting it: an env value longer than 64 characters, or
-  matching known credential shapes (long hex or base64 runs, `ghp_`,
-  `github_pat_`, `sk-`, `AKIA`, `xox`, a PEM header), refuses with
-  `stdio_env_not_public`, naming the alternative (a gatekeeper or
-  portal server). The fence is a tripwire, not the boundary: the
-  boundary is that a value an operator would mind committing to git
-  has no place in a stdio def.
+- `stdio`: command and args, nothing else. It runs in the container as
+  the mind's uid; what it can reach, the mind could reach anyway
+  (egress is audited, spec 0004 section 8). It cannot carry a
+  credential STRUCTURALLY, because the definition has no `env` field
+  at all: there is no place to put one, short or long, recognizable or
+  not (`stdio_env_unsupported` names the refusal and the alternative,
+  a gatekeeper or portal server). Non-secret env for stdio servers is
+  deferred until a concrete server needs it, and returns, if ever,
+  with a mechanism that cannot be misused for secrets.
 - `gatekeeper`, `portal`, `http`: an entry of the form
   `{"type": "http", "url": "http://mcp-<name>.operon.internal/mcp",
   "headers": {"authorization": "Bearer <wake nonce>"}}`. The container
@@ -196,6 +190,20 @@ endpoint, cached until expiry, single-flight so a burst of calls
 collapses into one mint. Binding-only; identity rides
 `x-operon-agent`; every tool call is ledgered as `analytics_query`
 with the tool name and date range, never the row data.
+
+The measurement side is the deploy Gatekeeper's job, not the agent's.
+A GA measurement id is public by design (it ships in every page's
+HTML to every visitor), so it lives in `policy.deploy` as
+`GA_MEASUREMENT_ID`, and the site-serving path injects the gtag
+snippet into every `text/html` response at serve time, before
+`</head>`, skipping pages that already carry the id so a hand-rolled
+tag never double-counts. Serve-time rather than publish-time because
+the server already holds the full body, coverage is uniform across
+everything ever published, and the tag changes without a republish.
+The living help tells the agent the id and that the base tag is
+injected for it: the agent writes custom `gtag('event', ...)` calls
+against that id and reads the results back through its
+`google-analytics` MCP tools, with no credential anywhere near it.
 
 ### gatekeeper-mcp
 
