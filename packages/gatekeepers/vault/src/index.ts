@@ -1,5 +1,8 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+  notifyOperator as sendOperatorNotify,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import { validLabel, valueProblem, vaultTokenVar } from "./policy.js";
 import { VaultBox } from "./vault-do.js";
 
@@ -32,7 +35,8 @@ export * from "./policy.js";
 
 interface Env {
   ROSTER: string;
-  NOTIFY_URL?: string;
+  /** The telegram Gatekeeper over a service binding (spec 0009). */
+  TELEGRAM?: TelegramGatewayBinding;
   /** Secrets. */
   NOTIFY_TOKEN?: string;
   /** Per-agent bearers as VAULT_TOKEN_<AGENTID>. */
@@ -60,17 +64,9 @@ function agentFromBearer(request: Request, env: Env): RosterAgent | null {
   return null;
 }
 
+/** Operator alerts ride the TELEGRAM binding (spec 0009); the public path is gone. */
 async function notifyOperator(env: Env, text: string): Promise<void> {
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
-  try {
-    await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text })
-    });
-  } catch (error) {
-    console.error("vault notify failed", error);
-  }
+  await sendOperatorNotify(env, text);
 }
 
 async function record(env: Env, event: string, data: Record<string, unknown>): Promise<void> {

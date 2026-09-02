@@ -1,4 +1,5 @@
 import { parseRoster } from "@operon/core";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { injectMeasurementResponse, validMeasurementId } from "./measurement.js";
 import {
@@ -131,12 +132,26 @@ async function serve(request: Request, env: Env): Promise<Response> {
     : response;
 }
 
-export default {
-  async fetch(request, env) {
+/**
+ * The publish door (spec 0009): reachable only over the umbilical's
+ * DEPLOY_DOOR binding, never from the public hostname this Worker
+ * serves the sites on. The bearer check stays: the umbilical attaches
+ * the real PUBLISH_TOKEN, and the door still names who may publish.
+ */
+export class Door extends WorkerEntrypoint<Env> {
+  override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/gatekeeper/publish" && request.method === "POST") {
-      return handlePublish(request, env);
+      return handlePublish(request, this.env);
     }
+    return errorResponse(404, "not_found");
+  }
+}
+
+export default {
+  async fetch(request, env) {
+    // The public surface: the sites, and nothing else. The publish door
+    // is not addressable here at all (spec 0009).
     if (request.method === "GET" || request.method === "HEAD") {
       return serve(request, env);
     }

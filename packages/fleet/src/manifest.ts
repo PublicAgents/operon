@@ -71,7 +71,8 @@ export interface FleetManifest {
   operatorEmail?: string;
   /** Worker name prefix; workers are `<prefix>-gatekeeper-*` and `<prefix>-scheduler`. */
   workerPrefix: string;
-  access: { teamDomain: string; aud: string };
+  /** The plane's Access application (spec 0009 §3): filled by bootstrap, absent until then. */
+  access?: { teamDomain: string; aud: string };
   resources: {
     d1Name: string;
     /** Site-store KV id; when absent, resolved by title `<prefix>-site` at deploy. */
@@ -162,11 +163,15 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     fail("workerPrefix", `"${workerPrefix}" must be lowercase, digits, hyphens`);
   }
 
-  const access = requireRecord(root.access, "access");
-  const teamDomain = requireString(access.teamDomain, "access.teamDomain");
-  if (!teamDomain.startsWith("https://")) fail("access.teamDomain", "must be an https URL");
-  const aud = requireString(access.aud, "access.aud");
-  if (!HEX64.test(aud)) fail("access.aud", "must be the 64-hex Access application AUD");
+  let accessBlock: { teamDomain: string; aud: string } | undefined;
+  if (root.access !== undefined) {
+    const access = requireRecord(root.access, "access");
+    const teamDomain = requireString(access.teamDomain, "access.teamDomain");
+    if (!teamDomain.startsWith("https://")) fail("access.teamDomain", "must be an https URL");
+    const aud = requireString(access.aud, "access.aud");
+    if (!HEX64.test(aud)) fail("access.aud", "must be the 64-hex Access application AUD");
+    accessBlock = { teamDomain, aud };
+  }
 
   const resourcesRaw = root.resources === undefined ? {} : requireRecord(root.resources, "resources");
   const d1Name =
@@ -260,7 +265,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     accountId,
     ...(operatorEmail !== undefined ? { operatorEmail } : {}),
     workerPrefix,
-    access: { teamDomain, aud },
+    ...(accessBlock ? { access: accessBlock } : {}),
     resources: { d1Name, ...(siteStoreKvId !== undefined ? { siteStoreKvId } : {}) },
     containers: { maxInstances },
     policy,
