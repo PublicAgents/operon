@@ -348,7 +348,14 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
             class_name: "WakeContainer",
             image: `${chassisDir}/packages/container/Dockerfile`,
             max_instances: manifest.containers.maxInstances,
-            instance_type: { vcpu: 1, memory_mib: 3072, disk_mb: 4000 }
+            instance_type: { vcpu: 1, memory_mib: 3072, disk_mb: 4000 },
+            // One step, not the platform's gradual [10, 100] default:
+            // every deploy drains first (spec 0006 §5), so the instances
+            // being replaced are idle, and a staged rollout only
+            // lengthens the window in which a freshly started wake is
+            // signalled to exit. The deploy driver holds the pause until
+            // this rollout reports completed.
+            rollout_step_percentage: 100
           }
         ],
         durable_objects: {

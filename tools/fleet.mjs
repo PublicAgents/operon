@@ -21,6 +21,15 @@
  * CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET (a service token); a
  * scheduler deploy REFUSES without them unless --no-drain says, in
  * effect, kill whatever is running.
+ *
+ * The pause outlasts wrangler. A deploy that changes the wake
+ * container's effective configuration starts a ROLLOUT the platform
+ * runs on its own clock (deploy success means the rollout started, not
+ * that the instances were replaced), and a wake started before it
+ * completes is signalled to exit. So the driver holds the pause until
+ * the platform reports the rollout completed: from the rollouts API
+ * when CLOUDFLARE_API_TOKEN is set (CI), otherwise from the application
+ * record wrangler reads on an OAuth login.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -51,6 +60,17 @@ const WORKER_DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
  * many minutes, and a Dockerfile change makes every deploy a cold one.
  */
 const CONTAINER_DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
+
+/**
+ * How long the rollout a container deploy STARTS may take to complete
+ * after wrangler returns. The fleet is drained by then, so the
+ * instances being replaced are idle and the plan is a single step
+ * (templates: rollout_step_percentage 100); minutes, normally. The
+ * bound is for a rollout the platform has stalled: past it the pause
+ * is released with a loud report, because holding it indefinitely
+ * costs every wake while releasing it risks one.
+ */
+const ROLLOUT_TIMEOUT_MS = 20 * 60 * 1000;
 
 /** Room for the work the enforced limits do not cover (see below). */
 const QUEUE_SLACK_MS = 5 * 60 * 1000;
@@ -93,6 +113,7 @@ const QUEUE_TIMEOUT_MS =
   DRAIN_TIMEOUT_MS +
   (DEPLOY_ORDER.length - 1) * WORKER_DEPLOY_TIMEOUT_MS +
   CONTAINER_DEPLOY_TIMEOUT_MS +
+  ROLLOUT_TIMEOUT_MS +
   // The enforced limits bound the WAITS, not the work between them:
   // drain polling, spawning wrangler once per worker, and the resume
   // round trip all happen outside them. Without slack, a holder that
@@ -212,6 +233,132 @@ async function waitForQuiet(manifest) {
   }
 }
 
+/**
+ * The payload of a wrangler --json command. wrangler keeps its banner
+ * on stderr, but one stray stdout line would turn a healthy answer
+ * into a parse error while the pause is held, so the JSON value is cut
+ * out of whatever surrounds it.
+ */
+function wranglerJson(args, configPath) {
+  const out = run("npx", ["wrangler", ...args, "--json", "-c", configPath], {
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const start = out.search(/[[{]/);
+  const end = Math.max(out.lastIndexOf("]"), out.lastIndexOf("}"));
+  if (start === -1 || end < start) throw new Error(`wrangler ${args.join(" ")} answered no JSON`);
+  const body = JSON.parse(out.slice(start, end + 1));
+  return Array.isArray(body) ? body : (body.result ?? body);
+}
+
+/** The container applications the platform lists, by name. */
+function listContainerApps(configPath) {
+  const apps = wranglerJson(["containers", "list"], configPath);
+  return new Map((Array.isArray(apps) ? apps : []).map(app => [app.name, app]));
+}
+
+/** One application's record, health included (the listing omits it). */
+function containerAppInfo(configPath, id) {
+  return wranglerJson(["containers", "info", id], configPath);
+}
+
+/**
+ * The applications a rendered worker config declares, under the names
+ * the platform gives them: an explicit `name`, else worker plus class.
+ */
+function containerAppNames(worker) {
+  return (worker.config.containers ?? []).map(
+    container => container.name ?? `${worker.config.name}-${container.class_name.toLowerCase()}`
+  );
+}
+
+/** The application's rollouts, newest first (the rollouts API, CI). */
+async function listRollouts(accountId, appId) {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/containers/applications/${appId}/rollouts`,
+    { headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` } }
+  );
+  if (!response.ok) {
+    throw new Error(`rollouts answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  }
+  const body = await response.json();
+  const rollouts = Array.isArray(body) ? body : (body.result ?? []);
+  return [...rollouts].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+}
+
+/**
+ * Hold until the rollout a container deploy started has completed
+ * (spec 0006 §5). Deploy success means the rollout STARTED; the
+ * platform then replaces instances over minutes, and a wake started
+ * inside that window is signalled to exit ("new version rollout").
+ * Nothing in the repo says when it is done, so the platform is asked:
+ *
+ * - with CLOUDFLARE_API_TOKEN (CI): the rollouts API names the status;
+ *   done at "completed", failed at "reverted".
+ * - without it (a laptop on an OAuth login, which the API does not
+ *   accept): the application record, which the platform touches when
+ *   the rollout finalizes. Done once the record has been touched since
+ *   the deploy began and no instance is starting or scheduling, on two
+ *   consecutive polls.
+ *
+ * An application whose version did not change started no rollout
+ * (wrangler skips it when the effective container configuration is
+ * unchanged), and one this deploy created has nothing to roll. Throws
+ * on the bound so the caller's resume runs.
+ */
+async function waitForRollout({ name, before, startedAt, configPath }, accountId) {
+  const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
+  const viaApi = Boolean(process.env.CLOUDFLARE_API_TOKEN);
+  let quietPolls = 0;
+  for (;;) {
+    const app = listContainerApps(configPath).get(name);
+    if (!app) throw new Error(`container application ${name} is not listed after its deploy`);
+    if (before === undefined) {
+      console.log(`  ${name}: created by this deploy; nothing to roll`);
+      return;
+    }
+    if (app.version === before.version) {
+      console.log(`  ${name}: version ${app.version} unchanged; this deploy started no rollout`);
+      return;
+    }
+    let done;
+    if (viaApi) {
+      const rollout = (await listRollouts(accountId, app.id))[0];
+      const steps = rollout?.steps ?? [];
+      const finished = steps.filter(step => step.status === "completed").length;
+      console.log(
+        `  ${name}: version ${before.version} → ${app.version}, rollout ` +
+          `${rollout?.status ?? "not listed yet"} (${finished}/${steps.length} steps)`
+      );
+      if (rollout?.status === "reverted") throw new Error(`the ${name} rollout was reverted by the platform`);
+      done = rollout?.status === "completed";
+    } else {
+      const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
+      const touched = Date.parse(app.updated_at) > startedAt && app.updated_at !== before.updated_at;
+      const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
+      // The listing's state reads "ready" between rollouts; anything
+      // else the platform reports there is taken as still rolling.
+      const ready = app.state === undefined || app.state === "ready";
+      console.log(
+        `  ${name}: version ${before.version} → ${app.version}, state ${app.state ?? "unreported"}, ` +
+          `record ${touched ? "finalized" : "not finalized yet"}, ${settling} instance(s) settling`
+      );
+      quietPolls = touched && ready && settling === 0 ? quietPolls + 1 : 0;
+      done = quietPolls >= 2;
+    }
+    if (done) {
+      console.log(`  ${name}: rollout complete`);
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the ${name} rollout is still in flight after ${Math.round(ROLLOUT_TIMEOUT_MS / 60000)} min; ` +
+          `wakes started before it completes may be signalled to exit`
+      );
+    }
+    await new Promise(resolve => setTimeout(resolve, 15_000));
+  }
+}
+
 for (const manifest of manifests) {
   console.log(`\n=== project ${manifest.project} (${manifest.roster.zone}) ===`);
   const enabled = manifest.roster.agents.filter(agent => agent.enabled);
@@ -317,25 +464,44 @@ for (const manifest of manifests) {
     ...(manifest.roster.mcp !== undefined ? { mcp: manifest.roster.mcp } : {})
   });
   let deployError = null;
+  // The rollouts this deploy starts, waited for after the LAST worker:
+  // a rollout runs on the platform's clock, so the workers behind the
+  // container-carrying one deploy while it runs rather than after it.
+  const rollouts = [];
   try {
     if (paused) await waitForQuiet(manifest);
     for (const key of DEPLOY_ORDER) {
       console.log(`\n→ deploying ${manifest.project}/${key}`);
+      const worker = workersByKey.get(key);
+      const configPath = join(buildDir, `${key}.json`);
       // A worker carrying a container image gets the image-build bound;
       // read from the rendered config, so adding a container to another
       // worker cannot leave it on the script-sized timeout.
-      const carriesContainer = Boolean(
-        workersByKey.get(key)?.config.containers?.length
-      );
+      const carriesContainer = Boolean(worker?.config.containers?.length);
+      // What the platform holds BEFORE the deploy, so the wait can tell
+      // a rollout this deploy started from no rollout at all.
+      const before = carriesContainer && paused ? listContainerApps(configPath) : null;
+      const startedAt = Date.now();
       execFileSync(
         "npx",
-        ["wrangler", "deploy", "-c", join(buildDir, `${key}.json`), "--var", `ROSTER:${rosterVar}`],
+        ["wrangler", "deploy", "-c", configPath, "--var", `ROSTER:${rosterVar}`],
         {
           cwd: PROJECT_ROOT,
           stdio: "inherit",
           timeout: carriesContainer ? CONTAINER_DEPLOY_TIMEOUT_MS : WORKER_DEPLOY_TIMEOUT_MS
         }
       );
+      if (before) {
+        for (const name of containerAppNames(worker)) {
+          rollouts.push({ name, before: before.get(name), startedAt, configPath });
+        }
+      }
+    }
+    // Only a paused fleet is protected by waiting; --no-drain already
+    // accepted the kill.
+    for (const rollout of rollouts) {
+      console.log(`\n→ waiting for the ${rollout.name} rollout (the pause holds until it completes)`);
+      await waitForRollout(rollout, manifest.accountId);
     }
   } catch (error) {
     deployError = error;
