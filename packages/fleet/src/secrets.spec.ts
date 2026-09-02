@@ -31,6 +31,11 @@ describe("requiredSecrets", () => {
     expect(names).toContain("gatekeeper-asks/ASKS_TOKEN_PROMOTER");
     expect(names).toContain("scheduler/ASKS_TOKEN_PROMOTER");
     expect(names).toContain("scheduler/MIND_CREDENTIAL_CLAUDE_CODE");
+    const codex = requiredSecrets(
+      validateManifest({ ...BASE, agents: [{ ...BASE.agents[0], harness: "codex" }] })
+    ).map(r => `${r.worker}/${r.name}`);
+    expect(codex).toContain("scheduler/MIND_CREDENTIAL_CODEX");
+    expect(codex).not.toContain("scheduler/MIND_CREDENTIAL_CLAUDE_CODE");
     expect(names).toContain("gatekeeper-github/GITHUB_APP_PRIVATE_KEY");
     expect(names).toContain("gatekeeper-pr/MACHINE_PAT_PROMOTER");
     // No duplicates: a worker/name pair appears once however many sources name it.

@@ -50,8 +50,18 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
     }
   }
 
-  // The mind and the fences.
-  add({ worker: "scheduler", name: "MIND_CREDENTIAL_CLAUDE_CODE", purpose: "the dedicated Claude account's setup-token" });
+  // The mind and the fences. One credential per HARNESS in the roster,
+  // under the name the scheduler's launch reads (MIND_CREDENTIAL_<HARNESS>).
+  for (const harness of new Set(manifest.roster.agents.map(agent => agent.harness))) {
+    add({
+      worker: "scheduler",
+      name: `MIND_CREDENTIAL_${agentVar(harness)}`,
+      purpose:
+        harness === "claude-code"
+          ? "the dedicated Claude account's setup-token"
+          : `the credential the "${harness}" harness signs in with`
+    });
+  }
   add({ worker: "scheduler", name: "SECRET_DENYLIST", purpose: "literals kept off published surfaces (itself secret)" });
   add({ worker: "gatekeeper-deploy", name: "SECRET_DENYLIST", purpose: "same value as the scheduler's" });
 

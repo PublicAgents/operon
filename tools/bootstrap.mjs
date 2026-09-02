@@ -222,8 +222,11 @@ if (flag("--skip-deploy")) {
   needYou("the deploy needs the zone (custom-domain routes); add it and re-run");
 } else {
   // A first deploy has nothing to drain and no ops gateway to ask, so
-  // it runs without the drain; every later one drains as usual.
-  const first = !(await workerExists(opsWorker));
+  // it runs without the drain; every later one drains as usual. Only a
+  // DEFINITE absence skips the drain: any doubt (a failed lookup, a
+  // token without scope) drains, because the wrong guess here kills
+  // running wakes.
+  const first = (await workerExists(opsWorker)) === false;
   const deploy = spawnSync(
     "node",
     [join(CHASSIS_ROOT, "tools/fleet.mjs"), "deploy", "--project", manifest.project, ...(first ? ["--no-drain"] : [])],
@@ -237,19 +240,27 @@ if (flag("--skip-deploy")) {
   }
 }
 
+/**
+ * true when the Worker exists, false when it DEFINITELY does not (the
+ * API or wrangler said not found), and "unknown" for every other
+ * failure. Callers treat unknown as existing where the safe direction
+ * is to assume the fleet is live.
+ */
 async function workerExists(name) {
   if (apiToken) {
     try {
       await api("GET", `/accounts/${manifest.accountId}/workers/scripts/${name}`);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      return /not found|10007|\b404\b/i.test(String(error.message)) ? false : "unknown";
     }
   }
   // Without the API, ask wrangler by way of the rendered config.
   const config = join(ROOT, ".operon/build", manifest.project, "gatekeeper-ops.json");
-  if (!existsSync(config)) return false;
-  return spawnSync("npx", ["wrangler", "deployments", "list", "-c", config], { cwd: ROOT, encoding: "utf8" }).status === 0;
+  if (!existsSync(config)) return "unknown";
+  const asked = spawnSync("npx", ["wrangler", "deployments", "list", "-c", config], { cwd: ROOT, encoding: "utf8" });
+  if (asked.status === 0) return true;
+  return /not found|10007/i.test(`${asked.stdout}${asked.stderr}`) ? false : "unknown";
 }
 
 // ---- 6. email routing --------------------------------------------------
@@ -274,7 +285,7 @@ if (!apiToken || !zoneId) {
     (catchAll.actions ?? []).some(action => action.type === "worker" && (action.value ?? []).includes(emailWorker));
   if (routed) {
     present(`catch-all → ${emailWorker}`);
-  } else if (!deployed && !(await workerExists(emailWorker))) {
+  } else if (!deployed && (await workerExists(emailWorker)) !== true) {
     needYou(`the catch-all rule needs the Worker ${emailWorker} to exist: deploy, then re-run`);
   } else {
     await api("PUT", `/zones/${zoneId}/email/routing/rules/catch_all`, {
@@ -339,13 +350,17 @@ console.log("\nsecrets (names only; values never pass through here)");
 
 // ---- 8. enrollment in the control plane -------------------------------
 console.log("\ncontrol plane (spec 0006 §9)");
-if (manifest.control.enrolled.length > 0 || manifest.control.defaultProject !== manifest.project) {
-  present(`this project hosts the plane (${manifest.control.enrolled.length} enrolled)`);
+// Every project renders its own ops worker; what makes one THE fleet's
+// plane is enrolling the others. A project enrolling none is either
+// the plane of a one-project fleet or a project to be enrolled
+// elsewhere, and the manifest cannot tell which, so both are said.
+if (manifest.control.enrolled.length > 0) {
+  present(`this project's plane reaches ${manifest.control.enrolled.length} enrolled project(s)`);
 } else {
   console.log(
-    `  → this project hosts no plane (no control: block). To reach ${manifest.project} from the fleet's\n` +
-      `    console, add it to the HOSTING project's manifest (or, if THIS is the host, add a control:\n` +
-      `    block here listing the others):\n` +
+    `  → this project's plane reaches itself only. To run ONE console for the fleet, either enroll the\n` +
+      `    other projects under control.projects here, or enroll ${manifest.project} in the hosting\n` +
+      `    project's manifest:\n` +
       `      control:\n        projects:\n          - project: ${manifest.project}\n            zone: ${manifest.roster.zone}\n` +
       (manifest.workerPrefix !== `operon-${manifest.project}` ? `            workerPrefix: ${manifest.workerPrefix}\n` : "") +
       `    then set WAKE_TRIGGER_TOKEN_${manifest.project.toUpperCase().replace(/-/g, "_")} on the host's ops worker\n` +
