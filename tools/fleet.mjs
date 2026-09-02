@@ -367,15 +367,26 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
         `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
           `rollout ${fresh.length === 0 ? "not listed yet" : fresh.map(describe).join("; ")}`
       );
-      const reverted = fresh.find(rollout => rollout.status === "reverted");
-      if (reverted) throw new Error(`the ${name} rollout ${reverted.id} was reverted by the platform`);
       if (fresh.length === 0 && !moved && Date.now() > appearanceDeadline) {
         console.log(`  ${name}: no rollout appeared and the record is untouched; this deploy rolled nothing`);
         return;
       }
-      done =
-        fresh.length > 0 &&
-        fresh.every(rollout => rollout.status === "completed" || rollout.status === "replaced");
+      // Over means the instances are settled again, whichever way:
+      // completed, replaced by a later rollout, or reverted. A revert
+      // is reported, not treated as this deploy's failure: without an
+      // id from wrangler nothing here can tell this deploy's rollout
+      // from one another hand started, and wrangler already reported
+      // whether THIS deploy's apply succeeded.
+      const OVER = new Set(["completed", "replaced", "reverted"]);
+      done = fresh.length > 0 && fresh.every(rollout => OVER.has(rollout.status));
+      if (done) {
+        for (const rollout of fresh.filter(candidate => candidate.status === "reverted")) {
+          console.warn(
+            `  ${name}: rollout ${rollout.id} was REVERTED by the platform; if it was this deploy's, ` +
+              `the wake container still runs the previous image (check wrangler containers info)`
+          );
+        }
+      }
     } else {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
       const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
