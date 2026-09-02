@@ -62,8 +62,8 @@ function run(cmd, cmdArgs, options = {}) {
 }
 
 /** A wrangler --json payload, with the banner cut away (see fleet.mjs). */
-function wranglerJson(cmdArgs) {
-  const out = run("npx", ["wrangler", ...cmdArgs, "--json"]);
+function wranglerJson(cmdArgs, { jsonFlag = true } = {}) {
+  const out = run("npx", ["wrangler", ...cmdArgs, ...(jsonFlag ? ["--json"] : [])]);
   const start = out.search(/[[{]/);
   const end = Math.max(out.lastIndexOf("]"), out.lastIndexOf("}"));
   if (start === -1 || end < start) throw new Error(`wrangler ${cmdArgs.join(" ")} answered no JSON`);
@@ -296,16 +296,23 @@ console.log("\nsecrets (names only; values never pass through here)");
   let missingRequired = 0;
   for (const [worker, requirements] of grouped) {
     const config = join(buildDir, `${worker}.json`);
-    let held = null;
-    if (rendered.has(worker)) {
-      try {
-        held = new Set(wranglerJson(["secret", "list", "-c", config]).map(entry => entry.name));
-      } catch {
-        held = null;
-      }
+    const names = requirements.map(r => r.name).join(", ");
+    if (!rendered.has(worker)) {
+      console.log(`  ? ${worker}: not rendered yet (npm run render); needs ${names}`);
+      continue;
     }
-    if (held === null) {
-      console.log(`  ? ${worker}: not deployed yet; needs ${requirements.map(r => r.name).join(", ")}`);
+    let held;
+    try {
+      // `wrangler secret list` prints JSON and takes no --json flag.
+      held = new Set(wranglerJson(["secret", "list", "-c", config], { jsonFlag: false }).map(entry => entry.name));
+    } catch (error) {
+      const said = String(error.stderr ?? error.message ?? error);
+      const reason = /not found|10007/i.test(said)
+        ? "not deployed yet"
+        : /authenticate|10000|10001/i.test(said)
+          ? "this login cannot list secrets (needs Workers Scripts:Read); deploy CI's token can"
+          : `wrangler could not list its secrets (${said.replace(/\s+/g, " ").slice(0, 120)})`;
+      console.log(`  ? ${worker}: ${reason}; needs ${names}`);
       continue;
     }
     const missing = requirements.filter(r => !held.has(r.name));
@@ -336,7 +343,9 @@ if (manifest.control.enrolled.length > 0 || manifest.control.defaultProject !== 
   present(`this project hosts the plane (${manifest.control.enrolled.length} enrolled)`);
 } else {
   console.log(
-    `  → to reach ${manifest.project} from the fleet's console, add it to the HOSTING project's manifest:\n` +
+    `  → this project hosts no plane (no control: block). To reach ${manifest.project} from the fleet's\n` +
+      `    console, add it to the HOSTING project's manifest (or, if THIS is the host, add a control:\n` +
+      `    block here listing the others):\n` +
       `      control:\n        projects:\n          - project: ${manifest.project}\n            zone: ${manifest.roster.zone}\n` +
       (manifest.workerPrefix !== `operon-${manifest.project}` ? `            workerPrefix: ${manifest.workerPrefix}\n` : "") +
       `    then set WAKE_TRIGGER_TOKEN_${manifest.project.toUpperCase().replace(/-/g, "_")} on the host's ops worker\n` +
