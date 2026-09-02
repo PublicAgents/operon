@@ -347,21 +347,31 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
     // Any movement of the record since the snapshot: the platform
     // touches it when the configuration is applied, before the
     // instances start to roll, so this is the earliest sign there is.
-    const moved = app.updated_at !== before.updated_at || app.version !== before.version;
+    const moved =
+      app.updated_at !== before.updated_at ||
+      app.version !== before.version ||
+      app.image !== before.image;
     let done;
     if (viaApi) {
       // Every rollout not listed before the deploy: this deploy's, and
-      // any another hand started meanwhile. A wake dies to whichever
-      // is in flight, so the pause holds until ALL of them are over;
-      // "replaced" is over too (a later rollout superseded it). Until
-      // one is listed, nothing here is evidence of completion.
+      // any another hand started meanwhile. THIS deploy's is the one
+      // whose target configuration names the image the record now
+      // carries: wrangler creates the rollout with the application's
+      // new configuration as its target, and applies that configuration
+      // to the record before the command returns. Until it is listed,
+      // nothing here is evidence of completion.
       const fresh = (await listRollouts(accountId, app.id)).filter(
         candidate => !known.has(candidate.id)
       );
+      const attributable = fresh.some(rollout => rollout.target_configuration?.image !== undefined);
+      const ours = attributable
+        ? fresh.filter(rollout => rollout.target_configuration?.image === app.image)
+        : fresh;
       const describe = rollout => {
         const steps = rollout.steps ?? [];
         const finished = steps.filter(step => step.status === "completed").length;
-        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps)`;
+        const whose = attributable ? (ours.includes(rollout) ? "this deploy's" : "another's") : "unattributed";
+        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps, ${whose})`;
       };
       console.log(
         `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
@@ -372,30 +382,27 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
         return;
       }
       // Over means the instances are settled again, whichever way:
-      // completed, replaced by a later rollout, or reverted. Two more
-      // signs are required, because a rollout another hand started
-      // after the snapshot is indistinguishable by id and may already
-      // be over while this deploy's has not been listed yet: the
-      // listing must read "ready" again, and the version must have
-      // moved since the snapshot (every rollout moves it, mid-way).
+      // completed, replaced by a later rollout, or reverted. The
+      // listing must read "ready" again as well, since a rollout is
+      // marked over before the last instance reports healthy.
       const OVER = new Set(["completed", "replaced", "reverted"]);
-      const settled = fresh.length > 0 && fresh.every(rollout => OVER.has(rollout.status));
       const ready = app.state === undefined || app.state === "ready";
+      const settled = ours.length > 0 && ours.every(rollout => OVER.has(rollout.status));
       if (settled && ready) {
-        // A revert among them fails the deploy. Without an id from
-        // wrangler nothing here can tell whose rollout it was, and of
-        // the two mistakes, failing a deploy whose image is live costs
-        // a re-run, while reporting success over a rollback leaves the
-        // previous image running unnoticed.
-        const reverted = fresh.filter(rollout => rollout.status === "reverted");
+        const reverted = ours.filter(rollout => rollout.status === "reverted");
         if (reverted.length > 0) {
           throw new Error(
             `rollout ${reverted.map(rollout => rollout.id).join(", ")} of ${name} was REVERTED by the ` +
-              `platform after this deploy; if it was this deploy's, the wake container still runs the ` +
-              `previous image (check wrangler containers info and redeploy)`
+              `platform: the wake container still runs the previous image (check wrangler ` +
+              `containers info and redeploy)`
           );
         }
-        done = app.version !== before.version;
+        // Attributed by target image, a completed rollout is the proof.
+        // Unattributable (an API that does not echo the target), the
+        // version must also have moved since the snapshot, which every
+        // rollout does mid-way, so another hand's rollout that was
+        // already over cannot stand in for this deploy's.
+        done = attributable || app.version !== before.version;
       }
     } else {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
