@@ -13,3 +13,4 @@ export {
   type RenderOptions,
   type RenderedWorker
 } from "./templates.js";
+export { requiredSecrets, secretsByWorker, type SecretRequirement } from "./secrets.js";
