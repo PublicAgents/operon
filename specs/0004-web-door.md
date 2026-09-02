@@ -523,6 +523,69 @@ interception machinery closes that gap:
   allow/deny egress POLICY remains a possible future knob, deliberately
   separate from the audit.
 
+### Outbound proxy (optional)
+
+A deployment may route the mind session's plain HTTP egress through
+upstream HTTP proxies (`EGRESS_PROXY` in the scheduler env, delivered
+to the container as `OPERON_EGRESS_PROXY`). The value is always a JSON
+object routing by destination host to a proxy address
+(`http(s)://[user:pass@]host[:port]`) or `direct`; unset, it is
+`{"*": "direct"}`, under which no forwarder runs and egress is exactly
+as before:
+
+```json
+{
+  "*": "http://user:pass@general.proxy.example:7777",
+  "docs.example": "http://user:pass@other.proxy.example:8888",
+  "*.registry.example": "direct"
+}
+```
+
+A key is `*` (the catch-all), an exact hostname, or `*.domain` (the
+domain and its subdomains); the most specific match wins (exact, then
+the longest domain, then `*`), a value of `direct` means no proxy, and
+a host no key matches goes direct. Every entry is validated at wake
+start: a malformed address or pattern, or a bare address in place of
+the table, fails the wake by name.
+
+No credential enters the session: the ROOT entrypoint runs a loopback
+forwarder beside the porch for exactly the session's lifetime, decides
+per host which upstream carries a request, attaches that upstream's
+credential, and hands the session only the loopback address through
+the standard variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, plus
+`NODE_USE_ENV_PROXY` so node clients honour them). curl, git, npm,
+WebFetch and scripts route through it unchanged; the entrypoint's own
+traffic (clone, doors, persist, notify) does not.
+
+- **The chassis's own hosts are always direct, by derivation, not by
+  listing.** Loopback (the porch), every host under the umbilical's
+  suffix (`.operon.internal`, owned by `@operon/core` so the scheduler
+  and the container cannot drift), every door URL in the wake config
+  (found by the `Url` suffix, so a door added later is covered without
+  anyone remembering), and every MCP virtual host. No table entry can
+  send them through a proxy. They ride in `NO_PROXY` for clients that
+  honour it, and the forwarder enforces the same rule for any client
+  that does not.
+- `CONNECT host:port` (every https URL) is tunnelled through the chosen
+  upstream, or straight to the origin when direct, and the sockets
+  spliced: TLS stays end to end between the session and the origin,
+  and the forwarder sees hostnames only.
+- Absolute-form `http://` requests are forwarded as they arrive.
+- The forwarder logs one compact line per tunnel or request (method,
+  host, and the route taken, never a path or query), in the
+  egress-audit style above.
+- An upstream refusal (a 407, a non-200 CONNECT answer) is reported to
+  the session as a 502 gateway failure, never relayed as a challenge:
+  the session has no credential to offer and must not be invited to
+  look for one.
+- The harness's own API traffic rides the catch-all too unless a table
+  entry routes its hosts elsewhere or direct.
+
+The platform egress audit (above) still sees every connection the
+forwarder makes; with a proxy configured, those connections address
+the proxy hosts, and the forwarder's own log is where the destination
+hosts are.
+
 ## 9. Costs
 
 Browser Run on Workers Paid includes 10 browser-hours/month. We use

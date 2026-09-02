@@ -3,7 +3,7 @@
  * unit-tested without the Workers runtime. The entrypoint in umbilical.ts
  * wraps it.
  */
-import { findAgent, parseRoster, type McpServerDef } from "@operon/core";
+import { findAgent, parseRoster, type McpServerDef, INTERNAL_SUFFIX } from "@operon/core";
 
 interface DoorRoute {
   binding: string;
@@ -34,7 +34,7 @@ export const DOOR_ROUTES: Record<string, DoorRoute> = {
   web: { binding: "BROWSER", bearerless: true }
 };
 
-export const INTERNAL_SUFFIX = ".operon.internal";
+export { INTERNAL_SUFFIX };
 
 /** MCP servers get their own host space: mcp-<name>.operon.internal. */
 const MCP_PREFIX = "mcp-";

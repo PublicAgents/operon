@@ -67,6 +67,7 @@ interface Env {
   // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
+  EGRESS_PROXY?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
   GITHUB_GATEKEEPER?: Fetcher;
   [secretName: string]: unknown;
@@ -131,7 +132,8 @@ function launchContext(env: Env): LaunchContext {
       chronicleToken: env.CHRONICLE_TOKEN,
       xUrl: env.X_URL,
       secretDenylist: env.SECRET_DENYLIST,
-      harnessExtraArgs: env.HARNESS_EXTRA_ARGS
+      harnessExtraArgs: env.HARNESS_EXTRA_ARGS,
+      egressProxy: env.EGRESS_PROXY
     }
   };
 }

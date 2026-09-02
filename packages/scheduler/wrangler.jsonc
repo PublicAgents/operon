@@ -56,6 +56,13 @@
   //   MIND_CREDENTIAL_CLAUDE_CODE  subscription OAuth token for claude-code minds
   //   GITHUB_TOKEN_SERVICE_TOKEN   bearer presented to the github Gatekeeper
   //   NOTIFY_TOKEN              bearer the container uses against the telegram Gatekeeper
+  //   EGRESS_PROXY              optional upstream proxies for the mind session's outbound
+  //                             HTTP (spec 0004 §8): a JSON object of host pattern ("*",
+  //                             "host.example", "*.example") to http(s)://[user:pass@]host
+  //                             [:port] or "direct"; unset means {"*": "direct"}. The
+  //                             container's root-run forwarder holds the credentials and
+  //                             routes per host; the session gets a loopback address. The
+  //                             chassis's own hosts are always direct.
   // Vars, set per deployment:
   //   NOTIFY_URL                telegram Gatekeeper /notify endpoint
   //   SECRET_DENYLIST           comma-separated literals for the presleep sweep

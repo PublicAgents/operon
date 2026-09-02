@@ -48,6 +48,33 @@ describe("readWakeConfig", () => {
     expect(config.harnessExtraArgs).toEqual([]);
   });
 
+  it("reads the outbound proxy table, defaults it to all-direct, and rejects a malformed one", () => {
+    expect(readWakeConfig(complete).egressProxy).toEqual({ rules: [{ pattern: "*", target: "direct" }] });
+    const table = '{"*": "http://a.example:7777", "docs.example": "http://user:secret@b.example:8888", "*.reg.example": "direct"}';
+    expect(readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: table }).egressProxy).toEqual({
+      rules: [
+        { pattern: "*", target: { tls: false, hostname: "a.example", port: 7777 } },
+        {
+          pattern: "docs.example",
+          target: {
+            tls: false,
+            hostname: "b.example",
+            port: 8888,
+            authorization: `Basic ${Buffer.from("user:secret").toString("base64")}`
+          }
+        },
+        { pattern: "*.reg.example", target: "direct" }
+      ]
+    });
+    // A bare address is not a table.
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: "http://proxy.example:7777" })
+    ).toThrowError(/OPERON_EGRESS_PROXY/);
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: '{"bad host": "http://a.example"}' })
+    ).toThrowError(ConfigError);
+  });
+
   it("defaults maxWakeMinutes to 120 and rejects malformed values", () => {
     expect(readWakeConfig(complete).maxWakeMinutes).toBe(120);
     expect(

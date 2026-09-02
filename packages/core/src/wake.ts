@@ -92,6 +92,16 @@ export interface WakeOptions {
    * permission/autonomy settings); the chassis hardcodes none of it.
    */
   harnessExtraArgs?: string;
+  /**
+   * Upstream HTTP proxies for the mind session's outbound HTTP: a JSON
+   * object of host pattern ("*", "host.example", "*.example") to proxy
+   * address (http(s)://[user:pass@]host[:port]) or "direct"; unset means
+   * {"*": "direct"}. The entrypoint runs a loopback forwarder that holds
+   * the credentials and routes per host; the session is handed only the
+   * loopback address, through the standard proxy variables. The
+   * chassis's own hosts (loopback, the umbilical) are always direct.
+   */
+  egressProxy?: string;
 }
 
 export const WAKE_ENV = {
@@ -135,8 +145,17 @@ export const WAKE_ENV = {
   xUrl: "OPERON_X_URL",
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
-  xToken: "OPERON_X_TOKEN"
+  xToken: "OPERON_X_TOKEN",
+  egressProxy: "OPERON_EGRESS_PROXY"
 } as const;
+
+/**
+ * The umbilical's virtual-host suffix (spec 0003): every door the
+ * container is handed lives under it, and so does every MCP server's
+ * virtual host. Owned here so the scheduler (which routes it) and the
+ * container (which keeps it off any outbound proxy) cannot drift.
+ */
+export const INTERNAL_SUFFIX = ".operon.internal";
 
 export function wakeEnv(
   init: WakeInit,
@@ -188,6 +207,7 @@ export function wakeEnv(
   if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
+  if (options.egressProxy) env[WAKE_ENV.egressProxy] = options.egressProxy;
   return env;
 }
 

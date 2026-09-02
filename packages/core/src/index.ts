@@ -11,6 +11,7 @@ export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
 export {
   wakeEnv,
   WAKE_ENV,
+  INTERNAL_SUFFIX,
   DEFAULT_MAX_WAKE_MINUTES,
   type WakeInit,
   type WakeSecrets,
