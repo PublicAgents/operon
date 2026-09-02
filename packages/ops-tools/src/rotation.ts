@@ -18,12 +18,17 @@ function agentVar(agentId: string): string {
   return agentId.toUpperCase().replace(/-/g, "_");
 }
 
+/**
+ * Members are the Workers that ACCEPT or PRESENT the bearer. The ops
+ * gateway speaks to every Gatekeeper over binding-only Ops entrypoints,
+ * so it holds no notify or email bearer; the bootstrap checklist
+ * (spec 0006 §4) is what showed those two stale members.
+ */
 export function rotationGroups(agentIds: readonly string[]): Record<string, RotationPair[]> {
   const groups: Record<string, RotationPair[]> = {
     // telegram accepts; scheduler and the notifying gatekeepers present.
     notify: [
       ["gatekeeper-telegram", "NOTIFY_TOKEN"],
-      ["gatekeeper-ops", "NOTIFY_TOKEN"],
       ["scheduler", "NOTIFY_TOKEN"],
       ["gatekeeper-email", "NOTIFY_TOKEN"],
       ["gatekeeper-spend", "NOTIFY_TOKEN"],
@@ -48,8 +53,7 @@ export function rotationGroups(agentIds: readonly string[]): Record<string, Rota
     ],
     email: [
       ["gatekeeper-email", "EMAIL_SERVICE_TOKEN"],
-      ["scheduler", "EMAIL_TOKEN"],
-      ["gatekeeper-ops", "EMAIL_SERVICE_TOKEN"]
+      ["scheduler", "EMAIL_TOKEN"]
     ],
     "wake-trigger": [
       ["scheduler", "WAKE_TRIGGER_TOKEN"],
