@@ -93,6 +93,28 @@ describe("CatalogMemory", () => {
     expect(writes).toBe(1);
   });
 
+  it("lets an older write be remembered when a newer one failed", async () => {
+    const memory = new CatalogMemory();
+    const releases = new Map<string, (ok: boolean) => void>();
+    const slow = (tag: string) => () =>
+      new Promise<void>((resolve, reject) => {
+        releases.set(tag, ok => (ok ? resolve() : reject(new Error("ledger down"))));
+      });
+    const older = memory.record("promoter", "livevariant", "aaaa", slow("a"));
+    const newer = memory.record("promoter", "livevariant", "bbbb", slow("b"));
+    releases.get("b")?.(false);
+    await expect(newer).rejects.toThrow("ledger down");
+    releases.get("a")?.(true);
+    expect(await older).toBe(true);
+    let writes = 0;
+    const count = async () => {
+      writes += 1;
+    };
+    expect(await memory.record("promoter", "livevariant", "aaaa", count)).toBe(false);
+    expect(await memory.record("promoter", "livevariant", "bbbb", count)).toBe(true);
+    expect(writes).toBe(1);
+  });
+
   it("keeps agents and servers apart", async () => {
     const memory = new CatalogMemory();
     const { state, append } = counter();

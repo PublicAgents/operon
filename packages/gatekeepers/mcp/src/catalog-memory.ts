@@ -39,12 +39,23 @@ export class CatalogMemory {
     }
     const started = ++this.#sequence;
     this.#latest.set(key, started);
-    const done = append().then(() => {
-      // Remember only if no later write for this pair began meanwhile:
-      // the ledger holds both rows in order, and the memory must hold
-      // the newest, not whichever append happened to finish last.
-      if (this.#latest.get(key) === started) this.#seen.set(key, revision);
-    });
+    const done = append().then(
+      () => {
+        // Remember only if no later write for this pair began meanwhile
+        // (or the later one failed and withdrew): the ledger holds both
+        // rows in order, and the memory must hold the newest persisted,
+        // not whichever append happened to finish last.
+        const latest = this.#latest.get(key);
+        if (latest === started || latest === undefined) this.#seen.set(key, revision);
+      },
+      error => {
+        // A failed write withdraws its claim to being the latest, so an
+        // older write still in flight can be remembered when it lands,
+        // rather than appended again on its next sighting.
+        if (this.#latest.get(key) === started) this.#latest.delete(key);
+        throw error;
+      }
+    );
     this.#inFlight.set(flightKey, done);
     try {
       await done;
