@@ -198,3 +198,30 @@ describe("capability grants (spec 0008)", () => {
     expect(() => parseRoster(JSON.stringify(roster))).toThrowError(/https/);
   });
 });
+
+describe("the doors baseline (spec 0006 §7)", () => {
+  it("accepts named doors with booleans and refuses everything else by name", () => {
+    const withDoors = (doors: unknown) =>
+      parseRoster(
+        JSON.stringify({
+          zone: "demo.example",
+          agents: [
+            {
+              id: "a",
+              stateRepo: "o/r",
+              cadence: "0 6 * * *",
+              harness: "claude-code",
+              model: "m",
+              enabled: true,
+              hosts: ["@"],
+              doors
+            }
+          ]
+        })
+      );
+    expect(withDoors({ x: false, pay: true }).agents[0].doors).toEqual({ x: false, pay: true });
+    expect(() => withDoors({ persist: false })).toThrow(/is not a door/);
+    expect(() => withDoors({ x: "no" })).toThrow(/must be a boolean/);
+    expect(() => withDoors(["x"])).toThrow(/mapping/);
+  });
+});

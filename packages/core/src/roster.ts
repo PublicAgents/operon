@@ -1,3 +1,4 @@
+import { DOORS, isDoor, type DoorBaseline } from "./doors.js";
 /**
  * The roster is the deployment's list of tenants. It arrives as JSON (the
  * deployment repo's roster.jsonc with comments stripped, or a plain JSON
@@ -7,6 +8,8 @@
  */
 
 export interface RosterAgent {
+  /** The doors baseline (spec 0006 §7); a door absent here is open. */
+  doors?: DoorBaseline;
   /** Stable slug, [a-z0-9-]; the agent's self-chosen name is cosmetic on top. */
   id: string;
   /** Private state repository, "owner/repo". */
@@ -126,7 +129,8 @@ const AGENT_KEYS = new Set([
   "web",
   "enabled",
   "mcp",
-  "github"
+  "github",
+  "doors"
 ]);
 
 /** MCP server names are slugs, and so are portal server ids (underscores allowed there). */
@@ -342,6 +346,21 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     github = parseGithubGrants(raw.github, `${path}.github`);
   }
 
+  // The doors baseline (spec 0006 §7): named doors only, booleans only,
+  // so a typo cannot silently leave a door open or closed.
+  let doors: DoorBaseline | undefined;
+  if (raw.doors !== undefined) {
+    if (typeof raw.doors !== "object" || raw.doors === null || Array.isArray(raw.doors)) {
+      fail(`${path}.doors`, "must be a mapping of door name to boolean");
+    }
+    doors = {};
+    for (const [door, value] of Object.entries(raw.doors as Record<string, unknown>)) {
+      if (!isDoor(door)) fail(`${path}.doors.${door}`, `is not a door (known: ${DOORS.join(", ")})`);
+      if (typeof value !== "boolean") fail(`${path}.doors.${door}`, "must be a boolean");
+      doors[door] = value;
+    }
+  }
+
   return {
     id,
     stateRepo,
@@ -354,7 +373,8 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     ...(raw.web === true ? { web: true } : {}),
     enabled: raw.enabled,
     ...(mcp ? { mcp } : {}),
-    ...(github ? { github } : {})
+    ...(github ? { github } : {}),
+    ...(doors ? { doors } : {})
   };
 }
 

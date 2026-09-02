@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { doorHost, mcpHostsFor, resolveDoor, DOOR_ROUTES } from "./umbilical-routes.js";
+import { doorHost, mcpHostsFor, policyDoorFor, resolveDoor, DOOR_ROUTES } from "./umbilical-routes.js";
 
 const env = {
   NOTIFY_TOKEN: "notify-real",
@@ -133,5 +133,23 @@ describe("MCP routing (spec 0008 §4)", () => {
       "mcp-linear.operon.internal"
     ]);
     expect(mcpHostsFor(roster, "second")).toEqual([]);
+  });
+});
+
+describe("policy doors on the umbilical (spec 0006 §7)", () => {
+  it("maps every virtual host to the door that governs it, and plumbing to none", () => {
+    expect(policyDoorFor("notify.operon.internal", "/notify")).toBe("notify");
+    expect(policyDoorFor("spend.operon.internal", "/pay")).toBe("pay");
+    expect(policyDoorFor("pr.operon.internal", "/gatekeeper/pr")).toBe("github");
+    expect(policyDoorFor("mcp-linear.operon.internal", "/mcp/linear")).toBe("mcp");
+    expect(policyDoorFor("web.operon.internal", "/open")).toBe("web");
+    expect(policyDoorFor("chronicle.operon.internal", "/ship")).toBeNull();
+    expect(policyDoorFor("api.anthropic.com", "/")).toBeNull();
+  });
+
+  it("the branch route on the persist host is the GitHub door; the commit route is plumbing", () => {
+    expect(policyDoorFor("persist.operon.internal", "/branch")).toBe("github");
+    expect(policyDoorFor("persist.operon.internal", "/branch/anything")).toBe("github");
+    expect(policyDoorFor("persist.operon.internal", "/commit")).toBeNull();
   });
 });

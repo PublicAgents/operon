@@ -42,6 +42,7 @@ export const ENV = {
   mcpServers: "OPERON_MCP_SERVERS",
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
+  disabledDoors: "OPERON_DISABLED_DOORS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -117,10 +118,27 @@ export interface WakeConfig {
   /** Web door (spec 0004): the browser relay endpoint + per-wake nonce. */
   webUrl?: string;
   webToken?: string;
+  /** Doors the operator closed for this wake (spec 0006 §7): named in the help, not merely unwired. */
+  disabledDoors: string[];
 }
 
 export class ConfigError extends Error {
   override name = "ConfigError";
+}
+
+/** The closed-doors list, a JSON array of names; malformed is a config error like the rest. */
+export function parseDisabledDoors(raw: string | undefined): string[] {
+  if (raw === undefined || raw === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`invalid_env: ${ENV.disabledDoors} must be a JSON array`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every(entry => typeof entry === "string")) {
+    throw new ConfigError(`invalid_env: ${ENV.disabledDoors} must be a JSON array of door names`);
+  }
+  return parsed as string[];
 }
 
 /**
@@ -259,7 +277,8 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     xUrl: env[ENV.xUrl],
     xToken: env[ENV.xToken],
     webUrl: env[ENV.webUrl],
-    webToken: env[ENV.webToken]
+    webToken: env[ENV.webToken],
+    disabledDoors: parseDisabledDoors(env[ENV.disabledDoors])
   };
 }
 
