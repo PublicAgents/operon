@@ -153,3 +153,49 @@ describe("catalogRevision", () => {
     ).not.toBe(base);
   });
 });
+
+/**
+ * Tools that declare an outputSchema make the SDK client validate the
+ * structuredContent of every call. The validator must be one that
+ * INTERPRETS schemas: the SDK's default compiles them with
+ * new Function, which the Workers runtime refuses, and the first live
+ * upstream with output schemas (livevariant.com) failed every call
+ * that way. Node allows codegen, so these tests cannot catch a
+ * regression to the default validator by themselves; they prove the
+ * interpreting validator validates, and the wrangler probe in the PR
+ * proves it runs under workerd.
+ */
+describe("tools with output schemas", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { count: { type: "integer" } },
+    required: ["count"]
+  };
+
+  it("calls a tool whose structured content satisfies its schema", async () => {
+    const mock = mockUpstream({
+      revision: "stateless",
+      tools: [{ name: "count_things", outputSchema: SCHEMA, structuredContent: { count: 3 } }]
+    });
+    // Listed first, as the proxy does: the client validates only the
+    // tools whose schemas it saw in this session.
+    const result = (await withUpstream({ url: URL_ }, { fetch: mock.fetch }, async client => {
+      await listUpstreamTools(client);
+      return callUpstreamTool(client, "count_things", {});
+    })) as { structuredContent?: unknown };
+    expect(result.structuredContent).toEqual({ count: 3 });
+  });
+
+  it("refuses structured content that violates the schema, by name", async () => {
+    const mock = mockUpstream({
+      revision: "stateless",
+      tools: [{ name: "count_things", outputSchema: SCHEMA, structuredContent: { count: "three" } }]
+    });
+    await expect(
+      withUpstream({ url: URL_ }, { fetch: mock.fetch }, async client => {
+        await listUpstreamTools(client);
+        return callUpstreamTool(client, "count_things", {});
+      })
+    ).rejects.toMatchObject({ code: "mcp_upstream_unreachable" });
+  });
+});

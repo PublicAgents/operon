@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import { guardedFetch, UpstreamError, type GuardedFetchOptions } from "./guarded-fetch.js";
 import type { UpstreamTool } from "./classify.js";
 
@@ -77,7 +78,16 @@ export async function withUpstream<T>(
 ): Promise<T> {
   const client = new Client(
     { name: "operon-gatekeeper-mcp", version: "0.0.0" },
-    { capabilities: {} }
+    {
+      capabilities: {},
+      // The SDK validates a tool's structuredContent against its
+      // outputSchema, and its default validator (Ajv) compiles schemas
+      // with new Function, which the Workers runtime refuses ("Code
+      // generation from strings disallowed"). Found on the first live
+      // upstream whose tools carry output schemas: every call failed as
+      // mcp_upstream_unreachable. This validator interprets instead.
+      jsonSchemaValidator: new CfWorkerJsonSchemaValidator()
+    }
   );
   const seen = { auth: false };
   const transport = new StreamableHTTPClientTransport(new URL(config.url), {
@@ -103,10 +113,16 @@ export async function listUpstreamTools(client: Client): Promise<UpstreamTool[]>
   const { tools } = await client.listTools();
   return tools.map(tool => ({
     name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-    annotations: tool.annotations as UpstreamTool["annotations"]
-  })) as UpstreamTool[];
+    ...(tool.title !== undefined ? { title: tool.title } : {}),
+    ...(tool.description !== undefined ? { description: tool.description } : {}),
+    inputSchema: tool.inputSchema as Record<string, unknown>,
+    ...(tool.outputSchema !== undefined
+      ? { outputSchema: tool.outputSchema as Record<string, unknown> }
+      : {}),
+    ...(tool.annotations !== undefined
+      ? { annotations: tool.annotations as UpstreamTool["annotations"] }
+      : {})
+  }));
 }
 
 export async function callUpstreamTool(
