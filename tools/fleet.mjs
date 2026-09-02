@@ -305,7 +305,18 @@ async function listRollouts(accountId, appId) {
  * unchanged), and one this deploy created has nothing to roll. Throws
  * on the bound so the caller's resume runs.
  */
-async function waitForRollout({ name, before, startedAt, configPath }, accountId) {
+/**
+ * The ids of the rollouts an application already has, taken BEFORE the
+ * deploy: the one this deploy starts is whichever id is not among
+ * them. Matching by id rather than by recency means an older completed
+ * rollout can never stand in for one that is still replacing
+ * instances, and it needs no clock agreement with the platform.
+ */
+async function knownRolloutIds(accountId, app) {
+  return new Set((await listRollouts(accountId, app.id)).map(rollout => rollout.id));
+}
+
+async function waitForRollout({ name, before, known, startedAt, configPath }, accountId) {
   const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
   const viaApi = Boolean(process.env.CLOUDFLARE_API_TOKEN);
   let quietPolls = 0;
@@ -322,12 +333,16 @@ async function waitForRollout({ name, before, startedAt, configPath }, accountId
     }
     let done;
     if (viaApi) {
-      const rollout = (await listRollouts(accountId, app.id))[0];
+      // THIS deploy's rollout: the one not listed before the deploy.
+      // Until it is listed, nothing here is evidence of completion.
+      const rollout = (await listRollouts(accountId, app.id)).find(
+        candidate => !known.has(candidate.id)
+      );
       const steps = rollout?.steps ?? [];
       const finished = steps.filter(step => step.status === "completed").length;
       console.log(
         `  ${name}: version ${before.version} → ${app.version}, rollout ` +
-          `${rollout?.status ?? "not listed yet"} (${finished}/${steps.length} steps)`
+          `${rollout ? `${rollout.id} ${rollout.status}` : "not listed yet"} (${finished}/${steps.length} steps)`
       );
       if (rollout?.status === "reverted") throw new Error(`the ${name} rollout was reverted by the platform`);
       done = rollout?.status === "completed";
@@ -481,6 +496,15 @@ for (const manifest of manifests) {
       // What the platform holds BEFORE the deploy, so the wait can tell
       // a rollout this deploy started from no rollout at all.
       const before = carriesContainer && paused ? listContainerApps(configPath) : null;
+      // With the API in reach, also the rollouts that ALREADY exist, so
+      // the wait can tell this deploy's rollout from an earlier one.
+      const known = new Map();
+      if (before && process.env.CLOUDFLARE_API_TOKEN) {
+        for (const appName of containerAppNames(worker)) {
+          const app = before.get(appName);
+          if (app) known.set(appName, await knownRolloutIds(manifest.accountId, app));
+        }
+      }
       const startedAt = Date.now();
       execFileSync(
         "npx",
@@ -493,7 +517,13 @@ for (const manifest of manifests) {
       );
       if (before) {
         for (const name of containerAppNames(worker)) {
-          rollouts.push({ name, before: before.get(name), startedAt, configPath });
+          rollouts.push({
+            name,
+            before: before.get(name),
+            known: known.get(name) ?? new Set(),
+            startedAt,
+            configPath
+          });
         }
       }
     }
