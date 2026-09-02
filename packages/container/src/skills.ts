@@ -15,6 +15,15 @@ function mark(live: unknown): string {
   return live ? "" : "   [NOT WIRED this wake]";
 }
 
+/**
+ * A door the operator CLOSED (spec 0006 §7) says so, rather than "not
+ * wired": the second sends the mind looking for a missing secret, the
+ * first tells it the decision was made and where to ask.
+ */
+function doorMarker(disabled: Set<string>): (door: string, live: unknown) => string {
+  return (door, live) => (disabled.has(door) ? "   [DISABLED by the operator]" : mark(live));
+}
+
 export interface AskLimits {
   perWake: number;
   perDay: number;
@@ -35,6 +44,7 @@ export function renderSkills(
   void config; // reserved: future per-colony guidance (hosts, PR targets)
   const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
   const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
+  const door = doorMarker(new Set(Array.isArray(caps.disabledDoors) ? (caps.disabledDoors as string[]) : []));
   const askCeiling = askLimits
     ? `at most ${askLimits.perWake} per wake, ${askLimits.perDay} per day`
     : "there is a per-wake ceiling; the door names it if you reach it";
@@ -73,7 +83,7 @@ CHECKING FOR NEW INPUT (mid-wake)
                                          last pull); answers with counts${mark(caps.email || caps.notify || caps.x)}
 
 MESSAGING AND MAIL
-  operon notify <text...>                message the operator${mark(caps.notify)}
+  operon notify <text...>                message the operator${door("notify", caps.notify)}
   operon email --to <addr> --subject <s> --body <b>
                                          (long body? pipe it on stdin and omit
                                          --body; a literal --body - also reads
@@ -83,27 +93,27 @@ MESSAGING AND MAIL
                                          a new recipient is held for the
                                          operator). Inbound mail lands in
                                          inbox/ at wake start and on every
-                                         operon pull${mark(caps.email)}
+                                         operon pull${door("email", caps.email)}
   operon email original <id>             the stored, UNREDACTED original of an
                                          inbound message (id = the 8-char
                                          prefix in the inbox file's name), for
                                          withheld lines like verification
                                          links. Never save the credential
-                                         parts to your repo.${mark(caps.email)}
+                                         parts to your repo.${door("email", caps.email)}
   operon channel original <id>           the unredacted original of one
                                          operator-channel entry (id = the
-                                         [#id] in operator/channel.md)${mark(caps.notify)}
+                                         [#id] in operator/channel.md)${door("notify", caps.notify)}
 
 PUBLISHING AND MONEY
   operon publish [dir] --host <host>     publish static files to an assigned
                                          host ("@" is the zone apex); dir
                                          defaults to "site"; swept for secrets
-                                         first${mark(caps.publish)}
+                                         first${door("publish", caps.publish)}
   operon till offer <host> <path> --price <p> --currency <c> --description <d>
                                          price a path of one of YOUR hosts;
-                                         re-offer to update${mark(caps.till)}
-  operon till retire <host> <path>       make a path free again${mark(caps.till)}
-  operon till sales                      your offers and ledgered receipts${mark(caps.till)}
+                                         re-offer to update${door("till", caps.till)}
+  operon till retire <host> <path>       make a path free again${door("till", caps.till)}
+  operon till sales                      your offers and ledgered receipts${door("till", caps.till)}
   operon pay <url> --max <amount> --reason <r>
                                          fetch a paid resource; payment runs
                                          through the spend Gatekeeper (you
@@ -112,10 +122,10 @@ PUBLISHING AND MONEY
                                          operator, and so is an ABOVE-CAP
                                          payment (operator approval mints a
                                          one-time allowance; settle it by
-                                         re-running the SAME pay)${mark(caps.pay)}
+                                         re-running the SAME pay)${door("pay", caps.pay)}
   operon pay proposals                   your pending holds and unspent
                                          allowances, across wakes: check here
-                                         BEFORE re-asking the operator${mark(caps.pay)}
+                                         BEFORE re-asking the operator${door("pay", caps.pay)}
 
 ${
   mcpServers.length > 0
@@ -138,52 +148,52 @@ ${
                                          each answer, and what you are doing
                                          meanwhile. ${askCeiling}, so
                                          consolidate rather than file ten
-                                         small ones${mark(caps.ask)}
+                                         small ones${door("asks", caps.ask)}
   operon ask list                        your asks, their state, and operator
-                                         replies you have not read yet${mark(caps.ask)}
-  operon ask reply <id> --text <t>       add to the thread (or pipe on stdin)${mark(caps.ask)}
+                                         replies you have not read yet${door("asks", caps.ask)}
+  operon ask reply <id> --text <t>       add to the thread (or pipe on stdin)${door("asks", caps.ask)}
   operon ask retract <id> [--reason <r>] withdraw one you no longer need
                                          answered: do this rather than leave
-                                         a stale ask sitting in their queue${mark(caps.ask)}
-  operon ask close <id> [--note <n>]     you got what you needed${mark(caps.ask)}
+                                         a stale ask sitting in their queue${door("asks", caps.ask)}
+  operon ask close <id> [--note <n>]     you got what you needed${door("asks", caps.ask)}
 
 SECRETS THAT SURVIVE WAKES (never the repo; hard rule 7)
-  operon vault set <label> --value <v>   store/update (or pipe value on stdin)${mark(caps.vault)}
-  operon vault get <label>               retrieve a value to USE it${mark(caps.vault)}
-  operon vault list                      labels and timestamps, no values${mark(caps.vault)}
-  operon vault delete <label>            remove permanently${mark(caps.vault)}
+  operon vault set <label> --value <v>   store/update (or pipe value on stdin)${door("vault", caps.vault)}
+  operon vault get <label>               retrieve a value to USE it${door("vault", caps.vault)}
+  operon vault list                      labels and timestamps, no values${door("vault", caps.vault)}
+  operon vault delete <label>            remove permanently${door("vault", caps.vault)}
 
 X (your own labeled account; capped, ledgered, value first)
-  operon x post --text <t>               post (or pipe text on stdin)${mark(caps.x)}
-  operon x posts                         your recent posts (cross-wake memory)${mark(caps.x)}
-  operon x me                            your profile as X sees it${mark(caps.x)}
+  operon x post --text <t>               post (or pipe text on stdin)${door("x", caps.x)}
+  operon x posts                         your recent posts (cross-wake memory)${door("x", caps.x)}
+  operon x me                            your profile as X sees it${door("x", caps.x)}
   operon x dm <@handle> --text <t>       reply-only DM (someone must have
                                          DM'd you first); inbound DMs land in
-                                         inbox/ at wake start and on pull${mark(caps.x)}
+                                         inbox/ at wake start and on pull${door("x", caps.x)}
 
 BROWSER (state persists across wakes)
   operon web open [name]                 CDP endpoint for a named session; the
-                                         browser MCP is already on "default"${mark(caps.web)}
+                                         browser MCP is already on "default"${door("web", caps.web)}
   operon web sessions                    where each session is logged in
-                                         (domains, never values)${mark(caps.web)}
-  operon web close <name>                end the live session, keep the state${mark(caps.web)}
+                                         (domains, never values)${door("web", caps.web)}
+  operon web close <name>                end the live session, keep the state${door("web", caps.web)}
   operon web password <name> --domains <a.com,b.com>
                                          mint a password DOOR-SIDE; you type a
-                                         placeholder, never the value${mark(caps.web)}
+                                         placeholder, never the value${door("web", caps.web)}
 
 GITHUB (a Gatekeeper holds the credential; you submit data)
   operon github status                   your PRs/issues + recent activity by
-                                         others in allowlisted repos${mark(caps.github)}
-  operon github thread <owner/repo> <n>  one PR/issue's full conversation${mark(caps.github)}
-  operon github comment <owner/repo> <n> --body <text> | --body-file <f> [--reply-to <id>]${mark(caps.github)}
+                                         others in allowlisted repos${door("github", caps.github)}
+  operon github thread <owner/repo> <n>  one PR/issue's full conversation${door("github", caps.github)}
+  operon github comment <owner/repo> <n> --body <text> | --body-file <f> [--reply-to <id>]${door("github", caps.github)}
   operon github pr <owner/repo> [dir] --title <t> --body <b> [--submodule <path>=<sha>]
                                          propose a change to an allowlisted
                                          repo (dir defaults to "pr");
                                          --submodule advances a pointer to a
-                                         40-hex sha (bump-only PRs need no dir)${mark(caps.pr)}
+                                         40-hex sha (bump-only PRs need no dir)${door("github", caps.pr)}
   operon github push <owner/repo> <n> [dir] --message <m>
-                                         follow-up commits to YOUR open PR${mark(caps.github)}
-  operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]${mark(caps.github)}
+                                         follow-up commits to YOUR open PR${door("github", caps.github)}
+  operon github update <owner/repo> <n> [--title <t>] [--body-file <f>] [--state open|closed]${door("github", caps.github)}
   operon github branch <owner/repo> [dir] --branch <b> --message <m>
                                          commit straight to a NON-DEFAULT branch
                                          of a repo you hold a WRITE grant on${

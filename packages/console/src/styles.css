@@ -317,3 +317,16 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
   width: 100%;
   font: inherit;
 }
+
+/* The doors matrix (spec 0006 §7). */
+.doors {
+  margin-top: 2rem;
+}
+.matrix td.overridden {
+  background: color-mix(in srgb, var(--accent, #6b8) 12%, transparent);
+}
+.matrix button.clear {
+  margin-left: 0.25rem;
+  padding: 0 0.35rem;
+  font-size: 0.8em;
+}

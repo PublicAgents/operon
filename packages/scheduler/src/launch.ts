@@ -1,10 +1,12 @@
 import { doorHost } from "./umbilical-routes.js";
+import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
   wakeEnv,
   type RosterAgent,
   type WakeTrigger,
   type WakeSecrets,
-  type WakeOptions
+  type WakeOptions,
+  type Door
 } from "@operon/core";
 
 /**
@@ -56,6 +58,8 @@ export class LaunchPreconditionError extends Error {
 export interface LaunchContext {
   /** Looks up a secret/var by name; backed by the Worker env at runtime. */
   getSecret(name: string): string | undefined;
+  /** The operator's runtime door overrides for the agent (spec 0006 §7); none when absent. */
+  getDoorOverrides?(agentId: string): Promise<DoorOverrides>;
   /** Mints a short-lived token scoped to the agent's state repo. */
   getGithubToken(agent: RosterAgent): Promise<string>;
   options: WakeOptions;
@@ -103,32 +107,46 @@ export async function prepareLaunch(
   // the WakeContainer's router attaches them. The mind credential and the
   // github clone token are phase 2, untouched here.
   const umbilicalNonce = crypto.randomUUID();
+  // The doors matrix (spec 0006 §7): baseline from the roster, override
+  // from the operator's store. A closed door is simply not wired: no
+  // URL, no bearer, so the porch answers not_wired and the umbilical
+  // has nothing to route. The container is told which doors the
+  // operator closed, so the living help can say so rather than "not
+  // wired", which would send the mind looking for a missing secret.
+  const overrides = (await context.getDoorOverrides?.(agent.id)) ?? {};
+  const closed = closedDoors(agent, overrides);
+  const disabled = disabledDoors(agent, overrides);
+  const open = (door: Door) => !closed.has(door);
   const doorOptions = {
     // These three are called with the URL DIRECTLY (the caller appends no
     // path), so the route lives in the URL; the others append their own.
-    notifyUrl: "http://" + doorHost("notify") + "/notify",
-    notifyToken: umbilicalNonce,
-    publishUrl: "http://" + doorHost("publish") + "/gatekeeper/publish",
-    publishToken: umbilicalNonce,
+    ...(open("notify")
+      ? { notifyUrl: "http://" + doorHost("notify") + "/notify", notifyToken: umbilicalNonce }
+      : {}),
+    ...(open("publish")
+      ? { publishUrl: "http://" + doorHost("publish") + "/gatekeeper/publish", publishToken: umbilicalNonce }
+      : {}),
     persistUrl: "http://" + doorHost("persist") + "/commit",
     persistToken: umbilicalNonce,
-    prUrl: "http://" + doorHost("pr") + "/gatekeeper/pr",
-    prToken: umbilicalNonce,
-    emailUrl: "http://" + doorHost("email"),
-    emailToken: umbilicalNonce,
+    ...(open("github")
+      ? { prUrl: "http://" + doorHost("pr") + "/gatekeeper/pr", prToken: umbilicalNonce }
+      : {}),
+    ...(open("email") ? { emailUrl: "http://" + doorHost("email"), emailToken: umbilicalNonce } : {}),
     chronicleUrl: "http://" + doorHost("chronicle"),
     chronicleToken: umbilicalNonce,
-    tillUrl: "http://" + doorHost("till"),
-    spendUrl: "http://" + doorHost("spend"),
-    vaultUrl: "http://" + doorHost("vault"),
-    xUrl: "http://" + doorHost("x"),
-    asksUrl: "http://" + doorHost("asks"),
+    ...(open("till") ? { tillUrl: "http://" + doorHost("till") } : {}),
+    ...(open("pay") ? { spendUrl: "http://" + doorHost("spend") } : {}),
+    ...(open("vault") ? { vaultUrl: "http://" + doorHost("vault") } : {}),
+    ...(open("x") ? { xUrl: "http://" + doorHost("x") } : {}),
+    ...(open("asks") ? { asksUrl: "http://" + doorHost("asks") } : {}),
     // The web door is opt-in per agent (spec 0004): only a web-capable
     // agent gets it, and only such a container launches fenced, so a
-    // web upgrade can never arrive from an unfenced container.
-    ...(agent.web
+    // web upgrade can never arrive from an unfenced container. Its
+    // baseline IS the opt-in flag, so a closed web door covers both.
+    ...(open("web")
       ? { webUrl: "http://" + doorHost("web"), webToken: umbilicalNonce }
-      : {})
+      : {}),
+    ...(disabled.length > 0 ? { disabledDoors: JSON.stringify(disabled) } : {})
   };
   // The agent's own GitHub grants ride into the wake so the porch can
   // pre-check them and the living help can state them (spec 0008 §6).
@@ -149,7 +167,7 @@ export async function prepareLaunch(
   // The servers this agent may reach, resolved once here so the
   // WakeContainer intercepts exactly them and the container is handed
   // their virtual hosts and nothing else (spec 0008 §4).
-  const mcpServers = (agent.mcp ?? []).map(name => ({
+  const mcpServers = (open("mcp") ? (agent.mcp ?? []) : []).map(name => ({
     name,
     virtual: `mcp-${name}.operon.internal`
   }));
@@ -169,11 +187,11 @@ export async function prepareLaunch(
   // as that door's token, never the real bearer (the umbilical router
   // attaches the real one from env, keyed to this agent).
   const perAgent = {
-    ...(context.getSecret(tillTokenVar(agent.id)) ? { tillToken: umbilicalNonce } : {}),
-    ...(context.getSecret(spendTokenVar(agent.id)) ? { spendToken: umbilicalNonce } : {}),
-    ...(context.getSecret(vaultTokenVar(agent.id)) ? { vaultToken: umbilicalNonce } : {}),
-    ...(context.getSecret(xTokenVar(agent.id)) ? { xToken: umbilicalNonce } : {}),
-    ...(context.getSecret(asksTokenVar(agent.id)) ? { asksToken: umbilicalNonce } : {})
+    ...(open("till") && context.getSecret(tillTokenVar(agent.id)) ? { tillToken: umbilicalNonce } : {}),
+    ...(open("pay") && context.getSecret(spendTokenVar(agent.id)) ? { spendToken: umbilicalNonce } : {}),
+    ...(open("vault") && context.getSecret(vaultTokenVar(agent.id)) ? { vaultToken: umbilicalNonce } : {}),
+    ...(open("x") && context.getSecret(xTokenVar(agent.id)) ? { xToken: umbilicalNonce } : {}),
+    ...(open("asks") && context.getSecret(asksTokenVar(agent.id)) ? { asksToken: umbilicalNonce } : {})
   };
   return {
     wakeId,

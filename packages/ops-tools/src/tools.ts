@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DOORS } from "@operon/core";
 import {
   ToolInputError,
   ToolUnavailableError,
@@ -83,6 +84,41 @@ const REGISTRY: readonly ToolDefinition[] = [
         projects: [{ project: context.project }]
       };
       return { ok: true, ...fleet };
+    }
+  },
+  // ---- the doors matrix (spec 0006 §7) ---------------------------------
+  {
+    name: "agent_doors",
+    title: "An agent's doors",
+    description:
+      "Per door: the roster baseline, the operator override if any, and what is effective at the next wake. One agent, or every agent when agentId is omitted.",
+    input: z.object({ agentId: agentId.optional() }),
+    readOnly: true,
+    decision: false,
+    handler: async (input, context) => {
+      const { agentId: id } = input as { agentId?: string };
+      const ids = id ? [id] : await agentIds(context);
+      const agents = await Promise.all(
+        ids.map(async agent => context.scheduler("GET", `/doors/${encodeURIComponent(agent)}`))
+      );
+      return { ok: true, doors: DOORS, agents };
+    }
+  },
+  {
+    name: "agent_door_set",
+    title: "Open or close an agent's door",
+    description:
+      "Set the operator override on one door of one agent (true opens, false closes, null clears the override so the roster baseline rules). Effective at the agent's next wake; a running wake keeps the doors it was wired with. Audited.",
+    input: z.object({
+      agentId,
+      door: z.enum(DOORS).describe("Which door"),
+      enabled: z.boolean().nullable().describe("true opens, false closes, null clears the override")
+    }),
+    readOnly: false,
+    decision: true,
+    handler: async (input, context) => {
+      const { agentId: id, door, enabled } = input as { agentId: string; door: string; enabled: boolean | null };
+      return context.scheduler("POST", `/doors/${encodeURIComponent(id)}`, { body: { door, enabled } });
     }
   },
   // ---- agents and wakes ---------------------------------------------

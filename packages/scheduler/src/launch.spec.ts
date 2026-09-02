@@ -121,3 +121,36 @@ describe("prepareLaunch", () => {
     );
   });
 });
+
+describe("the doors matrix at launch (spec 0006 §7)", () => {
+  it("does not wire a closed door, names the closed doors, and drops MCP servers when that door is closed", async () => {
+    const fenced = {
+      ...agent,
+      web: true,
+      mcp: ["google-analytics"],
+      doors: { x: false }
+    };
+    const prepared = await prepareLaunch(fenced, "cron", "wake-doors", context({
+      getSecret: name =>
+        name === "MIND_CREDENTIAL_CLAUDE_CODE" ? "mind-token" : name.startsWith("X_TOKEN_") ? "x-real" : undefined,
+      getDoorOverrides: async () => ({ pay: false, mcp: false, web: false })
+    }));
+    // The roster closed x; the operator closed pay, mcp and web.
+    expect(prepared.env.OPERON_X_URL).toBeUndefined();
+    expect(prepared.env.OPERON_X_TOKEN).toBeUndefined();
+    expect(prepared.env.OPERON_SPEND_URL).toBeUndefined();
+    expect(prepared.env.OPERON_WEB_URL).toBeUndefined();
+    expect(prepared.env.OPERON_MCP_SERVERS).toBeUndefined();
+    expect(prepared.mcpHosts).toEqual([]);
+    // Open doors are wired as before; the plumbing never closes.
+    expect(prepared.env.OPERON_NOTIFY_URL).toBeDefined();
+    expect(prepared.env.OPERON_PERSIST_URL).toBeDefined();
+    expect(JSON.parse(prepared.env.OPERON_DISABLED_DOORS ?? "[]").sort()).toEqual(["mcp", "pay", "web", "x"]);
+  });
+
+  it("wires every door when nothing is closed, and says nothing about doors", async () => {
+    const prepared = await prepareLaunch(agent, "cron", "wake-open", context());
+    expect(prepared.env.OPERON_DISABLED_DOORS).toBeUndefined();
+    expect(prepared.env.OPERON_X_URL).toBeDefined();
+  });
+});

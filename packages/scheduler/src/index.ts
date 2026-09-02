@@ -1,11 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { dueAgents, findAgent, parseRoster, type RosterAgent } from "@operon/core";
+import { dueAgents, findAgent, parseRoster, type RosterAgent , DOORS, isDoor } from "@operon/core";
 import { errorResponse, json, requireBearer } from "@operon/worker-kit";
 import {
   LaunchPreconditionError,
   prepareLaunch,
   type LaunchContext
 } from "./launch.js";
+import { effectiveDoors } from "./doors.js";
 import { WakeContainer } from "./wake-container.js";
 export { FleetControl } from "./fleet-control.js";
 
@@ -78,6 +79,7 @@ function launchContext(env: Env): LaunchContext {
       const value = env[name];
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
+    getDoorOverrides: agentId => fleetControl(env).doorOverrides(agentId),
     async getGithubToken(agent: RosterAgent) {
       if (!env.GITHUB_GATEKEEPER) {
         throw new LaunchPreconditionError(
@@ -269,6 +271,30 @@ export default {
         return errorResponse(409, "pause_held_elsewhere", "another holder's pause; pass force to override");
       }
       return json({ ok: true, paused: false, wasPaused: result.wasPaused });
+    }
+
+    // ---- the doors matrix (spec 0006 §7) ------------------------------
+    const doorsMatch = /^\/doors\/([a-z0-9-]+)$/.exec(url.pathname);
+    if (doorsMatch && (request.method === "GET" || request.method === "POST")) {
+      const denied = requireBearer(request, env.WAKE_TRIGGER_TOKEN);
+      if (denied) return denied;
+      const roster = parseRoster(env.ROSTER);
+      const agent = findAgent(roster, doorsMatch[1]);
+      if (!agent) return errorResponse(404, "unknown_agent", doorsMatch[1]);
+      const control = fleetControl(env);
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as { door?: unknown; enabled?: unknown };
+        if (!isDoor(body.door)) {
+          return errorResponse(400, "unknown_door", `door must be one of ${DOORS.join(", ")}`);
+        }
+        if (body.enabled !== null && typeof body.enabled !== "boolean") {
+          return errorResponse(400, "invalid_enabled", "enabled must be true, false, or null (clear the override)");
+        }
+        await control.setDoor(agent.id, body.door, body.enabled as boolean | null);
+        console.log(`operator door ${body.door}=${String(body.enabled)}: ${agent.id}`);
+      }
+      const doors = effectiveDoors(agent, await control.doorOverrides(agent.id));
+      return json({ agentId: agent.id, doors, effectiveAt: "next wake" });
     }
 
     const toggleMatch = /^\/(disable|enable)\/([a-z0-9-]+)$/.exec(url.pathname);

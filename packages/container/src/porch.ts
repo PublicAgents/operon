@@ -148,7 +148,8 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     hosts: config.hosts,
     prRepos: prRepos(config),
     githubWrite: config.githubGrants?.write ?? [],
-    mcp: config.mcpServers.map(server => server.name)
+    mcp: config.mcpServers.map(server => server.name),
+    disabledDoors: config.disabledDoors
   };
 }
 

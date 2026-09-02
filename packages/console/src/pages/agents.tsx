@@ -3,6 +3,82 @@ import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 
+interface DoorState {
+  baseline: boolean;
+  override?: boolean;
+  effective: boolean;
+}
+interface DoorsAnswer {
+  doors: string[];
+  agents: { agentId: string; doors: Record<string, DoorState> }[];
+}
+
+/**
+ * The doors matrix (spec 0006 §7): one checkbox per agent and door,
+ * showing what is EFFECTIVE at the next wake. A click sets the
+ * operator override; a second control clears it so the roster's
+ * baseline rules again. Every flip is an audited decision.
+ */
+function DoorsMatrix() {
+  const state = useTool<DoorsAnswer>("agent_doors", {});
+  const rows = state.data?.agents ?? [];
+  const doors = state.data?.doors ?? [];
+  const set = async (agentId: string, door: string, enabled: boolean | null) => {
+    await callTool("agent_door_set", { agentId, door, enabled });
+    state.refresh();
+  };
+  return (
+    <section className="doors">
+      <header className="page-head">
+        <h2>Doors</h2>
+        <span className="sub">effective at each agent's next wake; a running wake keeps its doors</span>
+      </header>
+      <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
+        {rows.length === 0 && !state.loading ? <Empty>no agents</Empty> : null}
+        <table className="matrix">
+          <thead>
+            <tr>
+              <th>agent</th>
+              {doors.map(door => (
+                <th key={door}>{door}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.agentId}>
+                <td>{row.agentId}</td>
+                {doors.map(door => {
+                  const cell = row.doors[door];
+                  if (!cell) return <td key={door} />;
+                  const overridden = cell.override !== undefined;
+                  return (
+                    <td key={door} className={overridden ? "overridden" : ""}>
+                      <label title={`baseline ${cell.baseline ? "open" : "closed"}${overridden ? `, override ${cell.override ? "open" : "closed"}` : ""}`}>
+                        <input
+                          type="checkbox"
+                          checked={cell.effective}
+                          onChange={event => void set(row.agentId, door, event.target.checked)}
+                        />
+                      </label>
+                      {overridden ? (
+                        <button className="clear" title="clear the override; the roster baseline rules" onClick={() => void set(row.agentId, door, null)}>
+                          ×
+                        </button>
+                      ) : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </LoadingGate>
+    </section>
+  );
+}
+
 export function AgentsPage() {
   const state = useTool<{ zone: string; agents: AgentRow[] }>("agents_list", {}, { pollMs: 15_000 });
   const agents = state.data?.agents ?? [];
@@ -98,6 +174,7 @@ export function AgentsPage() {
         </tbody>
       </table>
       </LoadingGate>
+          <DoorsMatrix />
     </section>
   );
 }

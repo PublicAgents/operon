@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import type { Door } from "@operon/core";
+import { sanitizeOverrides, type DoorOverrides } from "./doors.js";
 
 /**
  * Colony-wide wake pause (spec 0006 §5): the drain primitive. Pausing
@@ -37,5 +39,25 @@ export class FleetControl extends DurableObject {
   async state(): Promise<{ paused: false } | { paused: true; at: string; reason: string }> {
     const paused = await this.ctx.storage.get<{ at: string; reason: string }>("paused");
     return paused ? { paused: true, at: paused.at, reason: paused.reason } : { paused: false };
+  }
+
+  // ---- the doors matrix's runtime overrides (spec 0006 §7) ----------
+  // One small store beside the pause: the operator's word on a door,
+  // per agent, read at every launch and editable from the plane
+  // without a deploy. Effective at the next wake; a running wake keeps
+  // the doors it was wired with.
+
+  async doorOverrides(agentId: string): Promise<DoorOverrides> {
+    return sanitizeOverrides(await this.ctx.storage.get(`doors:${agentId}`));
+  }
+
+  /** enabled null clears the override, so the roster's baseline rules again. */
+  async setDoor(agentId: string, door: Door, enabled: boolean | null): Promise<DoorOverrides> {
+    const current = await this.doorOverrides(agentId);
+    if (enabled === null) delete current[door];
+    else current[door] = enabled;
+    if (Object.keys(current).length === 0) await this.ctx.storage.delete(`doors:${agentId}`);
+    else await this.ctx.storage.put(`doors:${agentId}`, current);
+    return current;
   }
 }
