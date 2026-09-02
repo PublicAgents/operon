@@ -218,7 +218,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...common("gatekeeper-email"),
         ...chronicleD1,
         send_email: [{ name: "EMAIL" }],
-        services: [service("TELEGRAM", "gatekeeper-telegram")],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         durable_objects: { bindings: [{ name: "MAILBOX", class_name: "Mailbox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Mailbox", "Ledger"] }],
         vars: {
@@ -234,7 +234,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...common("gatekeeper-spend"),
         compatibility_flags: ["nodejs_compat"],
         ...chronicleD1,
-        services: [service("TELEGRAM", "gatekeeper-telegram")],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         durable_objects: { bindings: [{ name: "SPEND", class_name: "SpendLedger" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }],
         vars: policyVars(manifest, "spend")
@@ -247,7 +247,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...chronicleD1,
         durable_objects: { bindings: [{ name: "VAULT", class_name: "VaultBox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["VaultBox", "Ledger"] }],
-        services: [service("TELEGRAM", "gatekeeper-telegram")]
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")]
       }
     },
     {
@@ -266,7 +266,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...chronicleD1,
         durable_objects: { bindings: [{ name: "POSTER", class_name: "PosterBox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["PosterBox", "Ledger"] }],
-        services: [service("TELEGRAM", "gatekeeper-telegram")],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         vars: policyVars(manifest, "x")
       }
     },
@@ -315,7 +315,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // The decision queue reaches the operator by mail through the
         // email Gatekeeper's binding-only operator path, so asks never
         // hold a send credential of their own.
-        services: [service("TELEGRAM", "gatekeeper-telegram"), 
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway"), 
           service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail"),
           // The quota's honest source: the scheduler owns the wake lock.
           service("SCHEDULER_WAKE", "scheduler", "WakeQuery")
@@ -399,7 +399,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           // The scheduler's own alerts ride TELEGRAM (the notify entrypoint);
           // the container's doors on the three public Workers ride their
           // Door entrypoints (spec 0009), never the public default export.
-          service("TELEGRAM", "gatekeeper-telegram"),
+          service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway"),
           service("TELEGRAM_DOOR", "gatekeeper-telegram", "Door"),
           service("EMAIL", "gatekeeper-email"),
           service("DEPLOY_DOOR", "gatekeeper-deploy", "Door"),

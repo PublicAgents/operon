@@ -92,7 +92,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     // Asks hold no send credential: mail goes through the email
     // Gatekeeper's binding-only operator entrypoint.
     expect(asks.services).toEqual([
-      { binding: "TELEGRAM", service: "operon-gatekeeper-telegram" },
+      { binding: "TELEGRAM", service: "operon-gatekeeper-telegram", entrypoint: "TelegramGateway" },
       { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" },
       { binding: "SCHEDULER_WAKE", service: "operon-scheduler", entrypoint: "WakeQuery" }
     ]);
@@ -387,7 +387,7 @@ describe("private by construction (spec 0009)", () => {
     }
     // Every worker that alerts the operator holds the binding.
     for (const key of ["gatekeeper-vault", "gatekeeper-x", "gatekeeper-email", "gatekeeper-spend", "gatekeeper-asks"]) {
-      expect(byKey[key].services, key).toContainEqual({ binding: "TELEGRAM", service: "operon-gatekeeper-telegram" });
+      expect(byKey[key].services, key).toContainEqual({ binding: "TELEGRAM", service: "operon-gatekeeper-telegram", entrypoint: "TelegramGateway" });
     }
   });
 
