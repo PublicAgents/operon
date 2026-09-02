@@ -465,6 +465,14 @@ export class EgressProxy {
       plain(response, 400, "proxy_http_only");
       return;
     }
+    // The URL parser already refuses ports above 65535 (the request fails
+    // above as not-a-URL); this closes the rest of the range so no port
+    // ever reaches a dial unvalidated, the same rule as CONNECT.
+    const port = url.port ? Number(url.port) : 80;
+    if (port < 1 || port > 65535) {
+      plain(response, 400, "proxy_bad_target");
+      return;
+    }
     const target = this.targetFor(url.hostname);
     // Host only, as with every egress line: a query string can carry secrets.
     this.context.log(`egress proxy: ${request.method} ${url.host} ${describe(target)}`);
@@ -473,7 +481,7 @@ export class EgressProxy {
       target === "direct"
         ? httpRequest({
             host: unbracket(url.hostname),
-            port: url.port || 80,
+            port,
             method: request.method,
             path: url.pathname + url.search,
             headers

@@ -486,6 +486,40 @@ describe("EgressProxy", () => {
     expect((await connectThrough(forwarder.port, `origin.example:${origin.port}`)).includes("hello /y")).toBe(true);
   });
 
+  it("refuses an absolute-form port outside the TCP range without dialling anything", async () => {
+    const upstream = await startUpstream();
+    const forwarder = await startForwarder({
+      rules: [
+        { pattern: "*", target: parseUpstreamProxy(`http://127.0.0.1:${upstream.port}`) },
+        { pattern: "direct.example", target: "direct" }
+      ]
+    });
+    // Above the range the URL parser refuses it outright; at zero the
+    // forwarder's own guard does, on the direct and the proxied path alike.
+    // (Raw, since node's own client refuses to build such a URL.)
+    const overRange = await rawExchange(
+      forwarder.port,
+      "GET http://direct.example:99999/x HTTP/1.1\r\nHost: direct.example:99999\r\n\r\n"
+    );
+    expect(overRange).toContain("400 Bad Request");
+    expect(overRange).toContain("proxy_absolute_uri_required");
+    expect(await fetchViaProxy(forwarder.port, "http://direct.example:0/x")).toMatchObject({
+      status: 400,
+      body: "proxy_bad_target"
+    });
+    expect(await fetchViaProxy(forwarder.port, "http://proxied.example:0/x")).toMatchObject({
+      status: 400,
+      body: "proxy_bad_target"
+    });
+    expect(upstream.seen).toEqual([]);
+    // Still serving afterwards.
+    const origin = await startOrigin();
+    expect(await fetchViaProxy(forwarder.port, `http://origin.example:${origin.port}/ok`)).toMatchObject({
+      status: 200,
+      body: "hello /ok"
+    });
+  });
+
   it("drops hop-by-hop headers in both directions", async () => {
     const origin = await startOrigin();
     const upstream = await startUpstream();
