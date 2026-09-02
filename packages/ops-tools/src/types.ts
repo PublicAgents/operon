@@ -1,4 +1,51 @@
-import type { z } from "zod";
+import { z } from "zod";
+
+/**
+ * One enrolled project of the fleet (spec 0006 §9). The control plane
+ * hosts one project (its own) and binds to the others' gatekeepers.
+ */
+export interface FleetProject {
+  project: string;
+  zone?: string;
+  /** Worker script names are `<workerPrefix>-<dir>`. */
+  workerPrefix?: string;
+}
+
+export interface FleetInfo {
+  /** The project whose workers this plane is deployed beside. */
+  host: string;
+  /** Fills `project` when a call omits it. */
+  defaultProject: string;
+  /** The host first, then every enrolled project. */
+  projects: FleetProject[];
+}
+
+/**
+ * The `project` argument every tool takes (spec 0006 §9). Added to each
+ * tool's schema by the registry in one place, resolved by the HOST to
+ * a binding set before the handler runs, so no handler mentions it and
+ * none can forget it.
+ */
+export const PROJECT_FIELD = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]*$/, "project names are lowercase slugs")
+  .optional()
+  .describe(
+    "Which enrolled project to act on; the plane's default project when omitted. " +
+      "Audit rows always record the resolved project."
+  );
+
+/** The schema with `project` added, when it is an object schema (every tool's is). */
+export function withProject(schema: z.ZodType): z.ZodType {
+  return schema instanceof z.ZodObject ? schema.extend({ project: PROJECT_FIELD }) : schema;
+}
+
+/** The project a raw input names, before validation, for the host to resolve. */
+export function requestedProject(input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const value = (input as { project?: unknown }).project;
+  return typeof value === "string" ? value : undefined;
+}
 
 /**
  * The operator tool contract (spec 0005 §2): a tool is data plus a
@@ -68,6 +115,10 @@ export interface SecretsPort {
 export interface ToolContext {
   /** The verified Access identity (email, sub, or service token name). */
   operator: string;
+  /** The project this context is bound to (resolved by the host, never "default"). */
+  project: string;
+  /** The fleet as the host knows it; absent means a single-project plane. */
+  fleet?: FleetInfo;
   /**
    * Call a Gatekeeper's binding-only Ops entrypoint. Returns the parsed
    * JSON body; throws ToolInputError carrying the downstream status and

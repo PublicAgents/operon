@@ -110,6 +110,31 @@ function policyVars(manifest: FleetManifest, worker: string): Record<string, str
   return { ...(POLICY_DEFAULTS[worker] ?? {}), ...(manifest.policy[worker] ?? {}) };
 }
 
+/**
+ * What the control plane binds to, per project: every gatekeeper's Ops
+ * entrypoint and the scheduler's control surface (spec 0005 §2, 0006 §9).
+ */
+const OPS_BINDINGS: ReadonlyArray<readonly [binding: string, worker: string, entrypoint?: string]> = [
+  ["CHRONICLE_GK", "gatekeeper-chronicle", "Ops"],
+  ["EMAIL", "gatekeeper-email", "Ops"],
+  ["SPEND", "gatekeeper-spend", "Ops"],
+  ["VAULT", "gatekeeper-vault", "Ops"],
+  ["X", "gatekeeper-x", "Ops"],
+  ["TILL", "gatekeeper-till", "Ops"],
+  ["DEPLOY", "gatekeeper-deploy", "Ops"],
+  ["GITHUB", "gatekeeper-github", "Ops"],
+  ["PR", "gatekeeper-pr", "Ops"],
+  ["TELEGRAM", "gatekeeper-telegram", "Ops"],
+  ["BROWSER", "gatekeeper-browser", "Ops"],
+  ["ASKS", "gatekeeper-asks", "Ops"],
+  ["SCHEDULER", "scheduler"]
+];
+
+/** "second-project" -> SECOND_PROJECT, the binding infix (mirrors the ops worker). */
+function projectVar(project: string): string {
+  return project.toUpperCase().replace(/-/g, "_");
+}
+
 export function renderWorkers(manifest: FleetManifest, options: RenderOptions): RenderedWorker[] {
   const { chassisDir } = options;
   const prefix = manifest.workerPrefix;
@@ -455,25 +480,27 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           { tag: "v2", new_sqlite_classes: ["RotationGate"] }
         ],
         services: [
-          service("CHRONICLE_GK", "gatekeeper-chronicle", "Ops"),
-          service("EMAIL", "gatekeeper-email", "Ops"),
-          service("SPEND", "gatekeeper-spend", "Ops"),
-          service("VAULT", "gatekeeper-vault", "Ops"),
-          service("X", "gatekeeper-x", "Ops"),
-          service("TILL", "gatekeeper-till", "Ops"),
-          service("DEPLOY", "gatekeeper-deploy", "Ops"),
-          service("GITHUB", "gatekeeper-github", "Ops"),
-          service("PR", "gatekeeper-pr", "Ops"),
-          service("TELEGRAM", "gatekeeper-telegram", "Ops"),
-          service("BROWSER", "gatekeeper-browser", "Ops"),
-          service("ASKS", "gatekeeper-asks", "Ops"),
-          service("SCHEDULER", "scheduler")
+          // The host project, under bare names.
+          ...OPS_BINDINGS.map(([binding, worker, entrypoint]) => service(binding, worker, entrypoint)),
+          // Every enrolled project (spec 0006 §9), under <PROJECT>__<BINDING>,
+          // bound to THAT project's workers by its own prefix.
+          ...manifest.control.enrolled.flatMap(enrolled =>
+            OPS_BINDINGS.map(([binding, worker, entrypoint]) => ({
+              binding: `${projectVar(enrolled.project)}__${binding}`,
+              service: `${enrolled.workerPrefix}-${worker}`,
+              ...(entrypoint !== undefined ? { entrypoint } : {})
+            }))
+          )
         ],
         vars: {
           ACCESS_TEAM_DOMAIN: manifest.access.teamDomain,
           ACCESS_AUD: manifest.access.aud,
           CF_ACCOUNT_ID: manifest.accountId,
-          WORKER_NAME_PREFIX: `${prefix}-`
+          WORKER_NAME_PREFIX: `${prefix}-`,
+          HOST_PROJECT: manifest.project,
+          HOST_ZONE: zone,
+          DEFAULT_PROJECT: manifest.control.defaultProject,
+          PROJECTS: JSON.stringify(manifest.control.enrolled)
         }
       }
     }

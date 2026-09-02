@@ -3,7 +3,15 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { TOOLS } from "./tools.js";
 import { renderSkill } from "./docs.js";
 import { AuditUnavailableError, runTool, type ToolAudit } from "./run.js";
-import { ToolInputError, ToolUnavailableError, type ToolContext } from "./types.js";
+import { requestedProject, ToolInputError, ToolUnavailableError, type ToolContext } from "./types.js";
+
+/**
+ * How the host binds a call: given the project the call names (or
+ * none), the context and audit for that project. The MCP server is
+ * one per request but a request may carry calls for several projects,
+ * so binding happens per call, not per server.
+ */
+export type CallBinder = (project?: string) => { context: ToolContext; audit: ToolAudit };
 
 /**
  * The MCP surface (spec 0005 §2): the same registry, registered in a
@@ -42,10 +50,12 @@ export const NO_AUDIT: ToolAudit = {
 };
 
 export function createMcpServer(
-  context: ToolContext,
+  source: ToolContext | CallBinder,
   audit: ToolAudit = NO_AUDIT,
   serverUrl?: string
 ): McpServer {
+  const bind: CallBinder =
+    typeof source === "function" ? source : () => ({ context: source, audit });
   const server = new McpServer(
     { name: "operon-ops", version: "0.0.0" },
     {
@@ -81,7 +91,8 @@ export function createMcpServer(
       },
       (async (input: unknown) => {
         try {
-          return ok(await runTool(tool, input ?? {}, context, audit));
+          const bound = bind(requestedProject(input));
+          return ok(await runTool(tool, input ?? {}, bound.context, bound.audit));
         } catch (error) {
           if (
             error instanceof ToolInputError ||

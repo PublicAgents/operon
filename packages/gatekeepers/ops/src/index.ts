@@ -15,12 +15,15 @@ import {
   planRotation,
   renderOpenApi,
   renderSkill,
+  requestedProject,
   runTool,
   toolPath,
   ToolInputError,
   ToolUnavailableError,
   TOOLS,
   workerNameForDir,
+  type FleetInfo,
+  type FleetProject,
   type PendingRotation,
   type RotationOutcome,
   type RotationPair,
@@ -31,6 +34,7 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { securityHeaders, withSecurityHeaders } from "./headers.js";
 import { csrfDenied, wsOriginDenied, wsProtocolToken } from "./guards.js";
+import { bindingFor, fleetOf, resolveProject, wakeTokenVar } from "./fleet.js";
 
 export { Ledger };
 
@@ -62,8 +66,14 @@ interface Env {
   /** Secrets writes via the Cloudflare API (spec 0005 §6); optional. */
   CLOUDFLARE_API_TOKEN?: string;
   CF_ACCOUNT_ID?: string;
-  /** Worker-dir to script-name prefix; the colony default. */
+  /** Worker-dir to script-name prefix of the HOST project. */
   WORKER_NAME_PREFIX?: string;
+  /** The fleet (spec 0006 §9): the host project, its zone, the default, and the enrolled others. */
+  HOST_PROJECT?: string;
+  HOST_ZONE?: string;
+  DEFAULT_PROJECT?: string;
+  /** JSON array of { project, zone, workerPrefix } for every enrolled project but the host. */
+  PROJECTS?: string;
   /** The console SPA build (Workers static assets); optional. */
   ASSETS?: Fetcher;
   CHRONICLE_GK?: Fetcher;
@@ -100,12 +110,14 @@ async function responsePayload(response: Response): Promise<unknown> {
  * minted inside the call and never stored or returned.
  */
 export class RotationGate extends DurableObject<Env> {
-  async rotate(pairs: RotationPair[]): Promise<RotationOutcome & { resumed: boolean }> {
+  async rotate(
+    pairs: RotationPair[],
+    prefix: string | undefined = this.env.WORKER_NAME_PREFIX
+  ): Promise<RotationOutcome & { resumed: boolean }> {
     const raw = rawCloudflareSecrets(this.env);
     if (!raw) {
       throw new Error("secrets are not configured on this gateway (CLOUDFLARE_API_TOKEN missing)");
     }
-    const prefix = this.env.WORKER_NAME_PREFIX;
     // Durable recovery (spec 0005 §6): an incomplete rotation stores its
     // in-flight value plus the members still missing it, so the re-run
     // RESUMES with the same value instead of minting another and can
@@ -184,34 +196,39 @@ function rawCloudflareSecrets(env: Env): RawSecrets | undefined {
   };
 }
 
-function secretsPort(env: Env): SecretsPort | undefined {
+function secretsPort(env: Env, project: FleetProject): SecretsPort | undefined {
   const raw = rawCloudflareSecrets(env);
   if (!raw) return undefined;
-  const prefix = env.WORKER_NAME_PREFIX;
+  // Tools address workers by DIRECTORY name; the deployed script name
+  // is directory plus the PROJECT's prefix, mapped here once.
+  const prefix = `${project.workerPrefix}-`;
   return {
-    // Tools address workers by DIRECTORY name; the deployed script name
-    // is directory plus the colony's prefix, mapped here once.
     list: worker => raw.list(workerNameForDir(worker, prefix)),
     put: (worker, name, value) => raw.put(workerNameForDir(worker, prefix), name, value),
     async rotateGroup(group, pairs) {
       if (!env.ROTATION) {
         throw new ToolUnavailableError("rotation gate unbound (ROTATION durable object)");
       }
-      // The DO serializes per group; the value is minted inside the call.
-      return env.ROTATION.get(env.ROTATION.idFromName(group)).rotate(
-        pairs.map(pair => [pair[0], pair[1]] as const)
+      // The DO serializes per project and group; the value is minted
+      // inside the call.
+      return env.ROTATION.get(env.ROTATION.idFromName(`${project.project}:${group}`)).rotate(
+        pairs.map(pair => [pair[0], pair[1]] as const),
+        prefix
       );
     }
   };
 }
 
-function toolContext(env: Env, operator: string): ToolContext {
-  const secrets = secretsPort(env);
+function toolContext(env: Env, operator: string, fleet: FleetInfo, project: FleetProject): ToolContext {
+  const secrets = secretsPort(env, project);
   return {
     operator,
+    project: project.project,
+    fleet,
     async ops(binding, method, path, options) {
-      const target = env[binding] as Fetcher | undefined;
-      if (!target) throw new ToolUnavailableError(`binding_unwired: ${binding}`);
+      const wired = bindingFor(fleet, project, binding);
+      const target = env[wired] as Fetcher | undefined;
+      if (!target) throw new ToolUnavailableError(`binding_unwired: ${wired}`);
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(options?.query ?? {})) {
         if (value !== undefined) query.set(key, value);
@@ -236,15 +253,20 @@ function toolContext(env: Env, operator: string): ToolContext {
       return payload;
     },
     async scheduler(method, path, options) {
-      const target = env.SCHEDULER as Fetcher | undefined;
-      if (!target) throw new ToolUnavailableError("binding_unwired: SCHEDULER");
-      if (!env.WAKE_TRIGGER_TOKEN) {
-        throw new ToolUnavailableError("downstream_token_missing: SCHEDULER");
+      const wired = bindingFor(fleet, project, "SCHEDULER");
+      const target = env[wired] as Fetcher | undefined;
+      if (!target) throw new ToolUnavailableError(`binding_unwired: ${wired}`);
+      // The wake-trigger bearer is per project: the host's under its
+      // old name, an enrolled project's under WAKE_TRIGGER_TOKEN_<P>.
+      const tokenVar = wakeTokenVar(fleet, project);
+      const token = env[tokenVar] as string | undefined;
+      if (!token) {
+        throw new ToolUnavailableError(`downstream_token_missing: ${tokenVar}`);
       }
       const response = await target.fetch(`https://internal${path}`, {
         method,
         headers: {
-          authorization: `Bearer ${env.WAKE_TRIGGER_TOKEN}`,
+          authorization: `Bearer ${token}`,
           "x-operon-operator": operator,
           ...(options?.body !== undefined ? { "content-type": "application/json" } : {})
         },
@@ -271,15 +293,18 @@ function audit(env: Env) {
   return env.AUDIT.get(env.AUDIT.idFromName("ops"));
 }
 
-function toolAudit(env: Env, operator: string, via: string): ToolAudit {
+function toolAudit(env: Env, operator: string, via: string, project: string): ToolAudit {
+  // Every row names the RESOLVED project (spec 0006 §9), never the
+  // word default.
   return {
     async intent(tool, summary) {
-      await audit(env).append("operator_decision", { operator, tool, via, body: summary });
+      await audit(env).append("operator_decision", { operator, project, tool, via, body: summary });
     },
     async finish(tool, decision, ok, status) {
       try {
         await audit(env).append(decision ? "operator_decision_result" : "operator_read", {
           operator,
+          project,
           tool,
           via,
           ok,
@@ -337,6 +362,7 @@ export default {
     if (!access.ok) return errorResponse(401, "access_denied", access.reason);
     const operator =
       access.identity.email || access.identity.commonName || access.identity.sub;
+    const fleet = fleetOf(env);
 
     if (url.pathname === "/whoami") {
       return json({ ok: true, identity: access.identity });
@@ -369,11 +395,20 @@ export default {
       }
       const denied = wsOriginDenied(request, url);
       if (denied) return denied;
-      const binding = env[ws.binding] as Fetcher | undefined;
-      if (!binding) return errorResponse(503, "binding_unwired", ws.binding);
+      // Live surfaces ride the same per-project bindings: ?project=<name>.
+      let project: FleetProject;
+      try {
+        project = resolveProject(fleet, url.searchParams.get("project") ?? undefined);
+      } catch (error) {
+        return toolErrorResponse(error);
+      }
+      const wired = bindingFor(fleet, project, ws.binding);
+      const binding = env[wired] as Fetcher | undefined;
+      if (!binding) return errorResponse(503, "binding_unwired", wired);
       try {
         await audit(env).append("operator_read", {
           operator,
+          project: project.project,
           tool: "ws",
           via: "ws",
           path: url.pathname
@@ -406,11 +441,12 @@ export default {
         return errorResponse(400, "malformed_json");
       }
       try {
+        const project = resolveProject(fleet, requestedProject(input));
         const value = await runTool(
           tool,
           input,
-          toolContext(env, operator),
-          toolAudit(env, operator, "rest")
+          toolContext(env, operator, fleet, project),
+          toolAudit(env, operator, "rest", project.project)
         );
         return json(value);
       } catch (error) {
@@ -428,9 +464,16 @@ export default {
         sessionIdGenerator: undefined,
         enableJsonResponse: true
       });
+      // Bound per CALL: one request may carry calls for several projects.
       const server = createMcpServer(
-        toolContext(env, operator),
-        toolAudit(env, operator, "mcp"),
+        requested => {
+          const project = resolveProject(fleet, requested);
+          return {
+            context: toolContext(env, operator, fleet, project),
+            audit: toolAudit(env, operator, "mcp", project.project)
+          };
+        },
+        undefined,
         url.origin
       );
       await server.connect(transport);

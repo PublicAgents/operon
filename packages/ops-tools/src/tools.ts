@@ -3,7 +3,8 @@ import {
   ToolInputError,
   ToolUnavailableError,
   type ToolContext,
-  type ToolDefinition
+  type ToolDefinition,
+  withProject
 } from "./types.js";
 import { rotationGroups } from "./rotation.js";
 
@@ -65,7 +66,25 @@ function requireSecrets(context: ToolContext) {
   return context.secrets;
 }
 
-export const TOOLS: readonly ToolDefinition[] = [
+const REGISTRY: readonly ToolDefinition[] = [
+  // ---- the fleet (spec 0006 §9) --------------------------------------
+  {
+    name: "fleet_projects",
+    title: "List the fleet's projects",
+    description:
+      "The projects this control plane reaches: the host project it is deployed beside and every enrolled project, with the default that fills an omitted `project` argument.",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: async (_input, context) => {
+      const fleet = context.fleet ?? {
+        host: context.project,
+        defaultProject: context.project,
+        projects: [{ project: context.project }]
+      };
+      return { ok: true, ...fleet };
+    }
+  },
   // ---- agents and wakes ---------------------------------------------
   {
     name: "agents_list",
@@ -719,6 +738,16 @@ export const TOOLS: readonly ToolDefinition[] = [
     }
   }
 ];
+
+/**
+ * The registry as served: every tool takes an optional `project` (spec
+ * 0006 §9), added here in one place so a tool cannot forget it. The
+ * host resolves it before the handler runs; handlers never read it.
+ */
+export const TOOLS: readonly ToolDefinition[] = REGISTRY.map(tool => ({
+  ...tool,
+  input: withProject(tool.input)
+}));
 
 export function toolByName(name: string): ToolDefinition | undefined {
   return TOOLS.find(tool => tool.name === name);
