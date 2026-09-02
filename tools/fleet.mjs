@@ -31,6 +31,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { ensureOpsAccess } from "./access.mjs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -388,6 +389,32 @@ for (const manifest of manifests) {
   if (!existsSync(consoleIndex)) {
     fail("the console build is missing; run build:chassis first (deploying without it ships a blank console)");
   }
+  // The plane's Access application, reconciled on every deploy (spec
+  // 0009 §3): read, compare, fix what drifted. Needs an API token that
+  // can edit Access; without one this says so once and continues, and
+  // the plane fails closed on its own if its vars are empty.
+  if (process.env.CLOUDFLARE_API_TOKEN) {
+    try {
+      const access = await ensureOpsAccess(manifest, {
+        apiToken: process.env.CLOUDFLARE_API_TOKEN,
+        accountId: manifest.accountId,
+        createServiceToken: false
+      });
+      for (const line of access.lines) console.log(`  ${line}`);
+      for (const need of access.needs) console.log(`  ! ${need}`);
+      if (access.aud && manifest.access?.aud !== access.aud) {
+        console.log(
+          `  ! the manifest's access.aud does not match the application (${access.aud}); ` +
+            `run bootstrap, which writes it back`
+        );
+      }
+    } catch (error) {
+      console.log(`  ! Access could not be reconciled: ${String(error.message ?? error).slice(0, 200)}`);
+    }
+  } else {
+    console.log("  (Access not reconciled: CLOUDFLARE_API_TOKEN is not set)");
+  }
+
   const { buildDir, workers } = render(manifest, { resolveIds: true });
   const workersByKey = new Map(workers.map(worker => [worker.key, worker]));
   for (const worker of workers) {

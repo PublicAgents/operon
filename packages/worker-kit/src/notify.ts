@@ -1,13 +1,9 @@
 /**
  * Operator notification with button-gating (spec 0003 §7). Action buttons
  * (approve/reject) execute real decisions, so they must only ever reach
- * the operator from OUR OWN Workers over a private service binding, never
- * from a caller holding a bearer. A leaked NOTIFY_TOKEN can then forge
- * text spam but never a decision button.
- *
- * This helper prefers the TELEGRAM service binding (buttons allowed, no
- * token on the wire); it falls back to the public NOTIFY_URL + token path
- * with the actions DROPPED. One place owns the rule.
+ * the operator from OUR OWN Workers over a private service binding. That
+ * binding is now the only path (spec 0009): no public URL, no bearer on
+ * the wire, nothing for a leaked token to reach.
  */
 
 export interface OperatorAction {
@@ -27,11 +23,8 @@ export interface TelegramGatewayBinding {
 }
 
 export interface NotifyEnv {
-  /** The telegram Gatekeeper, over a service binding: the only path that carries buttons. */
+  /** The telegram Gatekeeper, over a service binding: the only path there is (spec 0009). */
   TELEGRAM?: TelegramGatewayBinding;
-  /** Public fallback (containers, and deployments without the binding): buttons dropped. */
-  NOTIFY_URL?: string;
-  NOTIFY_TOKEN?: string;
 }
 
 export interface NotifyOptions {
@@ -46,33 +39,17 @@ export async function notifyOperator(
   text: string,
   options: NotifyOptions = {}
 ): Promise<void> {
-  if (env.TELEGRAM) {
-    try {
-      const result = await env.TELEGRAM.notify({
-        text,
-        ...(options.actions ? { actions: options.actions } : {}),
-        ...(options.agentId ? { agentId: options.agentId } : {})
-      });
-      // Delivered over the binding, buttons and all: done. Recorded but
-      // undelivered (a Telegram-less colony, spec 0005 §5) is ALSO done:
-      // the notify is durably in the notifications feed, and a public-path
-      // retry would only append it twice. Fall through only when the
-      // binding call reached neither the operator nor the record.
-      if (result?.delivered || result?.recorded) return;
-    } catch (error) {
-      console.error("notify over binding failed", error);
-    }
+  if (!env.TELEGRAM) {
+    console.error("notify dropped: no TELEGRAM binding on this worker");
+    return;
   }
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
   try {
-    // The public path never carries actions: a bearer-authenticated
-    // caller cannot put a decision button in front of the operator.
-    await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text, ...(options.agentId ? { agentId: options.agentId } : {}) })
+    await env.TELEGRAM.notify({
+      text,
+      ...(options.actions ? { actions: options.actions } : {}),
+      ...(options.agentId ? { agentId: options.agentId } : {})
     });
   } catch (error) {
-    console.error("notify over public path failed", error);
+    console.error("notify over binding failed", error);
   }
 }

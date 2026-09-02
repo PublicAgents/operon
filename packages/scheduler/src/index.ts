@@ -1,6 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { dueAgents, findAgent, parseRoster, type RosterAgent , DOORS, isDoor } from "@operon/core";
-import { errorResponse, json, requireBearer } from "@operon/worker-kit";
+import { errorResponse, json, requireBearer,
+  notifyOperator,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import {
   LaunchPreconditionError,
   prepareLaunch,
@@ -47,23 +50,15 @@ interface Env {
   FLEET_CONTROL: DurableObjectNamespace<import("./fleet-control.js").FleetControl>;
   ROSTER: string;
   WAKE_TRIGGER_TOKEN?: string;
-  NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
-  PUBLISH_URL?: string;
+  /** The telegram Gatekeeper over a service binding: how this Worker alerts the operator. */
+  TELEGRAM?: TelegramGatewayBinding;
   PUBLISH_TOKEN?: string;
-  PERSIST_URL?: string;
   PERSIST_TOKEN?: string;
-  PR_URL?: string;
   PR_TOKEN?: string;
   PR_REPOS?: string;
-  EMAIL_URL?: string;
   EMAIL_TOKEN?: string;
-  TILL_URL?: string;
-  SPEND_URL?: string;
-  VAULT_URL?: string;
-  CHRONICLE_URL?: string;
   CHRONICLE_TOKEN?: string;
-  X_URL?: string;
   // Per-agent money bearers arrive as TILL_TOKEN_<AGENTID> secrets via the
   // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
@@ -114,24 +109,12 @@ function launchContext(env: Env): LaunchContext {
       const { token } = (await response.json()) as { token: string };
       return token;
     },
+    // Door URLs and bearers are the umbilical's (spec 0003 step 4): the
+    // launch wires virtual hosts and the per-wake nonce, and the real
+    // bearers stay in this env for the router. Nothing public remains
+    // to hand over (spec 0009).
     options: {
-      notifyUrl: env.NOTIFY_URL,
-      notifyToken: env.NOTIFY_TOKEN,
-      publishUrl: env.PUBLISH_URL,
-      publishToken: env.PUBLISH_TOKEN,
-      persistUrl: env.PERSIST_URL,
-      persistToken: env.PERSIST_TOKEN,
-      prUrl: env.PR_URL,
-      prToken: env.PR_TOKEN,
       prRepos: env.PR_REPOS,
-      emailUrl: env.EMAIL_URL,
-      emailToken: env.EMAIL_TOKEN,
-      tillUrl: env.TILL_URL,
-      spendUrl: env.SPEND_URL,
-      vaultUrl: env.VAULT_URL,
-      chronicleUrl: env.CHRONICLE_URL,
-      chronicleToken: env.CHRONICLE_TOKEN,
-      xUrl: env.X_URL,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS
     }
@@ -204,26 +187,9 @@ async function wake(
   }
 }
 
-/** Best-effort operator alert through the telegram Gatekeeper; never throws. */
+/** Best-effort operator alert over the TELEGRAM binding (spec 0009); never throws. */
 async function notify(env: Env, text: string): Promise<void> {
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
-  try {
-    const response = await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.NOTIFY_TOKEN}`
-      },
-      body: JSON.stringify({ text })
-    });
-    if (!response.ok) {
-      console.error(
-        `notify rejected: ${response.status} ${(await response.text()).slice(0, 200)}`
-      );
-    }
-  } catch (error) {
-    console.error("notify failed", error);
-  }
+  await notifyOperator(env, text);
 }
 
 export default {

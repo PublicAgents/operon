@@ -83,7 +83,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
   it("ships the asks Gatekeeper: its own worker, DO, route, and operator-mail binding", () => {
     const asks = byKey["gatekeeper-asks"];
     expect(asks.name).toBe("operon-gatekeeper-asks");
-    expect(asks.routes).toEqual([{ pattern: "asks-gk.livevariant.ai", custom_domain: true }]);
+    expect(asks.routes).toBeUndefined();
     expect(asks.durable_objects.bindings).toEqual([
       { name: "ASKS", class_name: "AskBox" },
       { name: "LEDGER", class_name: "Ledger" }
@@ -102,7 +102,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(rendered.findIndex(w => w.key === "gatekeeper-asks")).toBeLessThan(
       rendered.findIndex(w => w.key === "scheduler")
     );
-    expect(byKey["scheduler"].vars.ASKS_URL).toBe("https://asks-gk.livevariant.ai");
+    expect(byKey["scheduler"].vars.ASKS_URL).toBeUndefined();
   });
 
   it("keeps the legacy worker names byte-for-byte (renames would orphan DO state)", () => {
@@ -112,9 +112,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
   });
 
   it("derives routes from the zone, including the till's apex plus agent hosts", () => {
-    expect(byKey["gatekeeper-email"].routes).toEqual([
-      { pattern: "email-gk.livevariant.ai", custom_domain: true }
-    ]);
+    expect(byKey["gatekeeper-email"].routes).toBeUndefined();
     expect(byKey["gatekeeper-till"].routes).toEqual([
       { pattern: "livevariant.ai", custom_domain: true },
       { pattern: "prior.livevariant.ai", custom_domain: true }
@@ -169,6 +167,9 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       entrypoint: "Ops"
     });
     expect(ops.services).toHaveLength(13);
+    expect(byKey["gatekeeper-github"].routes).toBeUndefined();
+    expect(byKey["gatekeeper-x"].routes).toBeUndefined();
+    expect(byKey["gatekeeper-asks"].routes).toBeUndefined();
     expect(ops.vars).toEqual({
       ACCESS_TEAM_DOMAIN: "https://floral-shape-360c.cloudflareaccess.com",
       ACCESS_AUD: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025",
@@ -208,12 +209,11 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     ]);
   });
 
-  it("derives the scheduler's crons from the roster and its URLs from the zone", () => {
+  it("derives the scheduler's crons from the roster, and carries no door URLs (spec 0009)", () => {
     const scheduler = byKey["scheduler"];
     expect(scheduler.triggers).toEqual({ crons: ["0 6,12,18 * * *"] });
-    expect(scheduler.vars.NOTIFY_URL).toBe("https://tg.livevariant.ai/notify");
-    expect(scheduler.vars.PERSIST_URL).toBe("https://gh-gk.livevariant.ai/commit");
-    expect(scheduler.vars.TILL_URL).toBe("https://livevariant.ai");
+    expect(scheduler.vars.NOTIFY_URL).toBeUndefined();
+    expect(scheduler.vars.PERSIST_URL).toBeUndefined();
     expect(scheduler.vars.PR_REPOS).toContain("livevariant/operon");
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe(
       JSON.stringify(["--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose"])
@@ -234,20 +234,19 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       binding: "ASKS_GK",
       service: "operon-gatekeeper-asks"
     });
-    expect(scheduler.services).toHaveLength(13);
+    expect(scheduler.services).toHaveLength(14);
   });
 
-  it("merges policy over chassis defaults and derives NOTIFY_URL and EMAIL_DOMAIN", () => {
+  it("merges policy over chassis defaults and derives EMAIL_DOMAIN", () => {
     expect(byKey["gatekeeper-spend"].vars).toMatchObject({
       SPEND_MAX_TX: "0.10",
       SPEND_HOLD_MAX: "250.00",
-      SPEND_CHAIN_ID: "4217",
-      NOTIFY_URL: "https://tg.livevariant.ai/notify"
+      SPEND_CHAIN_ID: "4217"
     });
+    expect(byKey["gatekeeper-spend"].vars.NOTIFY_URL).toBeUndefined();
     expect(byKey["gatekeeper-email"].vars).toEqual({
       EMAIL_DOMAIN: "livevariant.ai",
-      OPERATOR_EMAIL: "michael@krens.nl",
-      NOTIFY_URL: "https://tg.livevariant.ai/notify"
+      OPERATOR_EMAIL: "michael@krens.nl"
     });
     expect(byKey["gatekeeper-browser"].vars).toEqual({
       CF_ACCOUNT_ID: "85c7962b4a17a841ef0689e0e7c2a050",
@@ -353,5 +352,52 @@ describe("MCP server bindings (spec 0008 §4)", () => {
     };
     expect(ga.routes).toBeUndefined();
     expect(ga.vars).toEqual({});
+  });
+});
+
+describe("private by construction (spec 0009)", () => {
+  it("renders no hostname for a Gatekeeper the public never needs to reach", () => {
+    for (const key of [
+      "gatekeeper-github",
+      "gatekeeper-pr",
+      "gatekeeper-email",
+      "gatekeeper-spend",
+      "gatekeeper-vault",
+      "gatekeeper-chronicle",
+      "gatekeeper-x",
+      "gatekeeper-asks"
+    ]) {
+      expect(byKey[key].routes, key).toBeUndefined();
+    }
+    // The three public surfaces keep theirs.
+    expect(byKey["gatekeeper-telegram"].routes).toEqual([{ pattern: "tg.livevariant.ai", custom_domain: true }]);
+    expect(byKey["gatekeeper-ops"].routes).toEqual([{ pattern: "ops.livevariant.ai", custom_domain: true }]);
+    expect(byKey["gatekeeper-till"].routes?.length).toBeGreaterThan(0);
+  });
+
+  it("reaches the public Workers' doors through Door entrypoints, and carries no door URLs", () => {
+    const scheduler = byKey["scheduler"];
+    expect(scheduler.services).toContainEqual({ binding: "TELEGRAM_DOOR", service: "operon-gatekeeper-telegram", entrypoint: "Door" });
+    expect(scheduler.services).toContainEqual({ binding: "DEPLOY_DOOR", service: "operon-gatekeeper-deploy", entrypoint: "Door" });
+    expect(scheduler.services).toContainEqual({ binding: "TILL_DOOR", service: "operon-gatekeeper-till", entrypoint: "Door" });
+    for (const name of Object.keys(scheduler.vars)) expect(name, name).not.toMatch(/_URL$/);
+    for (const key of ["gatekeeper-email", "gatekeeper-spend", "gatekeeper-vault", "gatekeeper-x", "gatekeeper-asks"]) {
+      expect(byKey[key].vars?.NOTIFY_URL, key).toBeUndefined();
+    }
+    // Every worker that alerts the operator holds the binding.
+    for (const key of ["gatekeeper-vault", "gatekeeper-x", "gatekeeper-email", "gatekeeper-spend"]) {
+      expect(byKey[key].services, key).toContainEqual({ binding: "TELEGRAM", service: "operon-gatekeeper-telegram" });
+    }
+  });
+
+  it("renders the plane without Access vars until bootstrap fills the block", () => {
+    const { access: _access, ...withoutAccess } = RAW as Record<string, unknown> & { access: unknown };
+    const manifest = validateManifest(withoutAccess);
+    expect(manifest.access).toBeUndefined();
+    const ops = Object.fromEntries(
+      renderWorkers(manifest, { chassisDir: CHASSIS }).map(worker => [worker.key, worker.config])
+    )["gatekeeper-ops"] as { vars: Record<string, unknown> };
+    expect(ops.vars.ACCESS_AUD).toBeUndefined();
+    expect(ops.vars.ACCESS_TEAM_DOMAIN).toBeUndefined();
   });
 });
