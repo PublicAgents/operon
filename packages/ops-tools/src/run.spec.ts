@@ -5,6 +5,7 @@ import { ToolInputError, type ToolContext } from "./types.js";
 
 const context: ToolContext = {
   operator: "spec",
+  project: "spec-project",
   ops: async () => ({ ok: true }),
   scheduler: async () => ({ ok: true }),
   auditRecent: async () => []

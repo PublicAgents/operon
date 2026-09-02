@@ -9,7 +9,7 @@ import { renderWorkers, mcpBindings, DEPLOY_ORDER, D1_PLACEHOLDER } from "./temp
  * colony disagree, the MIGRATION is wrong, not the colony.
  */
 
-const LIVEVARIANT = validateManifest({
+const RAW = {
   project: "livevariant",
   accountId: "85c7962b4a17a841ef0689e0e7c2a050",
   workerPrefix: "operon",
@@ -54,7 +54,8 @@ const LIVEVARIANT = validateManifest({
       enabled: true
     }
   ]
-});
+};
+const LIVEVARIANT = validateManifest(RAW);
 
 const CHASSIS = "../../operon";
 const rendered = renderWorkers(LIVEVARIANT, {
@@ -172,8 +173,39 @@ describe("renderWorkers reproduces the livevariant colony", () => {
       ACCESS_TEAM_DOMAIN: "https://floral-shape-360c.cloudflareaccess.com",
       ACCESS_AUD: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025",
       CF_ACCOUNT_ID: "85c7962b4a17a841ef0689e0e7c2a050",
-      WORKER_NAME_PREFIX: "operon-"
+      WORKER_NAME_PREFIX: "operon-",
+      HOST_PROJECT: "livevariant",
+      HOST_ZONE: "livevariant.ai",
+      DEFAULT_PROJECT: "livevariant",
+      PROJECTS: "[]"
     });
+  });
+
+  it("binds the control plane to every enrolled project under <PROJECT>__<BINDING> (spec 0006 §9)", () => {
+    const manifest = validateManifest({
+      ...RAW,
+      control: { default: "second-one", projects: [{ project: "second-one", zone: "second.example" }] }
+    });
+    const ops = Object.fromEntries(
+      renderWorkers(manifest, { chassisDir: CHASSIS }).map(worker => [worker.key, worker.config])
+    )["gatekeeper-ops"] as Record<string, unknown> & { services: unknown[]; vars: Record<string, unknown> };
+    // The host keeps its bare names; the enrolled project gets the same
+    // set under its infix, bound to its own workers by its prefix.
+    expect(ops.services).toHaveLength(26);
+    expect(ops.services).toContainEqual({
+      binding: "SECOND_ONE__EMAIL",
+      service: "operon-second-one-gatekeeper-email",
+      entrypoint: "Ops"
+    });
+    expect(ops.services).toContainEqual({
+      binding: "SECOND_ONE__SCHEDULER",
+      service: "operon-second-one-scheduler"
+    });
+    expect(ops.services).toContainEqual({ binding: "SCHEDULER", service: "operon-scheduler" });
+    expect(ops.vars.DEFAULT_PROJECT).toBe("second-one");
+    expect(JSON.parse(ops.vars.PROJECTS as string)).toEqual([
+      { project: "second-one", zone: "second.example", workerPrefix: "operon-second-one" }
+    ]);
   });
 
   it("derives the scheduler's crons from the roster and its URLs from the zone", () => {

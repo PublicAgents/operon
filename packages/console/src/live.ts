@@ -5,6 +5,8 @@
  * a reconnect's replay overlap is harmless.
  */
 
+import { withProjectQuery } from "./api.js";
+
 export interface LiveOptions {
   /** Path under the ops host, e.g. /ws/channel. */
   path: string;
@@ -24,7 +26,7 @@ export function openLive(options: LiveOptions): () => void {
     if (closed) return;
     options.onStatus?.("connecting");
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    socket = new WebSocket(`${protocol}//${location.host}${options.path}`);
+    socket = new WebSocket(`${protocol}//${location.host}${withProjectQuery(options.path)}`);
     socket.addEventListener("open", () => {
       attempt = 0;
       options.onStatus?.("live");

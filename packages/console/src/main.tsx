@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { HashRouter, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { whoami } from "./api.js";
+import { callTool, selectProject, selectedProject, whoami } from "./api.js";
 import { PageBoundary } from "./error-boundary.js";
 import { AgentsPage } from "./pages/agents.js";
 import { ApprovalsPage } from "./pages/approvals.js";
@@ -40,18 +40,59 @@ const NAV: { to: string; label: string }[] = [
   { to: "/secrets", label: "Secrets" }
 ];
 
+interface FleetView {
+  host: string;
+  defaultProject: string;
+  projects: { project: string; zone?: string }[];
+}
+
+/**
+ * The project selector (spec 0006 §9): shown only when the plane
+ * reaches more than one project. A change is a whole-console change of
+ * context, so the page reloads: every query on screen re-runs against
+ * the new selection, nothing stale survives.
+ */
+function ProjectSelector({ fleet }: { fleet: FleetView }) {
+  if (fleet.projects.length < 2) return null;
+  const current = selectedProject() ?? fleet.defaultProject;
+  return (
+    <label className="project" title="Which project this console acts on">
+      <select
+        value={current}
+        onChange={event => {
+          const chosen = event.target.value;
+          selectProject(chosen === fleet.defaultProject ? undefined : chosen);
+          location.reload();
+        }}
+      >
+        {fleet.projects.map(entry => (
+          <option key={entry.project} value={entry.project}>
+            {entry.project}
+            {entry.zone ? ` (${entry.zone})` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function Shell() {
   const location = useLocation();
   const [identity, setIdentity] = useState("");
+  const [fleet, setFleet] = useState<FleetView | null>(null);
   useEffect(() => {
     whoami()
       .then(who => setIdentity(who.email || who.commonName || who.sub))
       .catch(() => setIdentity(""));
+    callTool<FleetView>("fleet_projects")
+      .then(setFleet)
+      .catch(() => setFleet(null));
   }, []);
   return (
     <div className="shell">
       <nav className="sidebar">
         <div className="brand">operon</div>
+        {fleet ? <ProjectSelector fleet={fleet} /> : null}
         {NAV.map(item => (
           <NavLink key={item.to} to={item.to} className={({ isActive }) => (isActive ? "active" : "")}>
             {item.label}

@@ -49,6 +49,15 @@ code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 }
 .sidebar a:hover { color: var(--text); }
 .sidebar a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel-2); }
+.sidebar .project {
+  display: block;
+  margin: 0 0 0.75rem;
+}
+.sidebar .project select {
+  width: 100%;
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+}
 .sidebar .identity {
   margin-top: auto;
   padding: 8px 16px 0;

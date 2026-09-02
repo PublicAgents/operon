@@ -22,6 +22,46 @@ export class ApiError extends Error {
 /** A future /t/<tenant> prefix is this one constant. */
 export const BASE = "";
 
+/**
+ * The selected project (spec 0006 §9): one console serves the fleet,
+ * and every call carries the selection so unqualified names resolve
+ * against it. Remembered per browser; absent means the plane's
+ * default project.
+ */
+const PROJECT_KEY = "operon.project";
+
+export function selectedProject(): string | undefined {
+  try {
+    return localStorage.getItem(PROJECT_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function selectProject(project: string | undefined): void {
+  try {
+    if (project) localStorage.setItem(PROJECT_KEY, project);
+    else localStorage.removeItem(PROJECT_KEY);
+  } catch {
+    // Storage refused (private mode): the selection lives for this page only.
+  }
+}
+
+/** The input with the selection applied, unless the call names a project itself. */
+function withSelectedProject(input: unknown): unknown {
+  const project = selectedProject();
+  if (!project) return input ?? {};
+  if (input !== null && typeof input === "object" && "project" in (input as object)) return input;
+  return { ...((input as Record<string, unknown> | null) ?? {}), project };
+}
+
+/** The live-route path with the selection applied (the ws routes read ?project=). */
+export function withProjectQuery(path: string): string {
+  const project = selectedProject();
+  if (!project) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}project=${encodeURIComponent(project)}`;
+}
+
 export function toolPath(name: string): string {
   return `${BASE}/api/v1/${name.replace(/_/g, "-")}`;
 }
@@ -33,8 +73,18 @@ export async function callTool<T = unknown>(name: string, input: unknown = {}): 
       "content-type": "application/json",
       "x-operon-console": "1"
     },
-    body: JSON.stringify(input ?? {})
+    body: JSON.stringify(withSelectedProject(input))
   });
+  if (response.status === 404) {
+    // A remembered project that is no longer enrolled: forget it, so
+    // the next load lands on the plane's default instead of a wall of
+    // unknown_project refusals.
+    const body = (await response.clone().json().catch(() => null)) as { error?: string } | null;
+    if (body?.error === "unknown_project" && selectedProject()) {
+      selectProject(undefined);
+      location.reload();
+    }
+  }
   if (response.status === 401) {
     // The Access session expired: reloading re-runs the Access flow.
     location.reload();
