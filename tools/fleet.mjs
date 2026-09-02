@@ -27,9 +27,7 @@
  * runs on its own clock (deploy success means the rollout started, not
  * that the instances were replaced), and a wake started before it
  * completes is signalled to exit. So the driver holds the pause until
- * the platform reports the rollout completed: from the rollouts API
- * when CLOUDFLARE_API_TOKEN is set (CI), otherwise from the application
- * record wrangler reads on an OAuth login.
+ * the application record wrangler reads says the rollout is over.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -271,20 +269,6 @@ function containerAppNames(worker) {
   );
 }
 
-/** The application's rollouts, newest first (the rollouts API, CI). */
-async function listRollouts(accountId, appId) {
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/containers/applications/${appId}/rollouts`,
-    { headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` } }
-  );
-  if (!response.ok) {
-    throw new Error(`rollouts answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
-  }
-  const body = await response.json();
-  const rollouts = Array.isArray(body) ? body : (body.result ?? []);
-  return [...rollouts].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
-}
-
 /**
  * How long after the deploy returns a rollout is given to SHOW ITSELF
  * before "this deploy started no rollout" is concluded. Observed on the
@@ -301,41 +285,32 @@ const ROLLOUT_APPEARANCE_MS = 2 * 60 * 1000;
  * (spec 0006 §5). Deploy success means the rollout STARTED; the
  * platform then replaces instances over minutes, and a wake started
  * inside that window is signalled to exit ("new version rollout").
- * Nothing in the repo says when it is done, so the platform is asked:
+ * Nothing in the repo says when it is done, so the application record
+ * is asked, on every poll, and compared with the snapshot taken before
+ * the deploy, which makes every sign below this deploy's own.
  *
- * - with CLOUDFLARE_API_TOKEN (CI): the rollouts API names the status;
- *   done at "completed", failed at "reverted". This deploy's rollout is
- *   the id that was not listed before the deploy.
- * - without it (a laptop on an OAuth login, which the API does not
- *   accept): the application record. Observed lifecycle of one deploy:
- *   the record is touched while wrangler applies the configuration,
- *   the listing goes "ready" → "provisioning" while instances are
- *   scheduling and starting, the version number moves mid-rollout, and
- *   the listing returns to "ready" with every instance healthy. Done
- *   once the record has moved past its pre-deploy state AND the listing
- *   reads "ready" with no instance starting or scheduling, on two
- *   consecutive polls.
+ * Observed lifecycle of one deploy on the live colony: the record is
+ * touched while wrangler applies the configuration (before the command
+ * returns), the listing goes "ready" → "provisioning" while instances
+ * are scheduling and starting, the version number moves mid-rollout,
+ * and the listing returns to "ready" with every instance healthy.
+ * Done once the version has moved AND the listing reads "ready" with
+ * no instance starting or scheduling, on two consecutive polls.
+ *
+ * The rollouts API is deliberately not consulted: wrangler does not
+ * surface the id of the rollout it starts, and no rule reading the
+ * listing can tell this deploy's rollout from one another hand starts
+ * meanwhile, while the record's movement since this deploy's snapshot
+ * needs no such attribution.
  *
  * A record left untouched for ROLLOUT_APPEARANCE_MS after the deploy
  * started no rollout (wrangler skips it when the effective container
  * configuration is unchanged), and an application this deploy created
  * has nothing to roll. Throws on the bound so the caller's resume runs.
  */
-/**
- * The ids of the rollouts an application already has, taken BEFORE the
- * deploy: the one this deploy starts is whichever id is not among
- * them. Matching by id rather than by recency means an older completed
- * rollout can never stand in for one that is still replacing
- * instances, and it needs no clock agreement with the platform.
- */
-async function knownRolloutIds(accountId, app) {
-  return new Set((await listRollouts(accountId, app.id)).map(rollout => rollout.id));
-}
-
-async function waitForRollout({ name, before, known, startedAt, configPath }, accountId) {
+async function waitForRollout({ name, before, startedAt, configPath }) {
   const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
   const appearanceDeadline = startedAt + ROLLOUT_APPEARANCE_MS;
-  const viaApi = Boolean(process.env.CLOUDFLARE_API_TOKEN);
   let quietPolls = 0;
   for (;;) {
     const app = listContainerApps(configPath).get(name);
@@ -351,90 +326,29 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
       app.updated_at !== before.updated_at ||
       app.version !== before.version ||
       app.image !== before.image;
-    let done = false;
-    // Judged by the rollouts API when the token is there; otherwise by
-    // the record itself, which is evidence of this deploy alone since
-    // the snapshot it is compared against is this deploy's.
-    let judged = false;
-    if (viaApi) {
-      // No attribution is attempted: wrangler does not surface the id
-      // of the rollout it starts, and any rule that guesses it from the
-      // listing can capture a rollout another hand started meanwhile.
-      // None is needed, either. A wake dies to WHICHEVER rollout is in
-      // flight on this application, so the pause holds until none is,
-      // whoever started it, and the record's own movement since the
-      // snapshot (which is this deploy's) says whether this deploy
-      // rolled anything at all.
-      const OVER = new Set(["completed", "replaced", "reverted"]);
-      const all = await listRollouts(accountId, app.id);
-      const inFlight = all.filter(rollout => !OVER.has(rollout.status));
-      const fresh = all.filter(rollout => !known.has(rollout.id));
-      const describe = rollout => {
-        const steps = rollout.steps ?? [];
-        const finished = steps.filter(step => step.status === "completed").length;
-        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps)`;
-      };
-      console.log(
-        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
-          `${fresh.length} rollout(s) since the snapshot, in flight: ` +
-          `${inFlight.length === 0 ? "none" : inFlight.map(describe).join("; ")}`
-      );
-      if (fresh.length === 0 && !moved && Date.now() > appearanceDeadline) {
-        console.log(`  ${name}: no rollout appeared and the record is untouched; this deploy rolled nothing`);
-        return;
-      }
-      // Settled: a rollout has appeared since the snapshot, none is in
-      // flight, the configuration was applied (`moved`), the VERSION
-      // has moved (observed: it moves only mid-rollout, once instances
-      // are replacing, so a rollout that was already over before this
-      // deploy's began provisioning cannot pass as settled during the
-      // ~30 s in which the listing still reads ready), and the listing
-      // reads "ready" again, since a rollout is marked over before the
-      // last instance reports healthy.
-      const ready = app.state === undefined || app.state === "ready";
-      const versionMoved = app.version !== before.version;
-      if (fresh.length > 0 && inFlight.length === 0 && moved && versionMoved && ready) {
-        // Any revert since the snapshot fails the deploy. Without
-        // attribution the deploy cannot say whose rollout it was, and
-        // of the two mistakes, failing a deploy whose image is live
-        // costs a re-run, while reporting success over a rollback
-        // leaves the previous image running unnoticed.
-        const reverted = fresh.filter(rollout => rollout.status === "reverted");
-        if (reverted.length > 0) {
-          throw new Error(
-            `rollout ${reverted.map(rollout => rollout.id).join(", ")} of ${name} was REVERTED since ` +
-              `this deploy began; the wake container may still run the previous image (check ` +
-              `wrangler containers info and redeploy)`
-          );
-        }
-        done = true;
-      }
-      judged = true;
+    const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
+    const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
+    // The listing reads "ready" between rollouts and "provisioning"
+    // while instances roll; anything but "ready" counts as rolling.
+    const ready = app.state === undefined || app.state === "ready";
+    console.log(
+      `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
+        `record ${moved ? "moved" : "untouched"}, ${settling} instance(s) settling`
+    );
+    if (!moved && Date.now() > appearanceDeadline) {
+      console.log(`  ${name}: the record is untouched; this deploy rolled nothing`);
+      return;
     }
-    if (!judged) {
-      const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
-      const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
-      // The listing reads "ready" between rollouts and "provisioning"
-      // while instances roll; anything but "ready" counts as rolling.
-      const ready = app.state === undefined || app.state === "ready";
-      console.log(
-        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
-          `record ${moved ? "moved" : "untouched"}, ${settling} instance(s) settling`
-      );
-      if (!moved && Date.now() > appearanceDeadline) {
-        console.log(`  ${name}: the record is untouched; this deploy rolled nothing`);
-        return;
-      }
-      // Completion needs the VERSION to have moved: the record is
-      // touched and the listing still reads "ready" for ~30 s after the
-      // deploy returns, before the instances begin to roll, and two
-      // quiet polls fit inside that gap. The version moves mid-rollout,
-      // so "version moved, ready, nothing settling" is only ever true
-      // once the roll is over.
-      const versionMoved = app.version !== before.version;
-      quietPolls = versionMoved && ready && settling === 0 ? quietPolls + 1 : 0;
-      done = quietPolls >= 2;
-    }
+    // Completion needs the VERSION to have moved: the record is
+    // touched and the listing still reads "ready" for ~30 s after the
+    // deploy returns, before the instances begin to roll, and two
+    // quiet polls fit inside that gap. The version moves mid-rollout,
+    // so "version moved, ready, nothing settling" is only ever true
+    // once the roll is over.
+    const versionMoved = app.version !== before.version;
+    quietPolls = versionMoved && ready && settling === 0 ? quietPolls + 1 : 0;
+    const done = quietPolls >= 2;
+  
     if (done) {
       console.log(`  ${name}: rollout complete`);
       return;
@@ -571,15 +485,6 @@ for (const manifest of manifests) {
       // What the platform holds BEFORE the deploy, so the wait can tell
       // a rollout this deploy started from no rollout at all.
       const before = carriesContainer && paused ? listContainerApps(configPath) : null;
-      // With the API in reach, also the rollouts that ALREADY exist, so
-      // the wait can tell this deploy's rollout from an earlier one.
-      const known = new Map();
-      if (before && process.env.CLOUDFLARE_API_TOKEN) {
-        for (const appName of containerAppNames(worker)) {
-          const app = before.get(appName);
-          if (app) known.set(appName, await knownRolloutIds(manifest.accountId, app));
-        }
-      }
       const startedAt = Date.now();
       execFileSync(
         "npx",
@@ -592,13 +497,7 @@ for (const manifest of manifests) {
       );
       if (before) {
         for (const name of containerAppNames(worker)) {
-          rollouts.push({
-            name,
-            before: before.get(name),
-            known: known.get(name) ?? new Set(),
-            startedAt,
-            configPath
-          });
+          rollouts.push({ name, before: before.get(name), startedAt, configPath });
         }
       }
     }
@@ -606,7 +505,7 @@ for (const manifest of manifests) {
     // accepted the kill.
     for (const rollout of rollouts) {
       console.log(`\n→ waiting for the ${rollout.name} rollout (the pause holds until it completes)`);
-      await waitForRollout(rollout, manifest.accountId);
+      await waitForRollout(rollout);
     }
   } catch (error) {
     deployError = error;
