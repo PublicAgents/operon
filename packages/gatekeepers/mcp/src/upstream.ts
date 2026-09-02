@@ -145,18 +145,20 @@ export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
   // its description and schemas. A schema or description that changes
   // under a stable name changes what the mind will do with the tool,
   // so it must move the revision too.
-  const names = tools
-    .map(tool =>
-      [
-        tool.name,
-        tool.annotations?.readOnlyHint === true ? "r" : "w",
-        stableJson(tool.description ?? ""),
-        stableJson(tool.inputSchema ?? null),
-        stableJson(tool.outputSchema ?? null)
-      ].join(":")
-    )
-    .sort()
-    .join(",");
+  // One JSON document per tool, sorted by name: an injective
+  // serialization, so no description or schema can be shaped to make
+  // two different catalogs read as one (a joined string could).
+  const names = stableJson(
+    tools
+      .map(tool => ({
+        name: tool.name,
+        read: tool.annotations?.readOnlyHint === true,
+        description: tool.description ?? "",
+        inputSchema: tool.inputSchema ?? null,
+        outputSchema: tool.outputSchema ?? null
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  );
   // SHA-256, because the revision now GATES a ledger row: a 32-bit
   // hash could let two different catalogs pass as one and silence the
   // change that should have been recorded.

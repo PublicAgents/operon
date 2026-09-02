@@ -1,23 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { CatalogMemory } from "./catalog-memory.js";
 
+function counter() {
+  const state = { writes: 0 };
+  return {
+    state,
+    append: async () => {
+      state.writes += 1;
+    }
+  };
+}
+
 describe("CatalogMemory", () => {
-  it("treats a revision as new until it is noted, then again only when it changes", () => {
+  it("writes a revision once per agent and server, and again only when it changes", async () => {
     const memory = new CatalogMemory();
-    expect(memory.isNew("promoter", "livevariant", "aaaa")).toBe(true);
-    // Asking does not note: a failed append must leave it new.
-    expect(memory.isNew("promoter", "livevariant", "aaaa")).toBe(true);
-    memory.note("promoter", "livevariant", "aaaa");
-    expect(memory.isNew("promoter", "livevariant", "aaaa")).toBe(false);
-    expect(memory.isNew("promoter", "livevariant", "bbbb")).toBe(true);
-    memory.note("promoter", "livevariant", "bbbb");
-    expect(memory.isNew("promoter", "livevariant", "aaaa")).toBe(true);
+    const { state, append } = counter();
+    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
+    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(false);
+    expect(await memory.record("promoter", "livevariant", "bbbb", append)).toBe(true);
+    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
+    expect(state.writes).toBe(3);
   });
 
-  it("keeps agents and servers apart", () => {
+  it("does not remember a revision whose append failed", async () => {
     const memory = new CatalogMemory();
-    memory.note("promoter", "livevariant", "aaaa");
-    expect(memory.isNew("other", "livevariant", "aaaa")).toBe(true);
-    expect(memory.isNew("promoter", "linear", "aaaa")).toBe(true);
+    await expect(
+      memory.record("promoter", "livevariant", "aaaa", async () => {
+        throw new Error("ledger down");
+      })
+    ).rejects.toThrow("ledger down");
+    const { state, append } = counter();
+    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
+    expect(state.writes).toBe(1);
+  });
+
+  it("single-flights concurrent writes of one revision", async () => {
+    const memory = new CatalogMemory();
+    let release: () => void = () => undefined;
+    let writes = 0;
+    const slow = () =>
+      new Promise<void>(resolve => {
+        writes += 1;
+        release = resolve;
+      });
+    const first = memory.record("promoter", "livevariant", "aaaa", slow);
+    const second = memory.record("promoter", "livevariant", "aaaa", slow);
+    release();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(writes).toBe(1);
+    expect(await memory.record("promoter", "livevariant", "aaaa", slow)).toBe(false);
+  });
+
+  it("keeps agents and servers apart", async () => {
+    const memory = new CatalogMemory();
+    const { state, append } = counter();
+    await memory.record("promoter", "livevariant", "aaaa", append);
+    await memory.record("other", "livevariant", "aaaa", append);
+    await memory.record("promoter", "linear", "aaaa", append);
+    expect(state.writes).toBe(3);
   });
 });
