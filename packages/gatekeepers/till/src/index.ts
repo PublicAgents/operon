@@ -222,6 +222,13 @@ doors.post("/gatekeeper/till/sales", async c => {
 
 app.all("*", async c => {
   const env = c.env;
+  // The overlay serves pages: only a read can be a page. Anything else
+  // is refused here rather than forwarded body-first to a Worker that
+  // answers 405 without reading it (the runtime then logs a stream
+  // error for every such POST; spec 0009's probes showed two).
+  if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+    return errorResponse(405, "method_not_allowed");
+  }
   const url = new URL(c.req.url);
   const offer = await catalog(env).get(url.hostname, url.pathname);
   if (!offer) {
