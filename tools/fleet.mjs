@@ -286,6 +286,17 @@ async function listRollouts(accountId, appId) {
 }
 
 /**
+ * How long after the deploy returns a rollout is given to SHOW ITSELF
+ * before "this deploy started no rollout" is concluded. Observed on the
+ * live colony: the record is touched during the deploy command, the
+ * listing leaves "ready" ~30 s after it returns, and the version number
+ * moves only ~1 min after that, mid-rollout. So neither the version nor
+ * a quiet listing right after the deploy says anything; only an
+ * untouched record, held for this long, does.
+ */
+const ROLLOUT_APPEARANCE_MS = 2 * 60 * 1000;
+
+/**
  * Hold until the rollout a container deploy started has completed
  * (spec 0006 §5). Deploy success means the rollout STARTED; the
  * platform then replaces instances over minutes, and a wake started
@@ -293,17 +304,22 @@ async function listRollouts(accountId, appId) {
  * Nothing in the repo says when it is done, so the platform is asked:
  *
  * - with CLOUDFLARE_API_TOKEN (CI): the rollouts API names the status;
- *   done at "completed", failed at "reverted".
+ *   done at "completed", failed at "reverted". This deploy's rollout is
+ *   the id that was not listed before the deploy.
  * - without it (a laptop on an OAuth login, which the API does not
- *   accept): the application record, which the platform touches when
- *   the rollout finalizes. Done once the record has been touched since
- *   the deploy began and no instance is starting or scheduling, on two
+ *   accept): the application record. Observed lifecycle of one deploy:
+ *   the record is touched while wrangler applies the configuration,
+ *   the listing goes "ready" → "provisioning" while instances are
+ *   scheduling and starting, the version number moves mid-rollout, and
+ *   the listing returns to "ready" with every instance healthy. Done
+ *   once the record has moved past its pre-deploy state AND the listing
+ *   reads "ready" with no instance starting or scheduling, on two
  *   consecutive polls.
  *
- * An application whose version did not change started no rollout
- * (wrangler skips it when the effective container configuration is
- * unchanged), and one this deploy created has nothing to roll. Throws
- * on the bound so the caller's resume runs.
+ * A record left untouched for ROLLOUT_APPEARANCE_MS after the deploy
+ * started no rollout (wrangler skips it when the effective container
+ * configuration is unchanged), and an application this deploy created
+ * has nothing to roll. Throws on the bound so the caller's resume runs.
  */
 /**
  * The ids of the rollouts an application already has, taken BEFORE the
@@ -318,6 +334,7 @@ async function knownRolloutIds(accountId, app) {
 
 async function waitForRollout({ name, before, known, startedAt, configPath }, accountId) {
   const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
+  const appearanceDeadline = startedAt + ROLLOUT_APPEARANCE_MS;
   const viaApi = Boolean(process.env.CLOUDFLARE_API_TOKEN);
   let quietPolls = 0;
   for (;;) {
@@ -327,10 +344,10 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
       console.log(`  ${name}: created by this deploy; nothing to roll`);
       return;
     }
-    if (app.version === before.version) {
-      console.log(`  ${name}: version ${app.version} unchanged; this deploy started no rollout`);
-      return;
-    }
+    // Any movement of the record since the snapshot: the platform
+    // touches it when the configuration is applied, before the
+    // instances start to roll, so this is the earliest sign there is.
+    const moved = app.updated_at !== before.updated_at || app.version !== before.version;
     let done;
     if (viaApi) {
       // THIS deploy's rollout: the one not listed before the deploy.
@@ -341,23 +358,37 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
       const steps = rollout?.steps ?? [];
       const finished = steps.filter(step => step.status === "completed").length;
       console.log(
-        `  ${name}: version ${before.version} → ${app.version}, rollout ` +
+        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, rollout ` +
           `${rollout ? `${rollout.id} ${rollout.status}` : "not listed yet"} (${finished}/${steps.length} steps)`
       );
       if (rollout?.status === "reverted") throw new Error(`the ${name} rollout was reverted by the platform`);
+      if (!rollout && !moved && Date.now() > appearanceDeadline) {
+        console.log(`  ${name}: no rollout appeared and the record is untouched; this deploy rolled nothing`);
+        return;
+      }
       done = rollout?.status === "completed";
     } else {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
-      const touched = Date.parse(app.updated_at) > startedAt && app.updated_at !== before.updated_at;
       const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
-      // The listing's state reads "ready" between rollouts; anything
-      // else the platform reports there is taken as still rolling.
+      // The listing reads "ready" between rollouts and "provisioning"
+      // while instances roll; anything but "ready" counts as rolling.
       const ready = app.state === undefined || app.state === "ready";
       console.log(
-        `  ${name}: version ${before.version} → ${app.version}, state ${app.state ?? "unreported"}, ` +
-          `record ${touched ? "finalized" : "not finalized yet"}, ${settling} instance(s) settling`
+        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
+          `record ${moved ? "moved" : "untouched"}, ${settling} instance(s) settling`
       );
-      quietPolls = touched && ready && settling === 0 ? quietPolls + 1 : 0;
+      if (!moved && Date.now() > appearanceDeadline) {
+        console.log(`  ${name}: the record is untouched; this deploy rolled nothing`);
+        return;
+      }
+      // Completion needs the VERSION to have moved: the record is
+      // touched and the listing still reads "ready" for ~30 s after the
+      // deploy returns, before the instances begin to roll, and two
+      // quiet polls fit inside that gap. The version moves mid-rollout,
+      // so "version moved, ready, nothing settling" is only ever true
+      // once the roll is over.
+      const versionMoved = app.version !== before.version;
+      quietPolls = versionMoved && ready && settling === 0 ? quietPolls + 1 : 0;
       done = quietPolls >= 2;
     }
     if (done) {
