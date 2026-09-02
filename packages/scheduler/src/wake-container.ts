@@ -45,6 +45,8 @@ export interface LaunchArgs {
    * is not merely refused: its host never routes anywhere at all.
    */
   mcpHosts?: string[];
+  /** The doors closed for this wake (spec 0006 §7); the router refuses them by name. */
+  closedDoors?: string[];
 }
 
 export type LaunchResult =
@@ -179,7 +181,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         // identity delivered as ctx.props.
         const exportsBag = (this.ctx as unknown as { exports: Record<string, (opts: { props: unknown }) => Fetcher> }).exports;
         const router = exportsBag.UmbilicalRouter({
-          props: { nonce: args.umbilicalNonce, agentId: args.agentId }
+          props: { nonce: args.umbilicalNonce, agentId: args.agentId, closedDoors: args.closedDoors ?? [] }
         });
         const intercept = this.ctx.container as unknown as {
           interceptOutboundHttp(host: string, worker: Fetcher): Promise<void>;

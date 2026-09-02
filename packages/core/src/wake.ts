@@ -75,6 +75,8 @@ export interface WakeOptions {
   mcpToken?: string;
   /** The agent's GitHub grants (spec 0008 §6) as JSON {pr, write}. */
   githubGrants?: string;
+  /** JSON list of the doors the operator closed for this wake (spec 0006 §7), for the living help. */
+  disabledDoors?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -140,6 +142,7 @@ export const WAKE_ENV = {
   mcpServers: "OPERON_MCP_SERVERS",
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
+  disabledDoors: "OPERON_DISABLED_DOORS",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -177,6 +180,7 @@ export function wakeEnv(
     [WAKE_ENV.hosts]: init.agent.hosts.join(",")
   };
   if (init.agent.fallbackModel) env[WAKE_ENV.fallbackModel] = init.agent.fallbackModel;
+  if (options.disabledDoors) env[WAKE_ENV.disabledDoors] = options.disabledDoors;
   if (options.notifyUrl) env[WAKE_ENV.notifyUrl] = options.notifyUrl;
   if (options.notifyToken) env[WAKE_ENV.notifyToken] = options.notifyToken;
   if (options.publishUrl) env[WAKE_ENV.publishUrl] = options.publishUrl;

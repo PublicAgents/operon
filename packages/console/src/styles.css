@@ -49,6 +49,15 @@ code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 }
 .sidebar a:hover { color: var(--text); }
 .sidebar a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel-2); }
+.sidebar .project {
+  display: block;
+  margin: 0 0 0.75rem;
+}
+.sidebar .project select {
+  width: 100%;
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+}
 .sidebar .identity {
   margin-top: auto;
   padding: 8px 16px 0;
@@ -307,4 +316,17 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .ask-reply textarea {
   width: 100%;
   font: inherit;
+}
+
+/* The doors matrix (spec 0006 §7). */
+.doors {
+  margin-top: 2rem;
+}
+.matrix td.overridden {
+  background: color-mix(in srgb, var(--accent, #6b8) 12%, transparent);
+}
+.matrix button.clear {
+  margin-left: 0.25rem;
+  padding: 0 0.35rem;
+  font-size: 0.8em;
 }

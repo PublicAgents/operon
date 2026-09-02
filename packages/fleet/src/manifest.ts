@@ -49,9 +49,23 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
+/** One project enrolled in the control plane this project hosts (spec 0006 §9). */
+export interface EnrolledProject {
+  project: string;
+  zone: string;
+  workerPrefix: string;
+}
+
 export interface FleetManifest {
   /** The project identity: seeds every account-level resource name. */
   project: string;
+  /**
+   * The control plane (spec 0006 §9): this project's ops worker binds to
+   * every enrolled project's gatekeepers and scheduler, and fills an
+   * omitted `project` argument with the default. Absent, the plane
+   * serves this project alone.
+   */
+  control: { defaultProject: string; enrolled: EnrolledProject[] };
   accountId: string;
   /** Where the operator is reachable: asks and mail copies land here. */
   operatorEmail?: string;
@@ -171,6 +185,47 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
 
   const policy = validatePolicy(root.policy);
 
+  // The control plane's enrollment (spec 0006 §9): which OTHER projects
+  // this project's ops worker binds to, and the default. Bindings are
+  // rendered from this list, so a typo here is a binding to nowhere;
+  // shapes are checked as strictly as the project's own.
+  const controlRaw = root.control === undefined ? {} : requireRecord(root.control, "control");
+  const enrolled: EnrolledProject[] = [];
+  if (controlRaw.projects !== undefined) {
+    if (!Array.isArray(controlRaw.projects)) fail("control.projects", "must be a list");
+    controlRaw.projects.forEach((entry, index) => {
+      const path = `control.projects[${index}]`;
+      const record = requireRecord(entry, path);
+      const name = requireString(record.project, `${path}.project`);
+      if (!PROJECT_NAME.test(name)) fail(`${path}.project`, `"${name}" must match ${PROJECT_NAME}`);
+      if (name === project) fail(`${path}.project`, `"${name}" is this project; the host is enrolled implicitly`);
+      if (enrolled.some(other => other.project === name)) fail(`${path}.project`, `"${name}" is listed twice`);
+      const zone = requireString(record.zone, `${path}.zone`);
+      const prefix =
+        record.workerPrefix === undefined ? `operon-${name}` : requireString(record.workerPrefix, `${path}.workerPrefix`);
+      if (!/^[a-z][a-z0-9-]{1,40}$/.test(prefix)) fail(`${path}.workerPrefix`, `"${prefix}" must be lowercase, digits, hyphens`);
+      if (prefix === workerPrefix) fail(`${path}.workerPrefix`, `"${prefix}" is this project's own prefix`);
+      // Bindings and secret writes are addressed by prefix: two projects
+      // on one prefix would be one set of Workers under two names, and
+      // the plane's per-project isolation would be a fiction.
+      if (enrolled.some(other => other.workerPrefix === prefix)) {
+        fail(`${path}.workerPrefix`, `"${prefix}" is already the prefix of another enrolled project`);
+      }
+      for (const key of Object.keys(record)) {
+        if (!["project", "zone", "workerPrefix"].includes(key)) fail(`${path}.${key}`, "is not a known key");
+      }
+      enrolled.push({ project: name, zone, workerPrefix: prefix });
+    });
+  }
+  const defaultProject =
+    controlRaw.default === undefined ? project : requireString(controlRaw.default, "control.default");
+  if (defaultProject !== project && !enrolled.some(entry => entry.project === defaultProject)) {
+    fail("control.default", `"${defaultProject}" is neither this project nor an enrolled one`);
+  }
+  for (const key of Object.keys(controlRaw)) {
+    if (!["default", "projects"].includes(key)) fail(`control.${key}`, "is not a known key");
+  }
+
   // The roster portion is validated by the CHASSIS's own parser: one
   // validator, no drift between what deploy accepts and what the
   // scheduler will parse out of the ROSTER var.
@@ -201,6 +256,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
 
   return {
     project,
+    control: { defaultProject, enrolled },
     accountId,
     ...(operatorEmail !== undefined ? { operatorEmail } : {}),
     workerPrefix,

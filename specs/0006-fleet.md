@@ -230,6 +230,20 @@ concepts retire.
   declared at deploy time, so enrolling a project re-renders and
   redeploys the control plane; `operon bootstrap` for a new project
   ends by doing exactly that. Removal is the same motion in reverse.
+
+  Decided 2026-09-02: the plane is HOSTED by one project rather than
+  given a repo of its own. The hosting project's manifest carries a
+  `control:` block (`default`, `projects: [{ project, zone,
+  workerPrefix }]`); its ops worker keeps its bare bindings for the
+  host and gains `<PROJECT>__<BINDING>` service bindings to every
+  enrolled project's gatekeepers and scheduler, a `WAKE_TRIGGER_TOKEN_
+  <PROJECT>` bearer per enrolled project, and the vars `HOST_PROJECT`,
+  `HOST_ZONE`, `DEFAULT_PROJECT`, `PROJECTS`. The plane therefore
+  upgrades with the host's pin, which is the canary order anyway (the
+  host first, then the rest). The registry adds an optional `project`
+  to every tool in one place; `fleet_projects` lists the fleet; an
+  unknown project is refused by name (`unknown_project`), never
+  defaulted.
 - **Version skew across bindings is governed by a compatibility
   contract, not hope.** Registry inputs and gatekeeper `Ops` routes
   evolve ADDITIVELY within a control-plane major: new tools and new

@@ -20,3 +20,4 @@ export {
   type WakeStatus,
   type WakeRecord
 } from "./wake.js";
+export { DOORS, isDoor, type Door, type DoorBaseline } from "./doors.js";

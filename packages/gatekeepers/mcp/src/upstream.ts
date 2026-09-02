@@ -139,30 +139,36 @@ export async function callUpstreamTool(
  * would break working agents; not noticing is how a scope quietly
  * grows.
  */
-export function catalogRevision(tools: UpstreamTool[]): string {
+export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
   // Everything the mind is TOLD about a tool is part of the catalog:
   // its name and read flag, and since the proxy relays them verbatim,
   // its description and schemas. A schema or description that changes
   // under a stable name changes what the mind will do with the tool,
   // so it must move the revision too.
-  const names = tools
-    .map(tool =>
-      [
-        tool.name,
-        tool.annotations?.readOnlyHint === true ? "r" : "w",
-        stableJson(tool.description ?? ""),
-        stableJson(tool.inputSchema ?? null),
-        stableJson(tool.outputSchema ?? null)
-      ].join(":")
-    )
-    .sort()
-    .join(",");
-  let hash = 2166136261;
-  for (let i = 0; i < names.length; i++) {
-    hash ^= names.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  // One JSON document per tool, sorted by name: an injective
+  // serialization, so no description or schema can be shaped to make
+  // two different catalogs read as one (a joined string could).
+  const names = stableJson(
+    tools
+      .map(tool => ({
+        name: tool.name,
+        read: tool.annotations?.readOnlyHint === true,
+        // Exactly what the proxy exposes: an absent title or description
+        // is relayed as the tool's name, so it hashes as the name, and
+        // an explicitly empty one hashes as empty. Two catalogs the mind
+        // cannot tell apart share a revision; two it can, do not.
+        title: tool.title ?? tool.name,
+        description: tool.description ?? tool.name,
+        inputSchema: tool.inputSchema ?? null,
+        outputSchema: tool.outputSchema ?? null
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  );
+  // SHA-256, because the revision now GATES a ledger row: a 32-bit
+  // hash could let two different catalogs pass as one and silence the
+  // change that should have been recorded.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(names));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** JSON with object keys sorted, so key order alone never moves a revision. */

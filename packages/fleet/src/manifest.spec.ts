@@ -140,3 +140,60 @@ describe("capability grants through the manifest (spec 0008)", () => {
     expect(() => validateManifest(bad)).toThrow(/names no server/);
   });
 });
+
+describe("the control plane's enrollment (spec 0006 §9)", () => {
+  it("defaults to this project alone", () => {
+    const manifest = validateManifest(BASE);
+    expect(manifest.control).toEqual({ defaultProject: "demo", enrolled: [] });
+  });
+
+  it("enrolls other projects with their zone and a derived prefix, and accepts one as default", () => {
+    const manifest = validateManifest({
+      ...BASE,
+      control: { default: "second-one", projects: [{ project: "second-one", zone: "second.example" }] }
+    });
+    expect(manifest.control).toEqual({
+      defaultProject: "second-one",
+      enrolled: [{ project: "second-one", zone: "second.example", workerPrefix: "operon-second-one" }]
+    });
+  });
+
+  it("refuses enrollment mistakes by name: the host itself, duplicates, a default that is nobody, unknown keys", () => {
+    expect(() =>
+      validateManifest({ ...BASE, control: { projects: [{ project: "demo", zone: "z.example" }] } })
+    ).toThrow(/enrolled implicitly/);
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        control: {
+          projects: [
+            { project: "second-one", zone: "a.example" },
+            { project: "second-one", zone: "b.example" }
+          ]
+        }
+      })
+    ).toThrow(/listed twice/);
+    expect(() => validateManifest({ ...BASE, control: { default: "nobody" } })).toThrow(/neither this project/);
+    expect(() =>
+      validateManifest({ ...BASE, control: { projects: [{ project: "second-one", zone: "z.example", extra: 1 }] } })
+    ).toThrow(/not a known key/);
+    expect(() => validateManifest({ ...BASE, control: { projects: [{ project: "second-one" }] } })).toThrow(/zone/);
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        control: {
+          projects: [
+            { project: "second-one", zone: "a.example", workerPrefix: "shared-prefix" },
+            { project: "third-one", zone: "b.example", workerPrefix: "shared-prefix" }
+          ]
+        }
+      })
+    ).toThrow(/already the prefix of another enrolled project/);
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        control: { projects: [{ project: "second-one", zone: "a.example", workerPrefix: "operon-demo" }] }
+      })
+    ).toThrow(/this project's own prefix/);
+  });
+});

@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { resolveDoor } from "./umbilical-routes.js";
+import { policyDoorFor, resolveDoor } from "./umbilical-routes.js";
 
 /**
  * The umbilical router (spec 0003 step 4): container door egress goes
@@ -21,6 +21,8 @@ interface RouterEnv {
 interface RouterProps {
   nonce?: string;
   agentId?: string;
+  /** The doors closed for this wake (spec 0006 §7): refused here, whatever the container asks. */
+  closedDoors?: string[];
 }
 
 export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
@@ -33,6 +35,10 @@ export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
       return new Response("umbilical_denied", { status: 403 });
     }
     const url = new URL(request.url);
+    const door = policyDoorFor(url.hostname, url.pathname);
+    if (door && (props.closedDoors ?? []).includes(door)) {
+      return new Response(`door_closed:${door}`, { status: 403 });
+    }
     const resolved = resolveDoor(url.hostname, this.env, agentId);
     if ("error" in resolved) return new Response(resolved.error, { status: 502 });
     const binding = this.env[resolved.binding] as Fetcher | undefined;

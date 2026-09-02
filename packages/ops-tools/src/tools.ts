@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { DOORS } from "@operon/core";
 import {
   ToolInputError,
   ToolUnavailableError,
   type ToolContext,
-  type ToolDefinition
+  type ToolDefinition,
+  withProject
 } from "./types.js";
 import { rotationGroups } from "./rotation.js";
 
@@ -65,7 +67,60 @@ function requireSecrets(context: ToolContext) {
   return context.secrets;
 }
 
-export const TOOLS: readonly ToolDefinition[] = [
+const REGISTRY: readonly ToolDefinition[] = [
+  // ---- the fleet (spec 0006 §9) --------------------------------------
+  {
+    name: "fleet_projects",
+    title: "List the fleet's projects",
+    description:
+      "The projects this control plane reaches: the host project it is deployed beside and every enrolled project, with the default that fills an omitted `project` argument.",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: async (_input, context) => {
+      const fleet = context.fleet ?? {
+        host: context.project,
+        defaultProject: context.project,
+        projects: [{ project: context.project }]
+      };
+      return { ok: true, ...fleet };
+    }
+  },
+  // ---- the doors matrix (spec 0006 §7) ---------------------------------
+  {
+    name: "agent_doors",
+    title: "An agent's doors",
+    description:
+      "Per door: the roster baseline, the operator override if any, and what is effective at the next wake. One agent, or every agent when agentId is omitted.",
+    input: z.object({ agentId: agentId.optional() }),
+    readOnly: true,
+    decision: false,
+    handler: async (input, context) => {
+      const { agentId: id } = input as { agentId?: string };
+      const ids = id ? [id] : await agentIds(context);
+      const agents = await Promise.all(
+        ids.map(async agent => context.scheduler("GET", `/doors/${encodeURIComponent(agent)}`))
+      );
+      return { ok: true, doors: DOORS, agents };
+    }
+  },
+  {
+    name: "agent_door_set",
+    title: "Open or close an agent's door",
+    description:
+      "Set the operator override on one door of one agent (true opens, false closes, null clears the override so the roster baseline rules). Effective at the agent's next wake; a running wake keeps the doors it was wired with. Audited.",
+    input: z.object({
+      agentId,
+      door: z.enum(DOORS).describe("Which door"),
+      enabled: z.boolean().nullable().describe("true opens, false closes, null clears the override")
+    }),
+    readOnly: false,
+    decision: true,
+    handler: async (input, context) => {
+      const { agentId: id, door, enabled } = input as { agentId: string; door: string; enabled: boolean | null };
+      return context.scheduler("POST", `/doors/${encodeURIComponent(id)}`, { body: { door, enabled } });
+    }
+  },
   // ---- agents and wakes ---------------------------------------------
   {
     name: "agents_list",
@@ -719,6 +774,16 @@ export const TOOLS: readonly ToolDefinition[] = [
     }
   }
 ];
+
+/**
+ * The registry as served: every tool takes an optional `project` (spec
+ * 0006 §9), added here in one place so a tool cannot forget it. The
+ * host resolves it before the handler runs; handlers never read it.
+ */
+export const TOOLS: readonly ToolDefinition[] = REGISTRY.map(tool => ({
+  ...tool,
+  input: withProject(tool.input)
+}));
 
 export function toolByName(name: string): ToolDefinition | undefined {
   return TOOLS.find(tool => tool.name === name);

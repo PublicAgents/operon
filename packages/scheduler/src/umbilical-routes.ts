@@ -97,6 +97,42 @@ function perAgentVar(prefix: string, agentId: string): string {
   return `${prefix}_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
 
+/**
+ * The policy door (spec 0006 §7) a request to a virtual host falls
+ * under, or null for plumbing (persist's commit, chronicle). The doors
+ * matrix withholds a closed door's URL from the container, but the
+ * nonce is one per wake and the hosts are guessable, so withholding is
+ * not enforcement: the router refuses here, outside the container.
+ * The GitHub door covers the pr host AND the branch route on the
+ * persist host, which is a content write the door governs; the commit
+ * route stays open because a wake without its state commit loses its
+ * work.
+ */
+export function policyDoorFor(hostname: string, pathname: string): string | null {
+  if (!hostname.endsWith(INTERNAL_SUFFIX)) return null;
+  const label = hostname.slice(0, -INTERNAL_SUFFIX.length);
+  if (label.startsWith(MCP_PREFIX)) return "mcp";
+  switch (label) {
+    case "notify":
+    case "email":
+    case "publish":
+    case "till":
+    case "vault":
+    case "x":
+    case "asks":
+    case "web":
+      return label;
+    case "spend":
+      return "pay";
+    case "pr":
+      return "github";
+    case "persist":
+      return pathname === "/branch" || pathname.startsWith("/branch/") ? "github" : null;
+    default:
+      return null;
+  }
+}
+
 /** Pure resolution (unit-tested): the binding + real bearer for a request. */
 export function resolveDoor(
   hostname: string,
