@@ -385,10 +385,24 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
       // completed, replaced by a later rollout, or reverted. The
       // listing must read "ready" again as well, since a rollout is
       // marked over before the last instance reports healthy.
+      //
+      // EVERY rollout targeting this image must be over, not any one:
+      // should another hand roll the same image after the snapshot,
+      // its rollout kills wakes exactly like this deploy's, so both
+      // are waited for, and one being over says nothing while the
+      // other runs. This deploy's own rollout is always among them by
+      // the first poll: wrangler creates it before the command returns,
+      // and `moved` (the applied configuration) is required alongside
+      // so that a listing which has not caught up yet cannot pass as
+      // "no rollout targets this image".
       const OVER = new Set(["completed", "replaced", "reverted"]);
       const ready = app.state === undefined || app.state === "ready";
-      const settled = ours.length > 0 && ours.every(rollout => OVER.has(rollout.status));
+      const settled = moved && ours.length > 0 && ours.every(rollout => OVER.has(rollout.status));
       if (settled && ready) {
+        // A revert among the same-image rollouts fails the deploy even
+        // when it might be another hand's: the image this deploy meant
+        // to run was rolled back, and a re-run costs less than a
+        // rollback reported as success.
         const reverted = ours.filter(rollout => rollout.status === "reverted");
         if (reverted.length > 0) {
           throw new Error(
