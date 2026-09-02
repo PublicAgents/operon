@@ -189,7 +189,11 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.containers[0]).toMatchObject({
       class_name: "WakeContainer",
       image: `${CHASSIS}/packages/container/Dockerfile`,
-      max_instances: 4
+      max_instances: 4,
+      // A single step: the fleet is drained before the image rolls, and
+      // the driver waits for this rollout, so gradual steps would only
+      // hold the pause longer.
+      rollout_step_percentage: 100
     });
     // The asks Gatekeeper is bound as ASKS_GK: the umbilical routes the
     // agent's ask door through it, and the name stays clear of the DO
