@@ -14,8 +14,8 @@ export class CatalogMemory {
   #seen = new Map<string, string>();
   /** Keyed by pair AND revision: two revisions of one pair in flight at once each keep their own. */
   #inFlight = new Map<string, Promise<void>>();
-  /** The most recently STARTED write per pair, so a slower, older one cannot overwrite a newer memory. */
-  #latest = new Map<string, number>();
+  /** The start order of the write each memory came from, so an older write landing later cannot regress it. */
+  #persisted = new Map<string, number>();
   #sequence = 0;
 
   /**
@@ -38,24 +38,17 @@ export class CatalogMemory {
       return true;
     }
     const started = ++this.#sequence;
-    this.#latest.set(key, started);
-    const done = append().then(
-      () => {
-        // Remember only if no later write for this pair began meanwhile
-        // (or the later one failed and withdrew): the ledger holds both
-        // rows in order, and the memory must hold the newest persisted,
-        // not whichever append happened to finish last.
-        const latest = this.#latest.get(key);
-        if (latest === started || latest === undefined) this.#seen.set(key, revision);
-      },
-      error => {
-        // A failed write withdraws its claim to being the latest, so an
-        // older write still in flight can be remembered when it lands,
-        // rather than appended again on its next sighting.
-        if (this.#latest.get(key) === started) this.#latest.delete(key);
-        throw error;
+    const done = append().then(() => {
+      // The memory is the revision of the NEWEST write that persisted,
+      // in start order: an older write landing after a newer one has
+      // persisted is a row the ledger holds in order but not the
+      // current catalog, and a failed write persisted nothing, so it
+      // neither claims nor blocks anything.
+      if ((this.#persisted.get(key) ?? 0) < started) {
+        this.#persisted.set(key, started);
+        this.#seen.set(key, revision);
       }
-    );
+    });
     this.#inFlight.set(flightKey, done);
     try {
       await done;
