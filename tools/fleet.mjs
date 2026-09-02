@@ -332,7 +332,7 @@ async function knownRolloutIds(accountId, app) {
   return new Set((await listRollouts(accountId, app.id)).map(rollout => rollout.id));
 }
 
-async function waitForRollout({ name, before, known, ours, startedAt, configPath }, accountId) {
+async function waitForRollout({ name, before, known, startedAt, configPath }, accountId) {
   const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
   const appearanceDeadline = startedAt + ROLLOUT_APPEARANCE_MS;
   const viaApi = Boolean(process.env.CLOUDFLARE_API_TOKEN);
@@ -357,58 +357,51 @@ async function waitForRollout({ name, before, known, ours, startedAt, configPath
     // the snapshot it is compared against is this deploy's.
     let judged = false;
     if (viaApi) {
-      const fresh = (await listRollouts(accountId, app.id)).filter(
-        candidate => !known.has(candidate.id)
-      );
-      // `ours` was frozen the moment wrangler returned. Should the
-      // listing have lagged behind the create (empty set), it is
-      // filled ONCE, from the first rollouts to appear that target the
-      // image the record now carries; after that nothing joins it.
-      if (ours.size === 0) {
-        for (const rollout of fresh) {
-          const target = rollout.target_configuration?.image;
-          if (target === undefined || target === app.image) ours.add(rollout.id);
-        }
-      }
-      const mine = fresh.filter(rollout => ours.has(rollout.id));
+      // No attribution is attempted: wrangler does not surface the id
+      // of the rollout it starts, and any rule that guesses it from the
+      // listing can capture a rollout another hand started meanwhile.
+      // None is needed, either. A wake dies to WHICHEVER rollout is in
+      // flight on this application, so the pause holds until none is,
+      // whoever started it, and the record's own movement since the
+      // snapshot (which is this deploy's) says whether this deploy
+      // rolled anything at all.
+      const OVER = new Set(["completed", "replaced", "reverted"]);
+      const all = await listRollouts(accountId, app.id);
+      const inFlight = all.filter(rollout => !OVER.has(rollout.status));
+      const fresh = all.filter(rollout => !known.has(rollout.id));
       const describe = rollout => {
         const steps = rollout.steps ?? [];
         const finished = steps.filter(step => step.status === "completed").length;
-        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps, ${
-          ours.has(rollout.id) ? "this deploy's" : "another hand's"
-        })`;
+        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps)`;
       };
       console.log(
         `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
-          `rollout ${fresh.length === 0 ? "not listed yet" : fresh.map(describe).join("; ")}`
+          `${fresh.length} rollout(s) since the snapshot, in flight: ` +
+          `${inFlight.length === 0 ? "none" : inFlight.map(describe).join("; ")}`
       );
-      if (mine.length > 0) {
-        // Over means the instances are settled again, whichever way:
-        // completed, replaced by a later rollout, or reverted. The
-        // listing must read "ready" again as well, since a rollout is
-        // marked over before the last instance reports healthy, and
-        // `moved` (the applied configuration) alongside, so a listing
-        // that has not caught up cannot pass as settled.
-        const OVER = new Set(["completed", "replaced", "reverted"]);
-        const ready = app.state === undefined || app.state === "ready";
-        if (moved && ready && mine.every(rollout => OVER.has(rollout.status))) {
-          const reverted = mine.filter(rollout => rollout.status === "reverted");
-          if (reverted.length > 0) {
-            throw new Error(
-              `rollout ${reverted.map(rollout => rollout.id).join(", ")} of ${name} was REVERTED by the ` +
-                `platform: the wake container still runs the previous image (check wrangler ` +
-                `containers info and redeploy)`
-            );
-          }
-          done = true;
-        }
-        judged = true;
-      } else if (!moved && Date.now() > appearanceDeadline) {
+      if (fresh.length === 0 && !moved && Date.now() > appearanceDeadline) {
         console.log(`  ${name}: no rollout appeared and the record is untouched; this deploy rolled nothing`);
         return;
-      } else {
-        judged = true;
       }
+      // Settled: a rollout has appeared since the snapshot, none is in
+      // flight, the configuration was applied (`moved`), and the
+      // listing reads "ready" again, since a rollout is marked over
+      // before the last instance reports healthy.
+      const ready = app.state === undefined || app.state === "ready";
+      if (fresh.length > 0 && inFlight.length === 0 && moved && ready) {
+        // A revert is reported, not judged: reverts are an operator's
+        // explicit act on this platform, and without attribution the
+        // deploy cannot say whose rollout it was. wrangler already
+        // reported whether this deploy's apply succeeded.
+        for (const rollout of fresh.filter(candidate => candidate.status === "reverted")) {
+          console.warn(
+            `  ${name}: rollout ${rollout.id} was REVERTED since this deploy began; if it was this ` +
+              `deploy's, the wake container still runs the previous image (check wrangler containers info)`
+          );
+        }
+        done = true;
+      }
+      judged = true;
     }
     if (!judged) {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
@@ -591,20 +584,13 @@ for (const manifest of manifests) {
       );
       if (before) {
         for (const name of containerAppNames(worker)) {
-          const app = before.get(name);
-          const knownIds = known.get(name) ?? new Set();
-          // This deploy's rollout, by id: whatever the application
-          // lists NOW that it did not list before the deploy. wrangler
-          // creates the rollout before returning, so the set is taken
-          // the moment it returns, and a rollout another hand starts
-          // later can never enter it.
-          const ours = new Set();
-          if (app && process.env.CLOUDFLARE_API_TOKEN) {
-            for (const id of await knownRolloutIds(manifest.accountId, app)) {
-              if (!knownIds.has(id)) ours.add(id);
-            }
-          }
-          rollouts.push({ name, before: app, known: knownIds, ours, startedAt, configPath });
+          rollouts.push({
+            name,
+            before: before.get(name),
+            known: known.get(name) ?? new Set(),
+            startedAt,
+            configPath
+          });
         }
       }
     }
