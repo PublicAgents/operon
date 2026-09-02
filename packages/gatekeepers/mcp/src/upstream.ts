@@ -153,6 +153,7 @@ export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
       .map(tool => ({
         name: tool.name,
         read: tool.annotations?.readOnlyHint === true,
+        title: tool.title ?? "",
         description: tool.description ?? "",
         inputSchema: tool.inputSchema ?? null,
         outputSchema: tool.outputSchema ?? null

@@ -12,7 +12,8 @@
  */
 export class CatalogMemory {
   #seen = new Map<string, string>();
-  #inFlight = new Map<string, { revision: string; done: Promise<void> }>();
+  /** Keyed by pair AND revision: two revisions of one pair in flight at once each keep their own. */
+  #inFlight = new Map<string, Promise<void>>();
 
   /**
    * Write the revision's row through `append` unless it is the one
@@ -27,20 +28,21 @@ export class CatalogMemory {
   ): Promise<boolean> {
     const key = `${agentId}\u0000${server}`;
     if (this.#seen.get(key) === revision) return false;
-    const current = this.#inFlight.get(key);
-    if (current && current.revision === revision) {
-      await current.done;
+    const flightKey = `${key}\u0000${revision}`;
+    const current = this.#inFlight.get(flightKey);
+    if (current) {
+      await current;
       return true;
     }
     const done = append().then(() => {
       this.#seen.set(key, revision);
     });
-    this.#inFlight.set(key, { revision, done });
+    this.#inFlight.set(flightKey, done);
     try {
       await done;
       return true;
     } finally {
-      if (this.#inFlight.get(key)?.done === done) this.#inFlight.delete(key);
+      this.#inFlight.delete(flightKey);
     }
   }
 }

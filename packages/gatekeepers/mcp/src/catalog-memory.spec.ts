@@ -51,6 +51,25 @@ describe("CatalogMemory", () => {
     expect(await memory.record("promoter", "livevariant", "aaaa", slow)).toBe(false);
   });
 
+  it("keeps two revisions of one pair in flight apart", async () => {
+    const memory = new CatalogMemory();
+    const releases: Array<() => void> = [];
+    let writes = 0;
+    const slow = () =>
+      new Promise<void>(resolve => {
+        writes += 1;
+        releases.push(resolve);
+      });
+    const a1 = memory.record("promoter", "livevariant", "aaaa", slow);
+    const b1 = memory.record("promoter", "livevariant", "bbbb", slow);
+    // A third caller for the first revision joins ITS flight, not the second's.
+    const a2 = memory.record("promoter", "livevariant", "aaaa", slow);
+    expect(writes).toBe(2);
+    for (const release of releases) release();
+    expect(await Promise.all([a1, b1, a2])).toEqual([true, true, true]);
+    expect(writes).toBe(2);
+  });
+
   it("keeps agents and servers apart", async () => {
     const memory = new CatalogMemory();
     const { state, append } = counter();

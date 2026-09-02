@@ -174,6 +174,9 @@ describe("catalogRevision", () => {
     expect(
       await catalogRevision([{ ...TOOLS[0], description: "now does something else" }, TOOLS[1], TOOLS[2]])
     ).not.toBe(base);
+    expect(
+      await catalogRevision([{ ...TOOLS[0], title: "Search issues, renamed" }, TOOLS[1], TOOLS[2]])
+    ).not.toBe(base);
   });
 });
 
