@@ -350,23 +350,32 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
     const moved = app.updated_at !== before.updated_at || app.version !== before.version;
     let done;
     if (viaApi) {
-      // THIS deploy's rollout: the one not listed before the deploy.
-      // Until it is listed, nothing here is evidence of completion.
-      const rollout = (await listRollouts(accountId, app.id)).find(
+      // Every rollout not listed before the deploy: this deploy's, and
+      // any another hand started meanwhile. A wake dies to whichever
+      // is in flight, so the pause holds until ALL of them are over;
+      // "replaced" is over too (a later rollout superseded it). Until
+      // one is listed, nothing here is evidence of completion.
+      const fresh = (await listRollouts(accountId, app.id)).filter(
         candidate => !known.has(candidate.id)
       );
-      const steps = rollout?.steps ?? [];
-      const finished = steps.filter(step => step.status === "completed").length;
+      const describe = rollout => {
+        const steps = rollout.steps ?? [];
+        const finished = steps.filter(step => step.status === "completed").length;
+        return `${rollout.id} ${rollout.status} (${finished}/${steps.length} steps)`;
+      };
       console.log(
-        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, rollout ` +
-          `${rollout ? `${rollout.id} ${rollout.status}` : "not listed yet"} (${finished}/${steps.length} steps)`
+        `  ${name}: state ${app.state ?? "unreported"}, version ${before.version} → ${app.version}, ` +
+          `rollout ${fresh.length === 0 ? "not listed yet" : fresh.map(describe).join("; ")}`
       );
-      if (rollout?.status === "reverted") throw new Error(`the ${name} rollout was reverted by the platform`);
-      if (!rollout && !moved && Date.now() > appearanceDeadline) {
+      const reverted = fresh.find(rollout => rollout.status === "reverted");
+      if (reverted) throw new Error(`the ${name} rollout ${reverted.id} was reverted by the platform`);
+      if (fresh.length === 0 && !moved && Date.now() > appearanceDeadline) {
         console.log(`  ${name}: no rollout appeared and the record is untouched; this deploy rolled nothing`);
         return;
       }
-      done = rollout?.status === "completed";
+      done =
+        fresh.length > 0 &&
+        fresh.every(rollout => rollout.status === "completed" || rollout.status === "replaced");
     } else {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
       const settling = (instances.starting ?? 0) + (instances.scheduling ?? 0);
