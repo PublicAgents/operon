@@ -385,7 +385,7 @@ describe("private by construction (spec 0009)", () => {
       expect(byKey[key].vars?.NOTIFY_URL, key).toBeUndefined();
     }
     // Every worker that alerts the operator holds the binding.
-    for (const key of ["gatekeeper-vault", "gatekeeper-x", "gatekeeper-email", "gatekeeper-spend"]) {
+    for (const key of ["gatekeeper-vault", "gatekeeper-x", "gatekeeper-email", "gatekeeper-spend", "gatekeeper-asks"]) {
       expect(byKey[key].services, key).toContainEqual({ binding: "TELEGRAM", service: "operon-gatekeeper-telegram" });
     }
   });

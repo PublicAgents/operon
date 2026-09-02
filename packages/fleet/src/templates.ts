@@ -315,7 +315,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // The decision queue reaches the operator by mail through the
         // email Gatekeeper's binding-only operator path, so asks never
         // hold a send credential of their own.
-        services: [
+        services: [service("TELEGRAM", "gatekeeper-telegram"), 
           service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail"),
           // The quota's honest source: the scheduler owns the wake lock.
           service("SCHEDULER_WAKE", "scheduler", "WakeQuery")
