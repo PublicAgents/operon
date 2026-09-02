@@ -17,9 +17,13 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "!**/*.tsbuildinfo"],
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
   "dependencies": {
     "@operon/core": "0.0.0",
-    "yaml": "^2.6.0"
+    "yaml": "^2.6.0",
+    "@operon/ops-tools": "*"
   }
 }
