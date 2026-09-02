@@ -92,6 +92,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     // Asks hold no send credential: mail goes through the email
     // Gatekeeper's binding-only operator entrypoint.
     expect(asks.services).toEqual([
+      { binding: "TELEGRAM", service: "operon-gatekeeper-telegram" },
       { binding: "EMAIL_OPERATOR", service: "operon-gatekeeper-email", entrypoint: "OperatorMail" },
       { binding: "SCHEDULER_WAKE", service: "operon-scheduler", entrypoint: "WakeQuery" }
     ]);
