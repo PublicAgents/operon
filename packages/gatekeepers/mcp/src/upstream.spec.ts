@@ -152,6 +152,29 @@ describe("catalogRevision", () => {
       ])
     ).not.toBe(base);
   });
+
+  it("changes when a schema or description changes under a stable name, and not on key order", () => {
+    const base = catalogRevision(TOOLS);
+    const withSchema = [
+      { ...TOOLS[0], inputSchema: { type: "object", properties: { q: { type: "string" } } } },
+      TOOLS[1],
+      TOOLS[2]
+    ];
+    expect(catalogRevision(withSchema)).not.toBe(base);
+    expect(
+      catalogRevision([
+        { ...TOOLS[0], inputSchema: { properties: { q: { type: "string" } }, type: "object" } },
+        TOOLS[1],
+        TOOLS[2]
+      ])
+    ).toBe(catalogRevision(withSchema));
+    expect(
+      catalogRevision([{ ...TOOLS[0], outputSchema: { type: "object" } }, TOOLS[1], TOOLS[2]])
+    ).not.toBe(base);
+    expect(
+      catalogRevision([{ ...TOOLS[0], description: "now does something else" }, TOOLS[1], TOOLS[2]])
+    ).not.toBe(base);
+  });
 });
 
 /**

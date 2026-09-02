@@ -140,8 +140,21 @@ export async function callUpstreamTool(
  * grows.
  */
 export function catalogRevision(tools: UpstreamTool[]): string {
+  // Everything the mind is TOLD about a tool is part of the catalog:
+  // its name and read flag, and since the proxy relays them verbatim,
+  // its description and schemas. A schema or description that changes
+  // under a stable name changes what the mind will do with the tool,
+  // so it must move the revision too.
   const names = tools
-    .map(tool => `${tool.name}:${tool.annotations?.readOnlyHint === true ? "r" : "w"}`)
+    .map(tool =>
+      [
+        tool.name,
+        tool.annotations?.readOnlyHint === true ? "r" : "w",
+        stableJson(tool.description ?? ""),
+        stableJson(tool.inputSchema ?? null),
+        stableJson(tool.outputSchema ?? null)
+      ].join(":")
+    )
     .sort()
     .join(",");
   let hash = 2166136261;
@@ -150,4 +163,12 @@ export function catalogRevision(tools: UpstreamTool[]): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** JSON with object keys sorted, so key order alone never moves a revision. */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableJson(val)}`).join(",")}}`;
 }
