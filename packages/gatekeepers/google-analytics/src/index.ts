@@ -239,6 +239,14 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!isMcpPath(url.pathname)) return errorResponse(404, "not_found");
+    // Only a POST carries a JSON-RPC message; the mind's client also
+    // opens a GET for the server-to-client stream about once a second,
+    // which this stateless transport refuses anyway. Answered before a
+    // token source or server is built for it.
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    if (request.method !== "POST") {
+      return new Response(null, { status: 405, headers: { allow: "POST, DELETE" } });
+    }
     // The binding IS the authorization (this Worker has no public
     // route); the agent id rides along only so the ledger can name who
     // asked.

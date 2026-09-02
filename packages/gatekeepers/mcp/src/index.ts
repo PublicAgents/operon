@@ -3,6 +3,7 @@ import { findAgent, parseRoster, type McpServerDef } from "@operon/core";
 import { errorResponse, json, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { inPortalScope, ownerOf, type ServerTrust, type UpstreamTool } from "./classify.js";
 import { UpstreamError } from "./guarded-fetch.js";
+import { CatalogMemory } from "./catalog-memory.js";
 import { createProxyServer } from "./proxy.js";
 import {
   callUpstreamTool,
@@ -167,6 +168,9 @@ function allServerIds(tools: UpstreamTool[]): string[] {
   return [...ids];
 }
 
+/** Catalog revisions already ledgered, per isolate (see CatalogMemory). */
+const catalogs = new CatalogMemory();
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -174,6 +178,16 @@ export default {
     // arrives in the path the container's config named.
     const match = /^\/mcp\/([a-z0-9][a-z0-9-]*)$/.exec(url.pathname);
     if (!match) return errorResponse(404, "not_found");
+    // Only a POST carries a JSON-RPC message. The mind's client also
+    // opens a GET for the server-to-client stream, and on this
+    // stateless transport that is a 405 by design; it retries about
+    // once a second for the whole wake. Answered here, before any
+    // upstream handshake or ledger row: the first live wake ran 312
+    // upstream handshakes and wrote 335 catalog rows for those GETs.
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    if (request.method !== "POST") {
+      return new Response(null, { status: 405, headers: { allow: "POST, DELETE" } });
+    }
     const name = match[1];
     const agentId = request.headers.get("x-operon-agent") ?? "unknown";
 
@@ -191,13 +205,19 @@ export default {
       return await withUpstream(server.upstream, {}, async client => {
         const all = await listUpstreamTools(client);
         const tools = scopedTools(server, all);
-        const revision = catalogRevision(tools);
-        await ledger(env).append("mcp_catalog", {
-          agentId,
-          server: server.name,
-          revision,
-          tools: tools.length
-        });
+        const revision = await catalogRevision(tools);
+        // A catalog row records a CHANGE of what the mind is offered,
+        // not a sighting: one row per request was one per second. The
+        // revision is noted only once its row is written, so a failed
+        // append is retried by the next request rather than forgotten.
+        await catalogs.record(agentId, server.name, revision, () =>
+          ledger(env).append("mcp_catalog", {
+            agentId,
+            server: server.name,
+            revision,
+            tools: tools.length
+          })
+        );
         const proxy = await createProxyServer(server, {
           tools,
           call: (toolName, args) => callUpstreamTool(client, toolName, args),
