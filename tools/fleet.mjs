@@ -372,20 +372,30 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
         return;
       }
       // Over means the instances are settled again, whichever way:
-      // completed, replaced by a later rollout, or reverted. A revert
-      // is reported, not treated as this deploy's failure: without an
-      // id from wrangler nothing here can tell this deploy's rollout
-      // from one another hand started, and wrangler already reported
-      // whether THIS deploy's apply succeeded.
+      // completed, replaced by a later rollout, or reverted. Two more
+      // signs are required, because a rollout another hand started
+      // after the snapshot is indistinguishable by id and may already
+      // be over while this deploy's has not been listed yet: the
+      // listing must read "ready" again, and the version must have
+      // moved since the snapshot (every rollout moves it, mid-way).
       const OVER = new Set(["completed", "replaced", "reverted"]);
-      done = fresh.length > 0 && fresh.every(rollout => OVER.has(rollout.status));
-      if (done) {
-        for (const rollout of fresh.filter(candidate => candidate.status === "reverted")) {
-          console.warn(
-            `  ${name}: rollout ${rollout.id} was REVERTED by the platform; if it was this deploy's, ` +
-              `the wake container still runs the previous image (check wrangler containers info)`
+      const settled = fresh.length > 0 && fresh.every(rollout => OVER.has(rollout.status));
+      const ready = app.state === undefined || app.state === "ready";
+      if (settled && ready) {
+        // A revert among them fails the deploy. Without an id from
+        // wrangler nothing here can tell whose rollout it was, and of
+        // the two mistakes, failing a deploy whose image is live costs
+        // a re-run, while reporting success over a rollback leaves the
+        // previous image running unnoticed.
+        const reverted = fresh.filter(rollout => rollout.status === "reverted");
+        if (reverted.length > 0) {
+          throw new Error(
+            `rollout ${reverted.map(rollout => rollout.id).join(", ")} of ${name} was REVERTED by the ` +
+              `platform after this deploy; if it was this deploy's, the wake container still runs the ` +
+              `previous image (check wrangler containers info and redeploy)`
           );
         }
+        done = app.version !== before.version;
       }
     } else {
       const instances = containerAppInfo(configPath, app.id).health?.instances ?? {};
