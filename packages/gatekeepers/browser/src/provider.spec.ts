@@ -42,6 +42,36 @@ describe("resolveProvider", () => {
     expect(namedCf).toMatchObject({ liveView: true });
   });
 
+  it("moves URL credentials into a Basic authorization header and out of the dial URL", () => {
+    const provider = resolveProvider({
+      WEB_CDP_ENDPOINT: "wss://user:p%40ss%20w@chrome.example.test:8443/cdp?region=eu",
+      WEB_CDP_PROVIDER: "hosted"
+    });
+    expect(provider).toEqual({
+      name: "hosted",
+      url: "https://chrome.example.test:8443/cdp?region=eu",
+      headers: { authorization: `Basic ${Buffer.from("user:p@ss w").toString("base64")}` },
+      liveView: false
+    });
+  });
+
+  it("encodes non-Latin-1 credentials as UTF-8", () => {
+    const provider = resolveProvider({ WEB_CDP_ENDPOINT: "wss://u:p%C3%A4ss@host.example.test" });
+    expect(provider).toMatchObject({
+      url: "https://host.example.test/",
+      headers: { authorization: `Basic ${Buffer.from("u:päss", "utf8").toString("base64")}` }
+    });
+  });
+
+  it("refuses URL credentials alongside a bearer, and malformed userinfo", () => {
+    expect(
+      resolveProvider({ WEB_CDP_ENDPOINT: "wss://u:p@host.example.test", WEB_CDP_TOKEN: "tok" })
+    ).toEqual({ error: "web_cdp_auth_ambiguous" });
+    expect(resolveProvider({ WEB_CDP_ENDPOINT: "wss://u%ZZ:p@host.example.test" })).toEqual({
+      error: "web_cdp_endpoint_invalid"
+    });
+  });
+
   it("fails closed on missing or insecure configuration", () => {
     expect(resolveProvider({})).toEqual({ error: "web_cdp_unconfigured" });
     expect(resolveProvider({ WEB_CDP_ENDPOINT: "not a url" })).toEqual({

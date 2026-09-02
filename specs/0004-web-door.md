@@ -95,6 +95,21 @@ Each `WebSession` DO:
   aggregate browser-minute cap when enabled, the origin denylist, and
   the CDP input sweep.
 
+### Provider configuration
+
+The upstream CDP provider is configuration, not code (browser-gk
+`provider.ts`): Cloudflare Browser Run is the default, and any other
+CDP endpoint plugs in through `WEB_CDP_ENDPOINT` (a `wss://` or
+`https://` URL) with an optional `WEB_CDP_TOKEN` bearer. An endpoint
+may instead carry its credentials as URL userinfo
+(`wss://user:pass@host`); browser-gk moves them into the dial's
+`Authorization: Basic` header and strips them from the URL, so no
+logged or ledgered URL ever holds them. An endpoint with userinfo AND
+a bearer is refused by name (`web_cdp_auth_ambiguous`) rather than
+resolved by guess. Everything behind the dial (relay, policy,
+identity persistence, metering, screenshots) is provider-neutral CDP;
+only the vendor live-view command is gated on the provider name.
+
 ### Session naming
 
 Sessions are named by purpose (`x-account`, `github`, `research`), not
