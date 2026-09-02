@@ -384,19 +384,27 @@ async function waitForRollout({ name, before, known, startedAt, configPath }, ac
         return;
       }
       // Settled: a rollout has appeared since the snapshot, none is in
-      // flight, the configuration was applied (`moved`), and the
-      // listing reads "ready" again, since a rollout is marked over
-      // before the last instance reports healthy.
+      // flight, the configuration was applied (`moved`), the VERSION
+      // has moved (observed: it moves only mid-rollout, once instances
+      // are replacing, so a rollout that was already over before this
+      // deploy's began provisioning cannot pass as settled during the
+      // ~30 s in which the listing still reads ready), and the listing
+      // reads "ready" again, since a rollout is marked over before the
+      // last instance reports healthy.
       const ready = app.state === undefined || app.state === "ready";
-      if (fresh.length > 0 && inFlight.length === 0 && moved && ready) {
-        // A revert is reported, not judged: reverts are an operator's
-        // explicit act on this platform, and without attribution the
-        // deploy cannot say whose rollout it was. wrangler already
-        // reported whether this deploy's apply succeeded.
-        for (const rollout of fresh.filter(candidate => candidate.status === "reverted")) {
-          console.warn(
-            `  ${name}: rollout ${rollout.id} was REVERTED since this deploy began; if it was this ` +
-              `deploy's, the wake container still runs the previous image (check wrangler containers info)`
+      const versionMoved = app.version !== before.version;
+      if (fresh.length > 0 && inFlight.length === 0 && moved && versionMoved && ready) {
+        // Any revert since the snapshot fails the deploy. Without
+        // attribution the deploy cannot say whose rollout it was, and
+        // of the two mistakes, failing a deploy whose image is live
+        // costs a re-run, while reporting success over a rollback
+        // leaves the previous image running unnoticed.
+        const reverted = fresh.filter(rollout => rollout.status === "reverted");
+        if (reverted.length > 0) {
+          throw new Error(
+            `rollout ${reverted.map(rollout => rollout.id).join(", ")} of ${name} was REVERTED since ` +
+              `this deploy began; the wake container may still run the previous image (check ` +
+              `wrangler containers info and redeploy)`
           );
         }
         done = true;
