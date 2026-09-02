@@ -178,5 +178,22 @@ describe("the control plane's enrollment (spec 0006 §9)", () => {
       validateManifest({ ...BASE, control: { projects: [{ project: "second-one", zone: "z.example", extra: 1 }] } })
     ).toThrow(/not a known key/);
     expect(() => validateManifest({ ...BASE, control: { projects: [{ project: "second-one" }] } })).toThrow(/zone/);
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        control: {
+          projects: [
+            { project: "second-one", zone: "a.example", workerPrefix: "shared-prefix" },
+            { project: "third-one", zone: "b.example", workerPrefix: "shared-prefix" }
+          ]
+        }
+      })
+    ).toThrow(/already the prefix of another enrolled project/);
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        control: { projects: [{ project: "second-one", zone: "a.example", workerPrefix: "operon-demo" }] }
+      })
+    ).toThrow(/this project's own prefix/);
   });
 });

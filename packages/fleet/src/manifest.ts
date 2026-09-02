@@ -205,6 +205,12 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
         record.workerPrefix === undefined ? `operon-${name}` : requireString(record.workerPrefix, `${path}.workerPrefix`);
       if (!/^[a-z][a-z0-9-]{1,40}$/.test(prefix)) fail(`${path}.workerPrefix`, `"${prefix}" must be lowercase, digits, hyphens`);
       if (prefix === workerPrefix) fail(`${path}.workerPrefix`, `"${prefix}" is this project's own prefix`);
+      // Bindings and secret writes are addressed by prefix: two projects
+      // on one prefix would be one set of Workers under two names, and
+      // the plane's per-project isolation would be a fiction.
+      if (enrolled.some(other => other.workerPrefix === prefix)) {
+        fail(`${path}.workerPrefix`, `"${prefix}" is already the prefix of another enrolled project`);
+      }
       for (const key of Object.keys(record)) {
         if (!["project", "zone", "workerPrefix"].includes(key)) fail(`${path}.${key}`, "is not a known key");
       }
