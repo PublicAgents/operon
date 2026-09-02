@@ -78,6 +78,8 @@ export interface PreparedLaunch {
    * forwards over a binding, so no door credential enters the container.
    */
   umbilicalNonce: string;
+  /** Every door closed for this wake (spec 0006 §7), for the router to refuse. */
+  closedDoors: Door[];
   /**
    * Virtual hosts for the MCP servers this agent was granted (spec 0008
    * §4). The WakeContainer intercepts exactly these, so an ungranted
@@ -155,11 +157,14 @@ export async function prepareLaunch(
   // The switch is the presence of the block, not of a key inside it:
   // an agent whose roster entry says `github:` has per-agent grants,
   // and a missing list inside means nothing rather than the fleet's.
+  // A closed GitHub door also closes the branch door: the write grants
+  // are withheld (the porch pre-checks them) and the router refuses the
+  // branch route, so persist keeps only the state commit.
   const githubGrants = agent.github
     ? {
         githubGrants: JSON.stringify({
-          pr: agent.github.pr ?? [],
-          write: agent.github.write ?? []
+          pr: open("github") ? (agent.github.pr ?? []) : [],
+          write: open("github") ? (agent.github.write ?? []) : []
         })
       }
     : {};
@@ -203,6 +208,7 @@ export async function prepareLaunch(
       { ...context.options, ...doorOptions, ...perAgent, ...githubGrants, ...mcpEnv }
     ),
     umbilicalNonce,
-    mcpHosts: mcpServers.map(server => server.virtual)
+    mcpHosts: mcpServers.map(server => server.virtual),
+    closedDoors: [...closed]
   };
 }

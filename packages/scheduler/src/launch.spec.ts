@@ -146,6 +146,22 @@ describe("the doors matrix at launch (spec 0006 §7)", () => {
     expect(prepared.env.OPERON_NOTIFY_URL).toBeDefined();
     expect(prepared.env.OPERON_PERSIST_URL).toBeDefined();
     expect(JSON.parse(prepared.env.OPERON_DISABLED_DOORS ?? "[]").sort()).toEqual(["mcp", "pay", "web", "x"]);
+    // The router is told every closed door, so a guessed host is refused outside the container.
+    expect([...prepared.closedDoors].sort()).toEqual(["mcp", "pay", "web", "x"]);
+  });
+
+  it("a closed GitHub door withholds the grants the branch door pre-checks", async () => {
+    const granted = {
+      ...agent,
+      github: { pr: ["o/one"], write: ["o/one"] },
+      doors: { github: false }
+    };
+    const prepared = await prepareLaunch(granted, "cron", "wake-gh-closed", context());
+    expect(prepared.env.OPERON_PR_URL).toBeUndefined();
+    expect(JSON.parse(prepared.env.OPERON_GITHUB_GRANTS ?? "{}")).toEqual({ pr: [], write: [] });
+    // The state commit is plumbing and stays wired.
+    expect(prepared.env.OPERON_PERSIST_URL).toBeDefined();
+    expect(prepared.closedDoors).toContain("github");
   });
 
   it("wires every door when nothing is closed, and says nothing about doors", async () => {
