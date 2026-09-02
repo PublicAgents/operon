@@ -139,7 +139,7 @@ export async function callUpstreamTool(
  * would break working agents; not noticing is how a scope quietly
  * grows.
  */
-export function catalogRevision(tools: UpstreamTool[]): string {
+export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
   // Everything the mind is TOLD about a tool is part of the catalog:
   // its name and read flag, and since the proxy relays them verbatim,
   // its description and schemas. A schema or description that changes
@@ -157,12 +157,11 @@ export function catalogRevision(tools: UpstreamTool[]): string {
     )
     .sort()
     .join(",");
-  let hash = 2166136261;
-  for (let i = 0; i < names.length; i++) {
-    hash ^= names.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  // SHA-256, because the revision now GATES a ledger row: a 32-bit
+  // hash could let two different catalogs pass as one and silence the
+  // change that should have been recorded.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(names));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** JSON with object keys sorted, so key order alone never moves a revision. */

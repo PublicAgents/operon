@@ -205,16 +205,19 @@ export default {
       return await withUpstream(server.upstream, {}, async client => {
         const all = await listUpstreamTools(client);
         const tools = scopedTools(server, all);
-        const revision = catalogRevision(tools);
+        const revision = await catalogRevision(tools);
         // A catalog row records a CHANGE of what the mind is offered,
-        // not a sighting: one row per request was one per second.
-        if (catalogs.changed(agentId, server.name, revision)) {
+        // not a sighting: one row per request was one per second. The
+        // revision is noted only once its row is written, so a failed
+        // append is retried by the next request rather than forgotten.
+        if (catalogs.isNew(agentId, server.name, revision)) {
           await ledger(env).append("mcp_catalog", {
             agentId,
             server: server.name,
             revision,
             tools: tools.length
           });
+          catalogs.note(agentId, server.name, revision);
         }
         const proxy = await createProxyServer(server, {
           tools,

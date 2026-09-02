@@ -140,12 +140,12 @@ describe("hostile upstreams", () => {
 });
 
 describe("catalogRevision", () => {
-  it("changes when a tool is added, removed, or flips read-only", () => {
-    const base = catalogRevision(TOOLS);
-    expect(catalogRevision([...TOOLS].reverse())).toBe(base);
-    expect(catalogRevision(TOOLS.slice(0, 2))).not.toBe(base);
+  it("changes when a tool is added, removed, or flips read-only", async () => {
+    const base = await catalogRevision(TOOLS);
+    expect(await catalogRevision([...TOOLS].reverse())).toBe(base);
+    expect(await catalogRevision(TOOLS.slice(0, 2))).not.toBe(base);
     expect(
-      catalogRevision([
+      await catalogRevision([
         { ...TOOLS[0], annotations: { readOnlyHint: false } },
         TOOLS[1],
         TOOLS[2]
@@ -153,26 +153,26 @@ describe("catalogRevision", () => {
     ).not.toBe(base);
   });
 
-  it("changes when a schema or description changes under a stable name, and not on key order", () => {
-    const base = catalogRevision(TOOLS);
+  it("changes when a schema or description changes under a stable name, and not on key order", async () => {
+    const base = await catalogRevision(TOOLS);
     const withSchema = [
       { ...TOOLS[0], inputSchema: { type: "object", properties: { q: { type: "string" } } } },
       TOOLS[1],
       TOOLS[2]
     ];
-    expect(catalogRevision(withSchema)).not.toBe(base);
+    expect(await catalogRevision(withSchema)).not.toBe(base);
     expect(
-      catalogRevision([
+      await catalogRevision([
         { ...TOOLS[0], inputSchema: { properties: { q: { type: "string" } }, type: "object" } },
         TOOLS[1],
         TOOLS[2]
       ])
-    ).toBe(catalogRevision(withSchema));
+    ).toBe(await catalogRevision(withSchema));
     expect(
-      catalogRevision([{ ...TOOLS[0], outputSchema: { type: "object" } }, TOOLS[1], TOOLS[2]])
+      await catalogRevision([{ ...TOOLS[0], outputSchema: { type: "object" } }, TOOLS[1], TOOLS[2]])
     ).not.toBe(base);
     expect(
-      catalogRevision([{ ...TOOLS[0], description: "now does something else" }, TOOLS[1], TOOLS[2]])
+      await catalogRevision([{ ...TOOLS[0], description: "now does something else" }, TOOLS[1], TOOLS[2]])
     ).not.toBe(base);
   });
 });
