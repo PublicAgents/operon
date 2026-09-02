@@ -34,7 +34,11 @@ const EXEMPT_STATIC: Record<string, string> = {
 };
 const EXEMPT_AGENT_PREFIXES: Record<string, string> = {
   X_ACCESS_TOKEN_: "the agent's own X account credential, minted by the operator's PIN flow",
-  X_ACCESS_SECRET_: "the agent's own X account credential, minted by the operator's PIN flow"
+  X_ACCESS_SECRET_: "the agent's own X account credential, minted by the operator's PIN flow",
+  WAKE_TRIGGER_TOKEN_:
+    "per PROJECT, not per agent: the control plane's copy of an ENROLLED project's scheduler " +
+    "bearer (spec 0006 §9), which that project rotates in its own wake-trigger group; the host " +
+    "sets it once at enrollment (bootstrap names it)"
 };
 
 function sourcesUnder(dir: string): string[] {
