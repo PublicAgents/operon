@@ -153,11 +153,12 @@ export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
       .map(tool => ({
         name: tool.name,
         read: tool.annotations?.readOnlyHint === true,
-        // null for absent, so an omitted title or description and an
-        // explicitly empty one (which the proxy relays differently)
-        // are different revisions.
-        title: tool.title ?? null,
-        description: tool.description ?? null,
+        // Exactly what the proxy exposes: an absent title or description
+        // is relayed as the tool's name, so it hashes as the name, and
+        // an explicitly empty one hashes as empty. Two catalogs the mind
+        // cannot tell apart share a revision; two it can, do not.
+        title: tool.title ?? tool.name,
+        description: tool.description ?? tool.name,
         inputSchema: tool.inputSchema ?? null,
         outputSchema: tool.outputSchema ?? null
       }))
