@@ -6,6 +6,8 @@
  * which turns drift into a red test instead of a broken wake.
  */
 
+import { parseUpstreamProxy } from "./egress-proxy.js";
+
 export const ENV = {
   wakeId: "OPERON_WAKE_ID",
   agentId: "OPERON_AGENT_ID",
@@ -47,7 +49,9 @@ export const ENV = {
   xUrl: "OPERON_X_URL",
   xToken: "OPERON_X_TOKEN",
   webUrl: "OPERON_WEB_URL",
-  webToken: "OPERON_WEB_TOKEN"
+  webToken: "OPERON_WEB_TOKEN",
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressProxyBypass: "OPERON_EGRESS_PROXY_BYPASS"
 } as const;
 
 export interface WakeConfig {
@@ -117,10 +121,30 @@ export interface WakeConfig {
   /** Web door (spec 0004): the browser relay endpoint + per-wake nonce. */
   webUrl?: string;
   webToken?: string;
+  /**
+   * Upstream HTTP proxy for the session's outbound HTTP (spec 0004 §8),
+   * http(s)://[user:pass@]host[:port]. The entrypoint's forwarder holds
+   * it; the session sees a loopback address. Absent means direct egress.
+   */
+  egressProxy?: string;
+  /** Hosts the session reaches directly even when a proxy is configured. */
+  egressProxyBypass: string[];
 }
 
 export class ConfigError extends Error {
   override name = "ConfigError";
+}
+
+/** Validated at wake start: a malformed proxy address fails the wake, not the first request. */
+function parseEgressProxy(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    parseUpstreamProxy(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`invalid_env: ${ENV.egressProxy} ${detail}`);
+  }
+  return raw;
 }
 
 /**
@@ -259,7 +283,12 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     xUrl: env[ENV.xUrl],
     xToken: env[ENV.xToken],
     webUrl: env[ENV.webUrl],
-    webToken: env[ENV.webToken]
+    webToken: env[ENV.webToken],
+    egressProxy: parseEgressProxy(env[ENV.egressProxy]),
+    egressProxyBypass: (env[ENV.egressProxyBypass] ?? "")
+      .split(",")
+      .map(host => host.trim())
+      .filter(host => host.length > 0)
   };
 }
 

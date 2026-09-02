@@ -56,11 +56,17 @@
   //   MIND_CREDENTIAL_CLAUDE_CODE  subscription OAuth token for claude-code minds
   //   GITHUB_TOKEN_SERVICE_TOKEN   bearer presented to the github Gatekeeper
   //   NOTIFY_TOKEN              bearer the container uses against the telegram Gatekeeper
+  //   EGRESS_PROXY              optional upstream HTTP proxy for the mind session's
+  //                             outbound HTTP, http(s)://[user:pass@]host[:port]; the
+  //                             container's root-run forwarder holds it, the session
+  //                             gets a loopback address (spec 0004 §8)
   // Vars, set per deployment:
   //   NOTIFY_URL                telegram Gatekeeper /notify endpoint
   //   SECRET_DENYLIST           comma-separated literals for the presleep sweep
   //   HARNESS_EXTRA_ARGS        JSON array of extra harness CLI args; operator-owned
   //                             session policy (e.g. permission settings)
+  //   EGRESS_PROXY_BYPASS       comma-separated hosts the session reaches directly when
+  //                             EGRESS_PROXY is set (loopback always is)
   // Service bindings, set per deployment:
   //   GITHUB_GATEKEEPER         the github Gatekeeper Worker (mints state-repo tokens)
 }

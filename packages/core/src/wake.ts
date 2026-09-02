@@ -92,6 +92,15 @@ export interface WakeOptions {
    * permission/autonomy settings); the chassis hardcodes none of it.
    */
   harnessExtraArgs?: string;
+  /**
+   * An upstream HTTP proxy, http(s)://[user:pass@]host[:port], for the
+   * mind session's outbound HTTP. The entrypoint runs a loopback
+   * forwarder that holds the credential; the session is handed only the
+   * loopback address, through the standard proxy variables.
+   */
+  egressProxy?: string;
+  /** Comma-separated hosts the session reaches directly, bypassing the proxy. */
+  egressProxyBypass?: string;
 }
 
 export const WAKE_ENV = {
@@ -135,7 +144,9 @@ export const WAKE_ENV = {
   xUrl: "OPERON_X_URL",
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
-  xToken: "OPERON_X_TOKEN"
+  xToken: "OPERON_X_TOKEN",
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressProxyBypass: "OPERON_EGRESS_PROXY_BYPASS"
 } as const;
 
 export function wakeEnv(
@@ -188,6 +199,8 @@ export function wakeEnv(
   if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
+  if (options.egressProxy) env[WAKE_ENV.egressProxy] = options.egressProxy;
+  if (options.egressProxyBypass) env[WAKE_ENV.egressProxyBypass] = options.egressProxyBypass;
   return env;
 }
 

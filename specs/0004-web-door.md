@@ -523,6 +523,43 @@ interception machinery closes that gap:
   allow/deny egress POLICY remains a possible future knob, deliberately
   separate from the audit.
 
+### Outbound proxy (optional)
+
+A deployment may route the mind session's plain HTTP egress through an
+upstream HTTP proxy (`EGRESS_PROXY` in the scheduler env, delivered to
+the container as `OPERON_EGRESS_PROXY`, in the form
+`http(s)://[user:pass@]host[:port]`). The credential never enters the
+session: the ROOT
+entrypoint runs a loopback forwarder beside the porch for exactly the
+session's lifetime, chains every request to the upstream with the
+credential attached, and hands the session only the loopback address
+through the standard variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+`NO_PROXY`, plus `NODE_USE_ENV_PROXY` so node clients honour them).
+curl, git, npm, WebFetch and scripts route through it unchanged; the
+entrypoint's own traffic (clone, doors, persist, notify) does not.
+
+- `CONNECT host:port` (every https URL) is tunnelled through the
+  upstream and the sockets spliced: TLS stays end to end between the
+  session and the origin, and the forwarder sees hostnames only.
+- Absolute-form `http://` requests are forwarded as they arrive.
+- The forwarder logs one compact line per tunnel or request (method
+  and host, never a path or query), in the egress-audit style above.
+- An upstream refusal (a 407, a non-200 CONNECT answer) is reported to
+  the session as a 502 gateway failure, never relayed as a challenge:
+  the session has no credential to offer and must not be invited to
+  look for one.
+- Loopback is always direct (the porch and the forwarder live there);
+  `EGRESS_PROXY_BYPASS` (comma-separated hosts, `NO_PROXY` syntax)
+  names further hosts the session reaches directly. Note that the
+  harness's own API traffic rides the proxy too unless bypassed.
+- A malformed proxy address fails the wake at config time, by name,
+  rather than at the first request.
+
+The platform egress audit (above) still sees every connection the
+forwarder makes; with a proxy configured, those connections address
+the proxy host, and the forwarder's own log is where the destination
+hosts are.
+
 ## 9. Costs
 
 Browser Run on Workers Paid includes 10 browser-hours/month. We use

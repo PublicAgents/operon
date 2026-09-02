@@ -33,6 +33,7 @@ function config(overrides: Partial<WakeConfig> = {}): WakeConfig {
     hosts: ["@"],
     prRepos: [],
     mcpServers: [],
+    egressProxyBypass: [],
     ...overrides
   };
 }

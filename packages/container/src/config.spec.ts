@@ -48,6 +48,24 @@ describe("readWakeConfig", () => {
     expect(config.harnessExtraArgs).toEqual([]);
   });
 
+  it("reads the outbound proxy and its bypass list, and rejects a malformed address", () => {
+    expect(readWakeConfig(complete).egressProxy).toBeUndefined();
+    expect(readWakeConfig(complete).egressProxyBypass).toEqual([]);
+    const config = readWakeConfig({
+      ...complete,
+      OPERON_EGRESS_PROXY: "http://user:secret@proxy.example:7777",
+      OPERON_EGRESS_PROXY_BYPASS: " registry.example, .internal.example ,"
+    });
+    expect(config.egressProxy).toBe("http://user:secret@proxy.example:7777");
+    expect(config.egressProxyBypass).toEqual(["registry.example", ".internal.example"]);
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: "socks5://proxy.example:1080" })
+    ).toThrowError(/OPERON_EGRESS_PROXY/);
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: "http://proxy.example/path" })
+    ).toThrowError(ConfigError);
+  });
+
   it("defaults maxWakeMinutes to 120 and rejects malformed values", () => {
     expect(readWakeConfig(complete).maxWakeMinutes).toBe(120);
     expect(

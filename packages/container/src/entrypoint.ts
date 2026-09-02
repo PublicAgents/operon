@@ -11,6 +11,7 @@ import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./p
 import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
+import { EgressProxy, proxySessionEnv } from "./egress-proxy.js";
 import type { AskLimits } from "./skills.js";
 import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
@@ -654,7 +655,8 @@ async function runSession(
   config: WakeConfig,
   model: string,
   degraded: boolean,
-  porchUrl: string
+  porchUrl: string,
+  proxyUrl?: string
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
@@ -779,6 +781,10 @@ async function runSession(
       // warns when the journal deadline nears (the prompt's promise made
       // checkable mid-wake). Epoch ms; not a credential.
       OPERON_SESSION_DEADLINE: String(Date.now() + budgetMinutes * 60_000),
+      // The session's outbound HTTP rides the deployment's proxy when one
+      // is configured: a loopback address (the forwarder, root-run, holds
+      // the upstream credential), not a credential.
+      ...(proxyUrl ? proxySessionEnv(proxyUrl, config.egressProxyBypass) : {}),
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
@@ -992,13 +998,23 @@ async function main(): Promise<number> {
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
+  // The outbound proxy forwarder (spec 0004 section 8) lives exactly as
+  // long as the porch does: it exists for the session's traffic only.
+  let egressProxy: EgressProxy | null = null;
+  let proxyUrl: string | undefined;
+  if (config.egressProxy) {
+    egressProxy = new EgressProxy({ upstream: config.egressProxy, log });
+    proxyUrl = await egressProxy.start();
+    log(`${label}: outbound proxy forwarder at ${proxyUrl}`);
+  }
 
   log(`${label}: session starting (model ${verified.model})`);
   let sessionExit: number;
   try {
-    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl);
+    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, proxyUrl);
   } finally {
     await porch.close();
+    await egressProxy?.close();
   }
   log(`${label}: session exited ${sessionExit}`);
 
