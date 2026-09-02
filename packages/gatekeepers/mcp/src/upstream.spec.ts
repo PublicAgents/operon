@@ -152,4 +152,73 @@ describe("catalogRevision", () => {
       ])
     ).not.toBe(base);
   });
+
+  it("changes when a schema or description changes under a stable name, and not on key order", () => {
+    const base = catalogRevision(TOOLS);
+    const withSchema = [
+      { ...TOOLS[0], inputSchema: { type: "object", properties: { q: { type: "string" } } } },
+      TOOLS[1],
+      TOOLS[2]
+    ];
+    expect(catalogRevision(withSchema)).not.toBe(base);
+    expect(
+      catalogRevision([
+        { ...TOOLS[0], inputSchema: { properties: { q: { type: "string" } }, type: "object" } },
+        TOOLS[1],
+        TOOLS[2]
+      ])
+    ).toBe(catalogRevision(withSchema));
+    expect(
+      catalogRevision([{ ...TOOLS[0], outputSchema: { type: "object" } }, TOOLS[1], TOOLS[2]])
+    ).not.toBe(base);
+    expect(
+      catalogRevision([{ ...TOOLS[0], description: "now does something else" }, TOOLS[1], TOOLS[2]])
+    ).not.toBe(base);
+  });
+});
+
+/**
+ * Tools that declare an outputSchema make the SDK client validate the
+ * structuredContent of every call. The validator must be one that
+ * INTERPRETS schemas: the SDK's default compiles them with
+ * new Function, which the Workers runtime refuses, and the first live
+ * upstream with output schemas (livevariant.com) failed every call
+ * that way. Node allows codegen, so these tests cannot catch a
+ * regression to the default validator by themselves; they prove the
+ * interpreting validator validates, and the wrangler probe in the PR
+ * proves it runs under workerd.
+ */
+describe("tools with output schemas", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { count: { type: "integer" } },
+    required: ["count"]
+  };
+
+  it("calls a tool whose structured content satisfies its schema", async () => {
+    const mock = mockUpstream({
+      revision: "stateless",
+      tools: [{ name: "count_things", outputSchema: SCHEMA, structuredContent: { count: 3 } }]
+    });
+    // Listed first, as the proxy does: the client validates only the
+    // tools whose schemas it saw in this session.
+    const result = (await withUpstream({ url: URL_ }, { fetch: mock.fetch }, async client => {
+      await listUpstreamTools(client);
+      return callUpstreamTool(client, "count_things", {});
+    })) as { structuredContent?: unknown };
+    expect(result.structuredContent).toEqual({ count: 3 });
+  });
+
+  it("refuses structured content that violates the schema, by name", async () => {
+    const mock = mockUpstream({
+      revision: "stateless",
+      tools: [{ name: "count_things", outputSchema: SCHEMA, structuredContent: { count: "three" } }]
+    });
+    await expect(
+      withUpstream({ url: URL_ }, { fetch: mock.fetch }, async client => {
+        await listUpstreamTools(client);
+        return callUpstreamTool(client, "count_things", {});
+      })
+    ).rejects.toMatchObject({ code: "mcp_upstream_unreachable" });
+  });
 });

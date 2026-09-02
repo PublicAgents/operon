@@ -1,7 +1,7 @@
 {
   "name": "@operon/gatekeeper-mcp",
   "version": "0.0.0",
-  "description": "The generic MCP Gatekeeper (spec 0008 \u00a75): fronts remote MCP servers, portal-first. Upstream credentials live here or in Cloudflare One, never in the container, and one classification module decides which tools an agent may call.",
+  "description": "The generic MCP Gatekeeper (spec 0008 §5): fronts remote MCP servers, portal-first. Upstream credentials live here or in Cloudflare One, never in the container, and one classification module decides which tools an agent may call.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -37,6 +37,7 @@
     }
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@operon/core": "0.0.0",
     "@operon/worker-kit": "0.0.0"

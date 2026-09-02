@@ -17,7 +17,11 @@ import {
 
 export { Ledger };
 export * from "./reports.js";
-export * from "./google-auth.js";
+// Functions and classes only (workerd refuses a bare constant in a
+// Worker entry module's export map); the scope constant stays in its
+// own module.
+export { GoogleAuthError, GoogleTokenSource, parseServiceAccount } from "./google-auth.js";
+export type { ServiceAccount } from "./google-auth.js";
 export { isMcpPath } from "./paths.js";
 
 /**

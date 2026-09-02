@@ -25,6 +25,11 @@ export type ServerTrust = "byo" | "vetted";
 
 export interface UpstreamTool {
   name: string;
+  /** The upstream's own title, description and schemas, passed to the mind untouched. */
+  title?: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   annotations?: { readOnlyHint?: unknown };
 }
 

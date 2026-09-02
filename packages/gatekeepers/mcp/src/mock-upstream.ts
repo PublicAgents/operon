@@ -29,6 +29,10 @@ export interface MockTool {
   description?: string;
   annotations?: { readOnlyHint?: unknown };
   result?: unknown;
+  /** Declared on the tool; the SDK client then validates structuredContent against it. */
+  outputSchema?: Record<string, unknown>;
+  /** Returned beside the text content when set (must satisfy outputSchema). */
+  structuredContent?: Record<string, unknown>;
 }
 
 export interface MockOptions {
@@ -144,7 +148,8 @@ export function mockUpstream(options: MockOptions): MockServer {
         name: tool.name,
         description: tool.description ?? tool.name,
         inputSchema: { type: "object", properties: {} },
-        ...(tool.annotations ? { annotations: tool.annotations } : {})
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {})
       }));
       const result: Record<string, unknown> = { tools };
       if (options.padBytes) result.padding = "x".repeat(options.padBytes);
@@ -157,7 +162,8 @@ export function mockUpstream(options: MockOptions): MockServer {
         jsonrpc: "2.0",
         id,
         result: {
-          content: [{ type: "text", text: JSON.stringify(tool.result ?? { ok: true }) }]
+          content: [{ type: "text", text: JSON.stringify(tool.result ?? { ok: true }) }],
+          ...(tool.structuredContent ? { structuredContent: tool.structuredContent } : {})
         }
       });
     }
