@@ -269,6 +269,46 @@ function plain(response: ServerResponse, status: number, text: string): void {
   response.end(text);
 }
 
+/**
+ * Hop-by-hop fields belong to ONE connection (RFC 9110 section 7.6.1);
+ * the forwarder terminates the session's connection and opens its own,
+ * so they must not cross. Connection-specific proxy fields go with them,
+ * and so does anything the Connection header itself names.
+ */
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+
+export function endToEndHeaders(
+  headers: Record<string, string | string[] | undefined>
+): Record<string, string | string[]> {
+  const named = new Set<string>();
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== "connection" || value === undefined) continue;
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      for (const token of entry.split(",")) {
+        const field = token.trim().toLowerCase();
+        if (field) named.add(field);
+      }
+    }
+  }
+  const kept: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase();
+    if (value === undefined || HOP_BY_HOP.has(key) || named.has(key)) continue;
+    kept[name] = value;
+  }
+  return kept;
+}
+
 function describe(target: EgressTarget): string {
   return target === "direct" ? "direct" : `via ${target.hostname}:${target.port}`;
 }
@@ -323,6 +363,12 @@ export class EgressProxy {
     }
     const host = unbracket(match[1]);
     const port = Number(match[2]);
+    // The regex bounds the digits, not the value: a port outside the TCP
+    // range would throw synchronously from the dial, inside root.
+    if (port < 1 || port > 65535) {
+      refuse(client, 400, "proxy_bad_target");
+      return;
+    }
     const target = this.targetFor(host);
     this.context.log(`egress proxy: CONNECT ${targetSpec} ${describe(target)}`);
     if (target === "direct") {
@@ -422,11 +468,7 @@ export class EgressProxy {
     const target = this.targetFor(url.hostname);
     // Host only, as with every egress line: a query string can carry secrets.
     this.context.log(`egress proxy: ${request.method} ${url.host} ${describe(target)}`);
-    const headers: Record<string, string | string[]> = {};
-    for (const [name, value] of Object.entries(request.headers)) {
-      if (value === undefined || name === "proxy-authorization" || name === "proxy-connection") continue;
-      headers[name] = value;
-    }
+    const headers = endToEndHeaders(request.headers);
     const proxied =
       target === "direct"
         ? httpRequest({
@@ -453,7 +495,9 @@ export class EgressProxy {
         plain(response, 502, "proxy_upstream_refused");
         return;
       }
-      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      // The same rule on the way back: the upstream's connection fields
+      // describe ITS connection to us, not ours to the session.
+      response.writeHead(upstreamResponse.statusCode ?? 502, endToEndHeaders(upstreamResponse.headers));
       upstreamResponse.pipe(response);
     });
     proxied.on("error", () => {

@@ -8,6 +8,7 @@ import {
   EgressProxy,
   INTERNAL_SUFFIX,
   directHostsFrom,
+  endToEndHeaders,
   parseEgressRoutes,
   parseUpstreamProxy,
   proxySessionEnv,
@@ -37,7 +38,13 @@ async function startOrigin(): Promise<{ port: number; headers: IncomingMessage["
   const headers: IncomingMessage["headers"][] = [];
   const server = createServer((req, res) => {
     headers.push(req.headers);
-    res.writeHead(200, { "content-type": "text/plain" });
+    // A connection-specific field the origin sets on ITS connection: the
+    // forwarder must not carry it to the session's connection.
+    res.writeHead(200, {
+      "content-type": "text/plain",
+      connection: "close, x-hop-response",
+      "x-hop-response": "origin-only"
+    });
     res.end(`hello ${req.url}`);
   });
   return { port: await listen(server), headers };
@@ -66,13 +73,17 @@ async function startUpstream(options: { refuseWith?: number } = {}): Promise<{ p
       return;
     }
     const url = new URL(req.url ?? "");
+    // Pass the request's headers on (minus the credential meant for us),
+    // so the origin records exactly what the forwarder let through.
+    const passed = { ...req.headers };
+    delete passed["proxy-authorization"];
     const out = request(
       {
         host: "127.0.0.1",
         port: url.port,
         method: req.method,
         path: url.pathname + url.search,
-        headers: { host: url.host, "x-seen-by-upstream": "1" }
+        headers: { ...passed, host: url.host, "x-seen-by-upstream": "1" }
       },
       up => {
         res.writeHead(up.statusCode ?? 502, up.headers);
@@ -146,15 +157,19 @@ function connectThrough(port: number, target: string): Promise<string> {
   );
 }
 
-function fetchViaProxy(proxyPort: number, absolute: string): Promise<{ status: number; body: string }> {
+function fetchViaProxy(
+  proxyPort: number,
+  absolute: string,
+  extraHeaders: Record<string, string> = {}
+): Promise<{ status: number; body: string; headers: IncomingMessage["headers"] }> {
   return new Promise((resolve, reject) => {
     const target = new URL(absolute);
     const req = request(
-      { host: "127.0.0.1", port: proxyPort, path: absolute, headers: { host: target.host } },
+      { host: "127.0.0.1", port: proxyPort, path: absolute, headers: { host: target.host, ...extraHeaders } },
       res => {
         let body = "";
         res.on("data", chunk => (body += chunk));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
       }
     );
     req.on("error", reject);
@@ -316,7 +331,7 @@ describe("EgressProxy", () => {
 
     const target = `origin.example:${origin.port}`;
     const result = await fetchViaProxy(forwarder.port, `http://${target}/x?k=v`);
-    expect(result).toEqual({ status: 200, body: "hello /x?k=v" });
+    expect(result).toMatchObject({ status: 200, body: "hello /x?k=v" });
     // The upstream saw the credential; the client never sent one.
     expect(upstream.seen).toEqual([{ kind: "request", auth: BASIC, target: `http://${target}/x?k=v` }]);
     expect(origin.headers[0]["x-seen-by-upstream"]).toBe("1");
@@ -373,7 +388,7 @@ describe("EgressProxy", () => {
     const transcript = await connectThrough(forwarder.port, loopback);
     expect(transcript).toContain("hello /y");
     const viaHttp = await fetchViaProxy(forwarder.port, `http://${loopback}/z`);
-    expect(viaHttp).toEqual({ status: 200, body: "hello /z" });
+    expect(viaHttp).toMatchObject({ status: 200, body: "hello /z" });
     expect(origin.headers.every(h => h["x-seen-by-upstream"] === undefined)).toBe(true);
 
     // A host marked direct is dialled by the forwarder itself (here an
@@ -398,7 +413,7 @@ describe("EgressProxy", () => {
       const transcript = await connectThrough(forwarder.port, `${host}:443`);
       expect(transcript).toContain("502 proxy_origin_unreachable");
       const plainHttp = await fetchViaProxy(forwarder.port, `http://${host}/mcp`);
-      expect(plainHttp).toEqual({ status: 502, body: "proxy_origin_unreachable" });
+      expect(plainHttp).toMatchObject({ status: 502, body: "proxy_origin_unreachable" });
     }
     expect(upstream.seen).toEqual([]);
     expect(forwarder.logs.every(line => line.endsWith(" direct"))).toBe(true);
@@ -434,7 +449,7 @@ describe("EgressProxy", () => {
     );
     expect(transcript).toContain("502 proxy_upstream_unreachable");
     const result = await fetchViaProxy(forwarder.port, "http://example.test/");
-    expect(result).toEqual({ status: 502, body: "proxy_upstream_unreachable" });
+    expect(result).toMatchObject({ status: 502, body: "proxy_upstream_unreachable" });
   });
 
   it("refuses malformed targets and non-absolute requests", async () => {
@@ -456,5 +471,59 @@ describe("EgressProxy", () => {
     });
     expect(relative).toEqual({ status: 400, body: "proxy_absolute_uri_required" });
     expect(upstream.seen).toEqual([]);
+  });
+
+  it("refuses a CONNECT port outside the TCP range instead of throwing from the dial", async () => {
+    const upstream = await startUpstream();
+    const forwarder = await startForwarder(`http://127.0.0.1:${upstream.port}`);
+    for (const target of ["127.0.0.1:70000", "127.0.0.1:0", "example.test:99999"]) {
+      const transcript = await rawExchange(forwarder.port, `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+      expect(transcript).toContain("400 proxy_bad_target");
+    }
+    expect(upstream.seen).toEqual([]);
+    // The forwarder is still alive to serve the next request.
+    const origin = await startOrigin();
+    expect((await connectThrough(forwarder.port, `origin.example:${origin.port}`)).includes("hello /y")).toBe(true);
+  });
+
+  it("drops hop-by-hop headers in both directions", async () => {
+    const origin = await startOrigin();
+    const upstream = await startUpstream();
+    const forwarder = await startForwarder(`http://127.0.0.1:${upstream.port}`);
+    const result = await fetchViaProxy(forwarder.port, `http://origin.example:${origin.port}/h`, {
+      connection: "keep-alive, x-hop-request",
+      "x-hop-request": "session-only",
+      te: "trailers",
+      "keep-alive": "timeout=5",
+      "x-end-to-end": "kept"
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toBe("hello /h");
+    // The origin saw the end-to-end field and none of the connection-bound ones.
+    const seen = origin.headers[0];
+    expect(seen["x-end-to-end"]).toBe("kept");
+    expect(seen["x-hop-request"]).toBeUndefined();
+    expect(seen.te).toBeUndefined();
+    expect(seen["keep-alive"]).toBeUndefined();
+    // And the origin's connection-bound response field never reached the session.
+    expect(result.headers["x-hop-response"]).toBeUndefined();
+    expect(result.headers["content-type"]).toBe("text/plain");
+  });
+});
+
+describe("endToEndHeaders", () => {
+  it("removes the hop-by-hop set and whatever Connection names, keeping the rest", () => {
+    expect(
+      endToEndHeaders({
+        host: "origin.example",
+        Connection: "close, X-Custom",
+        "x-custom": "1",
+        "transfer-encoding": "chunked",
+        upgrade: "websocket",
+        "proxy-authorization": "Basic x",
+        accept: ["text/html", "*/*"],
+        dropped: undefined
+      })
+    ).toEqual({ host: "origin.example", accept: ["text/html", "*/*"] });
   });
 });
