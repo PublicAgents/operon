@@ -216,6 +216,22 @@ function putFile(repo, path, content, message) {
 console.log("\ndeploy");
 const opsWorker = workerName("gatekeeper-ops");
 let deployed = false;
+// Rendered first, always: the configs are what wrangler is asked
+// through when there is no API token (the "does the ops Worker exist"
+// question below, and the secrets listing later), and rendering needs
+// only the D1 and KV resources the steps above just ensured.
+{
+  const rendered = spawnSync(
+    "node",
+    [join(CHASSIS_ROOT, "tools/fleet.mjs"), "render", "--project", manifest.project],
+    { cwd: ROOT, encoding: "utf8" }
+  );
+  if (rendered.status !== 0) {
+    needYou(`the configs did not render: ${(rendered.stderr || rendered.stdout).trim().slice(-300)}`);
+  } else {
+    present(`configs rendered into .operon/build/${manifest.project}`);
+  }
+}
 if (flag("--skip-deploy")) {
   console.log("  (skipped: --skip-deploy)");
 } else if (!zoneId && apiToken) {
@@ -225,14 +241,28 @@ if (flag("--skip-deploy")) {
   // it runs without the drain; every later one drains as usual. Only a
   // DEFINITE absence skips the drain: any doubt (a failed lookup, a
   // token without scope) drains, because the wrong guess here kills
-  // running wakes.
-  const first = (await workerExists(opsWorker)) === false;
-  const deploy = spawnSync(
-    "node",
-    [join(CHASSIS_ROOT, "tools/fleet.mjs"), "deploy", "--project", manifest.project, ...(first ? ["--no-drain"] : [])],
-    { cwd: ROOT, stdio: "inherit" }
-  );
-  if (deploy.status !== 0) {
+  // running wakes; on a fresh project that doubt is reported rather
+  // than guessed through.
+  const existence = await workerExists(opsWorker);
+  if (existence === "unknown") {
+    needYou(
+      `could not tell whether ${opsWorker} exists (wrangler or the API did not answer definitely); ` +
+        `re-run with CLOUDFLARE_API_TOKEN set, or deploy by hand: node operon/tools/fleet.mjs deploy` +
+        ` --project ${manifest.project}${" (add --no-drain ONLY for a first deploy)"}`
+    );
+  }
+  const first = existence === false;
+  const deploy =
+    existence === "unknown"
+      ? { status: 1 }
+      : spawnSync(
+          "node",
+          [join(CHASSIS_ROOT, "tools/fleet.mjs"), "deploy", "--project", manifest.project, ...(first ? ["--no-drain"] : [])],
+          { cwd: ROOT, stdio: "inherit" }
+        );
+  if (existence === "unknown") {
+    // Already reported above; nothing was attempted.
+  } else if (deploy.status !== 0) {
     needYou("the deploy failed (see above); fix and re-run bootstrap, it resumes where it is");
   } else {
     deployed = true;
@@ -255,12 +285,13 @@ async function workerExists(name) {
       return /not found|10007|\b404\b/i.test(String(error.message)) ? false : "unknown";
     }
   }
-  // Without the API, ask wrangler by way of the rendered config.
-  const config = join(ROOT, ".operon/build", manifest.project, "gatekeeper-ops.json");
+  // Without the API, ask wrangler by way of the rendered config (rendered
+  // before the deploy step, so it exists on a fresh project too).
+  const config = join(ROOT, ".operon/build", manifest.project, `${name.slice(manifest.workerPrefix.length + 1)}.json`);
   if (!existsSync(config)) return "unknown";
   const asked = spawnSync("npx", ["wrangler", "deployments", "list", "-c", config], { cwd: ROOT, encoding: "utf8" });
   if (asked.status === 0) return true;
-  return /not found|10007/i.test(`${asked.stdout}${asked.stderr}`) ? false : "unknown";
+  return /not found|10007|does not exist/i.test(`${asked.stdout}${asked.stderr}`) ? false : "unknown";
 }
 
 // ---- 6. email routing --------------------------------------------------
