@@ -177,6 +177,9 @@ describe("catalogRevision", () => {
     expect(
       await catalogRevision([{ ...TOOLS[0], title: "Search issues, renamed" }, TOOLS[1], TOOLS[2]])
     ).not.toBe(base);
+    // An absent title is relayed as the name, an empty one as empty:
+    // different offers, different revisions.
+    expect(await catalogRevision([{ ...TOOLS[0], title: "" }, TOOLS[1], TOOLS[2]])).not.toBe(base);
   });
 });
 

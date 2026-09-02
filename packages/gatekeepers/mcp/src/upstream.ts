@@ -153,8 +153,11 @@ export async function catalogRevision(tools: UpstreamTool[]): Promise<string> {
       .map(tool => ({
         name: tool.name,
         read: tool.annotations?.readOnlyHint === true,
-        title: tool.title ?? "",
-        description: tool.description ?? "",
+        // null for absent, so an omitted title or description and an
+        // explicitly empty one (which the proxy relays differently)
+        // are different revisions.
+        title: tool.title ?? null,
+        description: tool.description ?? null,
         inputSchema: tool.inputSchema ?? null,
         outputSchema: tool.outputSchema ?? null
       }))

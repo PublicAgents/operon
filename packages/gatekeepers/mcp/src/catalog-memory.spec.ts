@@ -70,6 +70,29 @@ describe("CatalogMemory", () => {
     expect(writes).toBe(2);
   });
 
+  it("remembers the newest revision started, not the one that finished last", async () => {
+    const memory = new CatalogMemory();
+    const releases = new Map<string, () => void>();
+    const slow = (tag: string) => () =>
+      new Promise<void>(resolve => {
+        releases.set(tag, resolve);
+      });
+    const older = memory.record("promoter", "livevariant", "aaaa", slow("a"));
+    const newer = memory.record("promoter", "livevariant", "bbbb", slow("b"));
+    releases.get("b")?.();
+    await newer;
+    releases.get("a")?.();
+    await older;
+    // The pair's memory is the newer revision; an "aaaa" sighting now is a change.
+    let writes = 0;
+    const count = async () => {
+      writes += 1;
+    };
+    expect(await memory.record("promoter", "livevariant", "bbbb", count)).toBe(false);
+    expect(await memory.record("promoter", "livevariant", "aaaa", count)).toBe(true);
+    expect(writes).toBe(1);
+  });
+
   it("keeps agents and servers apart", async () => {
     const memory = new CatalogMemory();
     const { state, append } = counter();

@@ -14,6 +14,9 @@ export class CatalogMemory {
   #seen = new Map<string, string>();
   /** Keyed by pair AND revision: two revisions of one pair in flight at once each keep their own. */
   #inFlight = new Map<string, Promise<void>>();
+  /** The most recently STARTED write per pair, so a slower, older one cannot overwrite a newer memory. */
+  #latest = new Map<string, number>();
+  #sequence = 0;
 
   /**
    * Write the revision's row through `append` unless it is the one
@@ -34,8 +37,13 @@ export class CatalogMemory {
       await current;
       return true;
     }
+    const started = ++this.#sequence;
+    this.#latest.set(key, started);
     const done = append().then(() => {
-      this.#seen.set(key, revision);
+      // Remember only if no later write for this pair began meanwhile:
+      // the ledger holds both rows in order, and the memory must hold
+      // the newest, not whichever append happened to finish last.
+      if (this.#latest.get(key) === started) this.#seen.set(key, revision);
     });
     this.#inFlight.set(flightKey, done);
     try {
