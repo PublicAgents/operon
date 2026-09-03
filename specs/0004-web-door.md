@@ -607,9 +607,6 @@ traffic (clone, doors, persist, notify) does not.
   send them through a proxy. They ride in `NO_PROXY` for clients that
   honour it, and the forwarder enforces the same rule for any client
   that does not.
-- The proxy table is declared to the fleet tooling as an optional
-  scheduler secret (spec 0006 §2), so bootstrap and `deploy --check`
-  list it beside the other credentials rather than forgetting it.
 - `CONNECT host:port` (every https URL) is tunnelled through the chosen
   upstream, or straight to the origin when direct, and the sockets
   spliced: TLS stays end to end between the session and the origin,
@@ -644,6 +641,100 @@ The platform egress audit (above) still sees every connection the
 forwarder makes; with a proxy configured, those connections address
 the proxy hosts, and the forwarder's own log is where the destination
 hosts are.
+
+### Hosts worth keeping direct
+
+A catch-all proxy carries everything the session fetches, and most of
+a wake's bytes are not pages: they are package installs, git clones,
+release downloads and the harness's own inference stream. None of
+that gains anything from a proxy, and a metered upstream bills it all.
+The table below is what a wake actually pulls, grouped by what
+generates it, so a deployment can route it `direct` deliberately
+rather than discover it on the invoice. Browser page traffic is out
+of scope here: it leaves through the browser Gatekeeper and is billed
+by the CDP provider regardless of this table.
+
+| Source | Hosts | Notes |
+|---|---|---|
+| npm, npx, pnpm, yarn | `registry.npmjs.org`, `registry.yarnpkg.com`, `get.pnpm.io` | Metadata and tarballs both come from the registry; `npx` pulls the same way. |
+| Native npm modules | `nodejs.org`, `github.com`, `objects.githubusercontent.com` | `node-gyp` fetches headers from nodejs.org; `prebuild-install` pulls binaries from GitHub releases. |
+| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The container has no browser by design (section 11), so these belong on the blocklist rather than a proxy. |
+| pip, uv | `pypi.org`, `files.pythonhosted.org`, `bootstrap.pypa.io`, `astral.sh` | Index on pypi.org, wheels on pythonhosted. uv fetches its own binary and standalone Pythons from GitHub releases. |
+| conda | `repo.anaconda.com`, `conda.anaconda.org` | Only if the agent installs it; large. |
+| Go | `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | |
+| Rust | `static.crates.io`, `index.crates.io`, `static.rust-lang.org` | Toolchain installs are hundreds of MB. |
+| Ruby | `rubygems.org`, `index.rubygems.org` | |
+| Debian | `deb.debian.org`, `security.debian.org` | The session runs unprivileged, so apt installs fail anyway. |
+| Git and GitHub | `github.com`, `api.github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `ghcr.io` | Clones, release downloads, raw file fetches, and `npm install github:owner/repo`. The state repo clone is entrypoint traffic and never passes the forwarder. |
+| Claude Code | `api.anthropic.com`, `claude.ai`, `statsig.anthropic.com`, `code.claude.com` | Inference and the WebFetch domain preflight, the OAuth flow, feature flags, docs. Inference is the largest steady stream in any wake. |
+| Codex | `api.openai.com`, `chatgpt.com`, `auth.openai.com`, `auth0.openai.com`, `platform.openai.com`, `developers.openai.com` | Inference with an API key (`api.`) or a ChatGPT subscription (`chatgpt.com`, a separate registrable domain); the device or browser OAuth flow and token refresh; docs. Updates and the native binary come from GitHub releases and npm, covered above. |
+| Model weights | `huggingface.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co` | |
+| Docker images | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | No Docker in the container, but a pull attempt still costs the manifest fetch. |
+| Cloudflare tooling | `api.cloudflare.com`, `workers.cloudflare.com` | `wrangler` runs. |
+| Script CDNs | `cdn.jsdelivr.net`, `unpkg.com`, `esm.sh`, `cdnjs.cloudflare.com` | |
+| Granted MCP servers | | Their virtual hosts are umbilical hosts, direct by derivation already. |
+
+Both harnesses honour `HTTPS_PROXY`, so without their entries the
+inference stream rides the catch-all: the single most expensive thing
+to proxy and the one with the least to gain from it.
+
+As a policy, everything above stays off the proxy and the browser
+downloads are blocked because the container can never use them:
+
+```yaml
+egress:
+  proxies:
+    general:
+      address: http://general.proxy.example:7777
+      credential: PROXY_GENERAL
+  proxy:
+    "*": general
+    # package registries
+    "*.npmjs.org": direct
+    registry.yarnpkg.com: direct
+    get.pnpm.io: direct
+    nodejs.org: direct
+    pypi.org: direct
+    "*.pythonhosted.org": direct
+    bootstrap.pypa.io: direct
+    astral.sh: direct
+    "*.anaconda.com": direct
+    "*.anaconda.org": direct
+    "*.golang.org": direct
+    "*.crates.io": direct
+    static.rust-lang.org: direct
+    "*.rubygems.org": direct
+    "*.debian.org": direct
+    # git and GitHub
+    github.com: direct
+    "*.github.com": direct
+    "*.githubusercontent.com": direct
+    ghcr.io: direct
+    # the harnesses
+    "*.anthropic.com": direct
+    claude.ai: direct
+    code.claude.com: direct
+    "*.openai.com": direct
+    chatgpt.com: direct
+    # large downloads and tooling
+    "*.huggingface.co": direct
+    "*.docker.io": direct
+    production.cloudflare.docker.com: direct
+    "*.cloudflare.com": direct
+    storage.googleapis.com: direct
+  blocklist:
+    - cdn.playwright.dev
+    - playwright.azureedge.net
+    - edgedl.me.gvt1.com
+```
+
+Two things to know when adapting it. `*.domain` covers the bare
+domain and its subdomains, so `*.anthropic.com` includes
+`api.anthropic.com` and `*.openai.com` covers every OpenAI host but
+`chatgpt.com`. And `storage.googleapis.com` serves both Go modules and
+Puppeteer's Chromium, so it is listed direct rather than blocked; a
+deployment that would rather block Puppeteer downloads too drops it
+from the direct list and accepts that Go installs pay proxy traffic.
 
 ## 9. Costs
 
