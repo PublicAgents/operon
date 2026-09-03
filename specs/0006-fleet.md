@@ -61,8 +61,10 @@ split inverts:
   forget one.
 - **The project owns `operon.yaml`**: zone, account id, worker name
   prefix, policy values (caps, currencies, hold ceiling, allowance
-  days), optional features (telegram), the agent list, and per-agent
-  settings (state repo, hosts, cadence, model, doors). Nothing else.
+  days), optional features (telegram), the outbound proxy table
+  (`egress:`, spec 0004 §8, credentials by placeholder only), the
+  agent list, and per-agent settings (state repo, hosts, cadence,
+  model, doors). Nothing else.
 - **The deploy renders**: templates plus manifest produce final
   configs in a build directory; deploy runs from there in the chassis
   deploy order (ops last). D1 bindings resolve by database NAME via

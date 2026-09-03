@@ -52,14 +52,10 @@ describe("requiredSecrets", () => {
   it("derives the outbound proxy credentials from the table's placeholders", () => {
     const withProxy = validateManifest({
       ...BASE,
-      policy: {
-        scheduler: {
-          EGRESS_PROXY: JSON.stringify({
-            "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-            "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
-            "*.registry.example": "direct"
-          })
-        }
+      egress: {
+        "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+        "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
+        "*.registry.example": "direct"
       }
     });
     const names = requiredSecrets(withProxy).map(r => `${r.worker}/${r.name}`);

@@ -219,9 +219,19 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe(
       JSON.stringify(["--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose"])
     );
-    // The outbound proxy table is a policy var: absent by default, rendered
-    // verbatim (placeholders and all, never a credential) when set.
+    // The outbound proxy table renders from the manifest's egress block:
+    // absent by default, placeholders and all (never a credential) when set.
     expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();
+    const egress = {
+      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+      "*.registry.example": "direct"
+    };
+    const withEgress = renderWorkers(validateManifest({ ...RAW, egress }), {
+      chassisDir: CHASSIS,
+      d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
+      siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+    }).find(worker => worker.key === "scheduler")?.config as Record<string, any>;
+    expect(JSON.parse(withEgress.vars.EGRESS_PROXY as string)).toEqual(egress);
     expect(scheduler.containers[0]).toMatchObject({
       class_name: "WakeContainer",
       image: `${CHASSIS}/packages/container/Dockerfile`,

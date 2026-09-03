@@ -45,7 +45,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   "google-analytics": ["GA_PROPERTY_ID"],
   mcp: ["MCP_PORTAL_URL"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
-  scheduler: ["HARNESS_EXTRA_ARGS", "EGRESS_PROXY"],
+  scheduler: ["HARNESS_EXTRA_ARGS"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
@@ -80,7 +80,38 @@ export interface FleetManifest {
   };
   containers: { maxInstances: number };
   policy: Record<string, Record<string, string>>;
+  /**
+   * The mind session's outbound proxy table (spec 0004 §8): host pattern
+   * to proxy address or "direct", credentials by placeholder only.
+   * Absent means everything direct. Rendered into the scheduler's
+   * EGRESS_PROXY var; the credentials are scheduler secrets.
+   */
+  egress?: Record<string, string>;
   roster: Roster;
+}
+
+/**
+ * The egress block, checked with the chassis grammar so a bad pattern,
+ * a malformed address, or a LITERAL credential fails here, by name,
+ * before it can be rendered or committed. A key starting with `*` must
+ * be quoted in YAML (an unquoted one is an alias), which the YAML parser
+ * reports before this runs.
+ */
+function validateEgress(raw: unknown): Record<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  const record = requireRecord(raw, "egress");
+  const egress: Record<string, string> = {};
+  for (const [pattern, value] of Object.entries(record)) {
+    if (typeof value !== "string") fail(`egress.${pattern}`, 'must be a proxy address or "direct"');
+    egress[pattern] = value;
+  }
+  try {
+    parseEgressTable(JSON.stringify(egress));
+  } catch (error) {
+    if (error instanceof EgressTableError) fail("egress", error.message);
+    throw error;
+  }
+  return egress;
 }
 
 function requireRecord(value: unknown, path: string): Record<string, unknown> {
@@ -112,18 +143,6 @@ function validatePolicy(raw: unknown): Record<string, Record<string, string>> {
       }
       if (typeof value !== "string") {
         fail(`policy.${worker}.${key}`, "must be a string (wrangler vars are strings; quote numbers)");
-      }
-      // The proxy table is committed configuration: its grammar (spec
-      // 0004 §8) admits credential placeholders and refuses credential
-      // values, checked here so a pasted secret fails validation rather
-      // than landing in a commit.
-      if (worker === "scheduler" && key === "EGRESS_PROXY") {
-        try {
-          parseEgressTable(value);
-        } catch (error) {
-          if (error instanceof EgressTableError) fail(`policy.${worker}.${key}`, error.message);
-          throw error;
-        }
       }
       out[key] = value;
     }
@@ -201,6 +220,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   }
 
   const policy = validatePolicy(root.policy);
+  const egress = validateEgress(root.egress);
 
   // The control plane's enrollment (spec 0006 §9): which OTHER projects
   // this project's ops worker binds to, and the default. Bindings are
@@ -281,6 +301,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     resources: { d1Name, ...(siteStoreKvId !== undefined ? { siteStoreKvId } : {}) },
     containers: { maxInstances },
     policy,
+    ...(egress !== undefined ? { egress } : {}),
     roster
   };
 }

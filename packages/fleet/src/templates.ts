@@ -421,7 +421,10 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // the umbilical, and the Gatekeepers behind them have no hostname.
         vars: {
           ...policyVars(manifest, "scheduler"),
-          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {})
+          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {}),
+          // The outbound proxy table (spec 0004 §8), placeholders and all:
+          // the manifest carries no credential, so neither does the var.
+          ...(manifest.egress !== undefined ? { EGRESS_PROXY: JSON.stringify(manifest.egress) } : {})
         }
       }
     },

@@ -48,21 +48,47 @@ describe("validateManifest", () => {
     );
   });
 
-  it("accepts an outbound proxy table with placeholders and refuses one with a credential in it", () => {
-    const table = JSON.stringify({
+  it("accepts an egress block with placeholders and refuses one with a credential in it", () => {
+    const egress = {
       "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
       "*.registry.example": "direct"
+    };
+    expect(validateManifest({ ...BASE, egress }).egress).toEqual(egress);
+    expect(validateManifest(BASE).egress).toBeUndefined();
+    expect(() =>
+      validateManifest({ ...BASE, egress: { "*": "http://user:secret@general.proxy.example:7777" } })
+    ).toThrow(/egress egress_table_literal_credential/);
+    expect(() => validateManifest({ ...BASE, egress: { "bad host": "direct" } })).toThrow(/egress egress_table_invalid/);
+    expect(() => validateManifest({ ...BASE, egress: { "*": 7 } })).toThrow(/egress\.\* must be a proxy address/);
+    // The string var form is gone: EGRESS_PROXY is not a policy var.
+    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "{}" } } })).toThrow(/not a known var/);
+  });
+
+  it("reads the egress block from YAML, quoted wildcard keys included", () => {
+    const manifest = parseManifest(
+      [
+        "project: demo",
+        "accountId: 85c7962b4a17a841ef0689e0e7c2a050",
+        "zone: demo-colony.com",
+        "egress:",
+        '  "*": http://${PROXY_GENERAL}@general.proxy.example:7777',
+        "  docs.example: http://${PROXY_DOCS}@other.proxy.example:8888",
+        '  "*.registry.example": direct',
+        "agents:",
+        "  - id: scout",
+        "    stateRepo: demo/scout-state",
+        '    cadence: "0 6 * * *"',
+        "    harness: claude-code",
+        "    model: claude-fable-5",
+        '    hosts: ["@"]',
+        "    enabled: true"
+      ].join("\n")
+    );
+    expect(manifest.egress).toEqual({
+      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+      "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
+      "*.registry.example": "direct"
     });
-    expect(validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: table } } }).policy.scheduler.EGRESS_PROXY).toBe(
-      table
-    );
-    const literal = JSON.stringify({ "*": "http://user:secret@general.proxy.example:7777" });
-    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: literal } } })).toThrow(
-      /policy\.scheduler\.EGRESS_PROXY egress_table_literal_credential/
-    );
-    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "not json" } } })).toThrow(
-      /policy\.scheduler\.EGRESS_PROXY egress_table_invalid/
-    );
   });
 
   it("delegates roster validation to the chassis parser", () => {
