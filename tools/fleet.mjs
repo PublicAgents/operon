@@ -313,6 +313,11 @@ async function waitForRollout({ name, before, startedAt, configPath }) {
   const deadline = Date.now() + ROLLOUT_TIMEOUT_MS;
   const appearanceDeadline = startedAt + ROLLOUT_APPEARANCE_MS;
   let quietPolls = 0;
+  // Whether this wait has SEEN the instances roll (a state other than
+  // ready, or instances settling): the platform does not always bump
+  // the version when it rolls an image, so the version alone cannot be
+  // the sign the roll happened.
+  let sawRolling = false;
   for (;;) {
     const app = listContainerApps(configPath).get(name);
     if (!app) throw new Error(`container application ${name} is not listed after its deploy`);
@@ -340,14 +345,16 @@ async function waitForRollout({ name, before, startedAt, configPath }) {
       console.log(`  ${name}: the record is untouched; this deploy rolled nothing`);
       return;
     }
-    // Completion needs the VERSION to have moved: the record is
-    // touched and the listing still reads "ready" for ~30 s after the
-    // deploy returns, before the instances begin to roll, and two
-    // quiet polls fit inside that gap. The version moves mid-rollout,
-    // so "version moved, ready, nothing settling" is only ever true
-    // once the roll is over.
-    const versionMoved = app.version !== before.version;
-    quietPolls = versionMoved && ready && settling === 0 ? quietPolls + 1 : 0;
+    // Completion needs proof the roll HAPPENED, not only that the record
+    // was touched: the listing still reads "ready" for ~30 s after the
+    // deploy returns, before the instances begin to roll, and two quiet
+    // polls fit inside that gap. Proof is any of: the version moved
+    // (bumped mid-roll, when the platform bumps it), the image moved
+    // (a new image is what a roll installs), or this wait watched the
+    // instances roll. Then "ready, nothing settling" twice is the end.
+    if (!ready || settling > 0) sawRolling = true;
+    const rolled = app.version !== before.version || app.image !== before.image || sawRolling;
+    quietPolls = rolled && ready && settling === 0 ? quietPolls + 1 : 0;
     const done = quietPolls >= 2;
   
     if (done) {
