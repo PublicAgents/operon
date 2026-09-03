@@ -45,7 +45,32 @@ export const LOCAL_BROWSER_SERVER = "playwright";
  * storage state, no saved session), output lands outside the repo,
  * and every request rides the wake's forwarder when one runs.
  */
-export function localBrowserEntry(proxyUrl?: string): McpEntry {
+/**
+ * The user agent a desktop Chrome on a Mac sends: the frozen platform
+ * token Chrome has used since 2021 and a reduced version, so only the
+ * major carries information. Headless Chrome would otherwise announce
+ * itself as HeadlessChrome on Linux, which is a fingerprint, not a
+ * fact worth broadcasting.
+ */
+export function macChromeUserAgent(chromeMajor: number): string {
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+}
+
+/** "Google Chrome 151.0.7922.173" -> 151; undefined when unreadable. */
+export function chromeMajorFrom(versionLine: string): number | undefined {
+  const match = /(\d+)\.\d+\.\d+\.\d+/.exec(versionLine);
+  return match ? Number(match[1]) : undefined;
+}
+
+export interface LocalBrowserOptions {
+  /** The wake's forwarder, when one runs. */
+  proxyUrl?: string;
+  /** The installed Chrome's major version, for the user agent; absent leaves Chrome's own. */
+  chromeMajor?: number;
+}
+
+export function localBrowserEntry(options: LocalBrowserOptions = {}): McpEntry {
+  const { proxyUrl, chromeMajor } = options;
   return {
     command: "playwright-mcp",
     args: [
@@ -60,6 +85,7 @@ export function localBrowserEntry(proxyUrl?: string): McpEntry {
       "1280x800",
       "--output-dir",
       LOCAL_BROWSER_OUTPUT_DIR,
+      ...(chromeMajor !== undefined ? ["--user-agent", macChromeUserAgent(chromeMajor)] : []),
       ...(proxyUrl ? ["--proxy-server", proxyUrl] : [])
     ]
   };
@@ -68,8 +94,8 @@ export function localBrowserEntry(proxyUrl?: string): McpEntry {
 export interface MergeOptions {
   porchUrl?: string;
   nonce?: string;
-  /** Stage the local browser; proxyUrl is the wake's forwarder when one runs. */
-  localBrowser?: { proxyUrl?: string };
+  /** Stage the local browser (spec 0004 §9). */
+  localBrowser?: LocalBrowserOptions;
 }
 
 export function mergedMcpConfig(servers: StagedMcpServer[], options: MergeOptions = {}): MergedMcpConfig {
@@ -84,7 +110,7 @@ export function mergedMcpConfig(servers: StagedMcpServer[], options: MergeOption
     }
   }
   if (options.localBrowser) {
-    mcpServers[LOCAL_BROWSER_SERVER] = localBrowserEntry(options.localBrowser.proxyUrl);
+    mcpServers[LOCAL_BROWSER_SERVER] = localBrowserEntry(options.localBrowser);
   }
 
   for (const server of servers) {

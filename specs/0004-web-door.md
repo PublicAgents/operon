@@ -767,6 +767,9 @@ it as a stdio server, so the flags are the chassis's invariants:
   direct, as every other client does.
 - `--output-dir /tmp/operon-browser`: screenshots and downloads land
   outside the state repo, so `git add -A` never commits them.
+- `--user-agent`: a desktop Chrome on a Mac, with the installed Chrome's
+  own major version (read at staging). Headless Chrome would otherwise
+  announce HeadlessChrome on Linux, a fingerprint with no purpose.
 
 **The rule, stated to the mind in its living help:** the local browser
 is for UNAUTHENTICATED browsing and is used FIRST, for anything that
