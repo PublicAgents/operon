@@ -33,9 +33,52 @@ function parseLine(line: string): Record<string, unknown> | undefined {
   }
 }
 
-/** A line worth retaining for usage: cheap test, no parse. */
+/** A line worth looking at for usage: cheap test, no parse. */
 export function isUsageLine(line: string): boolean {
   return line.startsWith("{") && line.includes('"usage"');
+}
+
+/**
+ * Usage folded as the stream passes (spec 0011 §2): every line is
+ * offered, the accumulator keeps only what it needs (Claude Code: the
+ * latest result event; Codex: running sums), so a wake of any length
+ * is summed in full with bounded memory.
+ */
+export interface UsageAccumulator {
+  add(line: string): void;
+  finish(): WakeUsage | undefined;
+}
+
+export function claudeUsageAccumulator(): UsageAccumulator {
+  let last: string | undefined;
+  return {
+    add(line) {
+      if (isUsageLine(line) && line.includes('"result"')) last = line;
+    },
+    finish() {
+      return last === undefined ? undefined : claudeUsageFrom([last]);
+    }
+  };
+}
+
+export function codexUsageAccumulator(): UsageAccumulator {
+  let turns = 0;
+  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  return {
+    add(line) {
+      if (!isUsageLine(line)) return;
+      const event = parseLine(line);
+      if (!event || event.type !== "turn.completed") return;
+      const usage = (event.usage ?? {}) as Record<string, unknown>;
+      turns += 1;
+      total.inputTokens += num(usage.input_tokens);
+      total.outputTokens += num(usage.output_tokens);
+      total.cacheReadTokens += num(usage.cached_input_tokens);
+    },
+    finish() {
+      return turns > 0 ? { ...total, turns } : undefined;
+    }
+  };
 }
 
 /**
@@ -70,18 +113,9 @@ export function claudeUsageFrom(lines: string[]): WakeUsage | undefined {
  * by Codex, so it is recorded as cache reads and not added twice.
  */
 export function codexUsageFrom(lines: string[]): WakeUsage | undefined {
-  let turns = 0;
-  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-  for (const line of lines) {
-    const event = parseLine(line);
-    if (!event || event.type !== "turn.completed") continue;
-    const usage = (event.usage ?? {}) as Record<string, unknown>;
-    turns += 1;
-    total.inputTokens += num(usage.input_tokens);
-    total.outputTokens += num(usage.output_tokens);
-    total.cacheReadTokens += num(usage.cached_input_tokens);
-  }
-  return turns > 0 ? { ...total, turns } : undefined;
+  const acc = codexUsageAccumulator();
+  for (const line of lines) acc.add(line);
+  return acc.finish();
 }
 
 /** The summary's phrasing, shared by the notify and the log. */

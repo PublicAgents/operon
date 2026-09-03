@@ -303,7 +303,13 @@ export async function recordOtlp(
 
 export type TraceKind = "spans" | "events" | "metrics";
 
-/** One wake's telemetry of one kind, in time order, paginated by row id. */
+/**
+ * One wake's telemetry of one kind, paginated by row id and ordered by
+ * it too: insertion order is what the cursor advances through, and a
+ * time-ordered page with an id cursor would skip rows whose timestamps
+ * sort after a later-inserted one. Callers order by time on their side
+ * when they want a timeline; the id is the pagination key only.
+ */
 export async function queryTrace(d1: D1Database, wakeId: string, kind: TraceKind, afterId = 0, limit = 200) {
   const db = drizzle(d1);
   const take = bounded(limit);
@@ -312,7 +318,7 @@ export async function queryTrace(d1: D1Database, wakeId: string, kind: TraceKind
       .select()
       .from(otelSpans)
       .where(and(eq(otelSpans.wakeId, wakeId), sql`${otelSpans.id} > ${afterId}`))
-      .orderBy(asc(otelSpans.startMs), asc(otelSpans.id))
+      .orderBy(asc(otelSpans.id))
       .limit(take);
   }
   if (kind === "metrics") {
@@ -320,14 +326,14 @@ export async function queryTrace(d1: D1Database, wakeId: string, kind: TraceKind
       .select()
       .from(otelMetrics)
       .where(and(eq(otelMetrics.wakeId, wakeId), sql`${otelMetrics.id} > ${afterId}`))
-      .orderBy(asc(otelMetrics.atMs), asc(otelMetrics.id))
+      .orderBy(asc(otelMetrics.id))
       .limit(take);
   }
   return db
     .select()
     .from(otelEvents)
     .where(and(eq(otelEvents.wakeId, wakeId), sql`${otelEvents.id} > ${afterId}`))
-    .orderBy(asc(otelEvents.atMs), asc(otelEvents.id))
+    .orderBy(asc(otelEvents.id))
     .limit(take);
 }
 

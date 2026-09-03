@@ -16,7 +16,7 @@ import type { AskLimits } from "./skills.js";
 import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 import { CredentialWatch } from "./credential-watch.js";
-import { describeUsage, isUsageLine, type WakeUsage } from "./usage.js";
+import { describeUsage, type WakeUsage } from "./usage.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -773,18 +773,16 @@ async function runSession(
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
   }
-  // The usage lines of the harness's stream (spec 0011 §2), retained
-  // as they pass: whole lines only, a bounded number, the cheap test
-  // first so a chatty wake costs nothing to watch.
-  const usageLines: string[] = [];
+  // The usage in the harness's stream (spec 0011 §2), folded as it
+  // passes: whole lines only, and the accumulator keeps sums rather
+  // than lines, so a wake of any length is counted in full.
+  const usage = adapter.usageAccumulator();
   let carry = "";
   const retain = (text: string) => {
     const combined = carry + text;
     const lines = combined.split("\n");
     carry = lines.pop() ?? "";
-    for (const line of lines) {
-      if (isUsageLine(line) && usageLines.length < MAX_USAGE_LINES) usageLines.push(line);
-    }
+    for (const line of lines) usage.add(line);
   };
   const exit = await runStreaming(spec.command, [...spec.args, ...staged.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
@@ -810,12 +808,9 @@ async function runSession(
     },
     ...ids
   });
-  if (carry && isUsageLine(carry) && usageLines.length < MAX_USAGE_LINES) usageLines.push(carry);
-  return { exit, usage: adapter.usageFrom(usageLines) };
+  if (carry) usage.add(carry);
+  return { exit, usage: usage.finish() };
 }
-
-/** Usage lines retained per wake; a Claude result line and hundreds of Codex turns fit with room. */
-const MAX_USAGE_LINES = 1000;
 
 /**
  * Record what the wake spent through the chronicle door (spec 0011

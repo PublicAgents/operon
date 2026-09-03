@@ -6,7 +6,7 @@
  */
 
 import type { MergedMcpConfig } from "../mcp-config.js";
-import type { WakeUsage } from "../usage.js";
+import type { UsageAccumulator, WakeUsage } from "../usage.js";
 
 export interface CommandSpec {
   command: string;
@@ -78,7 +78,9 @@ export interface HarnessAdapter {
    * token in it.
    */
   secretsIn(credential: string): string[];
-  /** What the wake spent, read from the retained stream lines (spec 0011 §2). */
+  /** What the wake spent, folded from the stream as it passes (spec 0011 §2). */
+  usageAccumulator(): UsageAccumulator;
+  /** The same over lines already in hand (tests, replays). */
   usageFrom(lines: string[]): WakeUsage | undefined;
   /** A cheap invocation whose stdout names the model that actually answered. */
   probe(model: string, credential: string): CommandSpec;

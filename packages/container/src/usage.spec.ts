@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeUsageFrom, codexUsageFrom, describeUsage, isUsageLine } from "./usage.js";
+import { claudeUsageAccumulator, claudeUsageFrom, codexUsageAccumulator, codexUsageFrom, describeUsage, isUsageLine } from "./usage.js";
 
 describe("claudeUsageFrom (spec 0011)", () => {
   it("reads the last result event's totals, cost, turns, duration and model", () => {
@@ -70,5 +70,21 @@ describe("isUsageLine and describeUsage", () => {
       describeUsage({ inputTokens: 412_301, outputTokens: 3800, cacheReadTokens: 1_200_000, cacheWriteTokens: 0, costUsd: 1.234, turns: 41 })
     ).toBe("412k in, 3800 out, 1200k cached, $1.23, 41 turns");
     expect(describeUsage({ inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 })).toBe("10 in, 2 out");
+  });
+});
+
+describe("the accumulators fold a stream of any length", () => {
+  it("sums thousands of Codex turns and keeps only the last Claude result", () => {
+    const codex = codexUsageAccumulator();
+    for (let i = 0; i < 5000; i += 1) {
+      codex.add(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 1 } }));
+      codex.add("noise line");
+    }
+    expect(codex.finish()).toEqual({ inputTokens: 50_000, outputTokens: 5000, cacheReadTokens: 20_000, cacheWriteTokens: 0, turns: 5000 });
+    const claude = claudeUsageAccumulator();
+    claude.add(JSON.stringify({ type: "result", usage: { input_tokens: 1, output_tokens: 1 } }));
+    claude.add(JSON.stringify({ type: "result", usage: { input_tokens: 7, output_tokens: 3 } }));
+    expect(claude.finish()).toMatchObject({ inputTokens: 7, outputTokens: 3 });
+    expect(claudeUsageAccumulator().finish()).toBeUndefined();
   });
 });

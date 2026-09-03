@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { chassisHooks, type HarnessAdapter } from "./types.js";
-import { claudeUsageFrom } from "../usage.js";
+import { claudeUsageAccumulator, claudeUsageFrom } from "../usage.js";
 
 /**
  * The reference adapter: headless Claude Code on subscription auth.
@@ -122,6 +122,10 @@ export const claudeCode: HarnessAdapter = {
 
   secretsIn(credential) {
     return [credential];
+  },
+
+  usageAccumulator() {
+    return claudeUsageAccumulator();
   },
 
   usageFrom(lines) {

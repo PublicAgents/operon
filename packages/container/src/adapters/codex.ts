@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { chassisHooks, CredentialShapeError, type HarnessAdapter, type StageInput } from "./types.js";
 import { renderToml, type TomlTable } from "./toml.js";
-import { codexUsageFrom } from "../usage.js";
+import { codexUsageAccumulator, codexUsageFrom } from "../usage.js";
 
 /**
  * Codex CLI adapter (spec 0010 §4): the second harness, chassis spec
@@ -172,6 +172,10 @@ export const codex: HarnessAdapter = {
       .filter(([key, value]) => key !== "account_id" && typeof value === "string" && value.length > 0)
       .map(([, value]) => value as string);
     return [credential, ...tokens];
+  },
+
+  usageAccumulator() {
+    return codexUsageAccumulator();
   },
 
   usageFrom(lines) {

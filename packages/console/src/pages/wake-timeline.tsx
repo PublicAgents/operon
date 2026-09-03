@@ -46,16 +46,18 @@ export function WakeTimeline({ wakeId }: { wakeId: string }) {
   const events = useTool<{ rows: TraceEventRow[] }>("wake_trace", { wakeId, kind: "events", limit: 500 }, { pollMs: 10_000 });
   const spans = useTool<{ rows: TraceSpanRow[] }>("wake_trace", { wakeId, kind: "spans", limit: 500 }, { pollMs: 10_000 });
   const [more, setMore] = useState<{ events: TraceEventRow[]; spans: TraceSpanRow[] }>({ events: [], spans: [] });
-  const allEvents = [...(events.data?.rows ?? []), ...more.events];
-  const allSpans = [...(spans.data?.rows ?? []), ...more.spans];
+  // Pages come in insertion order (the cursor's order); the timeline
+  // is shown in time order.
+  const allEvents = [...(events.data?.rows ?? []), ...more.events].sort((a, b) => a.atMs - b.atMs || a.id - b.id);
+  const allSpans = [...(spans.data?.rows ?? []), ...more.spans].sort((a, b) => a.startMs - b.startMs || a.id - b.id);
 
   async function loadMore() {
     if (kind === "events") {
-      const last = allEvents[allEvents.length - 1]?.id ?? 0;
+      const last = Math.max(0, ...allEvents.map(row => row.id));
       const page = await callTool<{ rows: TraceEventRow[] }>("wake_trace", { wakeId, kind: "events", after: last, limit: 500 });
       setMore(current => ({ ...current, events: [...current.events, ...page.rows] }));
     } else {
-      const last = allSpans[allSpans.length - 1]?.id ?? 0;
+      const last = Math.max(0, ...allSpans.map(row => row.id));
       const page = await callTool<{ rows: TraceSpanRow[] }>("wake_trace", { wakeId, kind: "spans", after: last, limit: 500 });
       setMore(current => ({ ...current, spans: [...current.spans, ...page.rows] }));
     }
