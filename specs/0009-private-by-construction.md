@@ -84,7 +84,10 @@ by hand and its AUD pasted into the manifest. Now the tools own it:
 - The CI token therefore carries, beyond Workers Scripts:Edit and the
   D1 and KV permissions, `Access: Apps and Policies Write` and
   `Access: Service Tokens Read`. `Access: Service Tokens Write` is
-  needed only where bootstrap runs.
+  needed only where bootstrap runs, and `Access: Organizations,
+  Identity Providers, and Groups Read` only where the manifest has no
+  `access.teamDomain` yet (bootstrap reads the organization once and
+  writes the domain into the manifest; deploy reads it from there).
 
 ## 4. What does not change
 
