@@ -279,3 +279,19 @@ describe("the local browser flag (spec 0004 §9)", () => {
     expect(() => parse("yes")).toThrow(/localBrowser.*boolean/);
   });
 });
+
+describe("chassis MCP server names (spec 0004 §3, §9)", () => {
+  it("refuses a colony server named after a chassis-staged one, by name, at check time", () => {
+    const withMcp = (name: string) =>
+      parseRoster(
+        JSON.stringify({
+          zone: "demo.example",
+          mcp: { [name]: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" } },
+          agents: [{ id: "a", stateRepo: "o/r", cadence: "0 6 * * *", harness: "claude-code", model: "m", enabled: true, hosts: ["@"] }]
+        })
+      );
+    expect(() => withMcp("playwright")).toThrow(/mcp\.playwright.*chassis server name/);
+    expect(() => withMcp("browser")).toThrow(/mcp\.browser.*reserved/);
+    expect(Object.keys(withMcp("docs").mcp ?? {})).toEqual(["docs"]);
+  });
+});

@@ -286,12 +286,24 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
   }
 }
 
+/**
+ * MCP server names the chassis stages itself: the web door's browser
+ * (spec 0004 §3) and the local browser (spec 0004 §9). A colony server
+ * under one of these would be refused at wake start, after the
+ * container was already up; refusing it here keeps the failure at
+ * check time, by name.
+ */
+export const RESERVED_MCP_NAMES = ["browser", "playwright"] as const;
+
 function parseMcpDefs(value: unknown): Record<string, McpServerDef> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail("mcp", "must be an object of server definitions");
   }
   const defs: Record<string, McpServerDef> = {};
   for (const [name, def] of Object.entries(value as Record<string, unknown>)) {
+    if ((RESERVED_MCP_NAMES as readonly string[]).includes(name)) {
+      fail(`mcp.${name}`, `is a chassis server name (reserved: ${RESERVED_MCP_NAMES.join(", ")})`);
+    }
     defs[name] = parseMcpDef(name, def);
   }
   // Portal prefix grammars are ambiguous when one server id prefixes

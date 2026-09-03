@@ -115,8 +115,10 @@ export function mergedMcpConfig(servers: StagedMcpServer[], options: MergeOption
 
   for (const server of servers) {
     if (server.name in mcpServers) {
-      // A colony that names a server "browser" would otherwise silently
-      // replace the browser door with something else.
+      // A colony that names a server "browser" or "playwright" would
+      // otherwise silently replace a chassis browser; the roster refuses
+      // both names at check time (core RESERVED_MCP_NAMES), this is the
+      // last line.
       throw new McpConfigError(`"${server.name}" collides with a chassis MCP server`);
     }
     if (server.type === "stdio") {

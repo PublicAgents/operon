@@ -6,7 +6,8 @@ export {
   type RosterAgent,
   type McpServerDef,
   type GithubGrants,
-  type HarnessPin
+  type HarnessPin,
+  RESERVED_MCP_NAMES
 } from "./roster.js";
 export { KNOWN_HARNESSES, isHarness, type Harness, type MindPin } from "./harness.js";
 export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
