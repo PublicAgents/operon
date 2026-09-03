@@ -58,7 +58,12 @@ describe("claude-code adapter", () => {
       "--model",
       "claude-sonnet-5",
       "--fallback-model",
-      "claude-haiku-4-5"
+      "claude-haiku-4-5",
+      "--permission-mode",
+      "bypassPermissions",
+      "--output-format",
+      "stream-json",
+      "--verbose"
     ]);
     expect(spec.env).toEqual({ ...CLAUDE_LOCKDOWN_ENV, CLAUDE_CODE_OAUTH_TOKEN: "tok" });
     expect(spec.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false");
@@ -175,7 +180,7 @@ describe("codex adapter (spec 0010 §4)", () => {
     expect(codex.credentialFile?.("sk-proj-abc")).toBeUndefined();
   });
 
-  it("runs codex exec with the pinned model, no trust, no persistence, and no fallback flag", () => {
+  it("runs codex exec unattended with the pinned model, no trust, no persistence, and no fallback flag", () => {
     const spec = codex.session("do the wake", "gpt-5.5", login, "gpt-5.5-mini");
     expect(spec.command).toBe("codex");
     expect(spec.args).toEqual([
@@ -186,11 +191,15 @@ describe("codex adapter (spec 0010 §4)", () => {
       "--skip-git-repo-check",
       "--ephemeral",
       "--color",
-      "never"
+      "never",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--json"
     ]);
     expect(spec.env).toEqual({});
     const probe = codex.probe("gpt-5.5", login);
     expect(probe.args).toContain("--sandbox");
+    expect(probe.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(probe.args).not.toContain("--json");
     expect(probe.args.join(" ")).toMatch(/model id/);
   });
 

@@ -216,12 +216,10 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.vars.NOTIFY_URL).toBeUndefined();
     expect(scheduler.vars.PERSIST_URL).toBeUndefined();
     expect(scheduler.vars.PR_REPOS).toContain("livevariant/operon");
-    expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe(
-      JSON.stringify(["--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose"])
-    );
-    expect(scheduler.vars.HARNESS_EXTRA_ARGS_CODEX).toBe(
-      JSON.stringify(["--dangerously-bypass-approvals-and-sandbox", "--json"])
-    );
+    // The autonomy flags are the adapters' own (spec 0010 §2); the
+    // policy vars exist for extras and start empty.
+    expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe("[]");
+    expect(scheduler.vars.HARNESS_EXTRA_ARGS_CODEX).toBe("[]");
     // The outbound proxy table renders from the manifest's egress block:
     // absent by default, placeholders and all (never a credential) when set.
     expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();

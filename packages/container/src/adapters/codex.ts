@@ -20,6 +20,13 @@ const PROBE_QUESTION = "Reply with only the exact model id you are running as, n
 /** Flags every codex exec carries: the state dir is not a "trusted" project, nothing persists. */
 const CODEX_INVARIANT_ARGS = ["--skip-git-repo-check", "--ephemeral", "--color", "never"];
 
+/**
+ * Unattended, streamed (spec 0010 §2): the container is the sandbox, as
+ * bypassPermissions says for Claude Code, and the JSONL event stream
+ * is the transcript. Part of the command, not an operator setting.
+ */
+export const CODEX_SESSION_ARGS = ["--dangerously-bypass-approvals-and-sandbox", "--json"];
+
 export const CODEX_AUTH_FILE = "auth.json";
 
 export function codexHome(home: string): string {
@@ -161,7 +168,7 @@ export const codex: HarnessAdapter = {
   session(prompt, model, credential) {
     return {
       command: "codex",
-      args: ["exec", prompt, "-m", model, ...CODEX_INVARIANT_ARGS],
+      args: ["exec", prompt, "-m", model, ...CODEX_INVARIANT_ARGS, ...CODEX_SESSION_ARGS],
       env: credentialEnv(credential)
     };
   }
