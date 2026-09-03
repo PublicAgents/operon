@@ -48,9 +48,7 @@ export const ENV = {
   xUrl: "OPERON_X_URL",
   xToken: "OPERON_X_TOKEN",
   webUrl: "OPERON_WEB_URL",
-  webToken: "OPERON_WEB_TOKEN",
-  mindUrl: "OPERON_MIND_URL",
-  mindToken: "OPERON_MIND_TOKEN"
+  webToken: "OPERON_WEB_TOKEN"
 } as const;
 
 export interface WakeConfig {
@@ -120,9 +118,6 @@ export interface WakeConfig {
   /** Web door (spec 0004): the browser relay endpoint + per-wake nonce. */
   webUrl?: string;
   webToken?: string;
-  /** The mind door (spec 0010 §5): where a refreshed file credential is relayed; absent means no relay. */
-  mindUrl?: string;
-  mindToken?: string;
   /** Doors the operator closed for this wake (spec 0006 §7): named in the help, not merely unwired. */
   disabledDoors: string[];
 }
@@ -283,8 +278,6 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     xToken: env[ENV.xToken],
     webUrl: env[ENV.webUrl],
     webToken: env[ENV.webToken],
-    mindUrl: env[ENV.mindUrl],
-    mindToken: env[ENV.mindToken],
     disabledDoors: parseDisabledDoors(env[ENV.disabledDoors])
   };
 }

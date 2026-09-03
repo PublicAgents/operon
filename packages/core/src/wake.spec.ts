@@ -24,13 +24,4 @@ describe("wakeEnv (spec 0010 §4)", () => {
     expect(env[WAKE_ENV.model]).toBe("gpt-5.5");
     expect(env[WAKE_ENV.fallbackModel]).toBeUndefined();
   });
-
-  it("carries the mind door only when given", () => {
-    const init = { wakeId: "w", trigger: "cron" as const, agent, mind: { harness: "claude-code" as const, model: "m" } };
-    const secrets = { githubToken: "g", mindCredential: "c" };
-    expect(wakeEnv(init, secrets)[WAKE_ENV.mindUrl]).toBeUndefined();
-    const env = wakeEnv(init, secrets, { mindUrl: "http://mind.operon.internal/credential", mindToken: "n" });
-    expect(env[WAKE_ENV.mindUrl]).toBe("http://mind.operon.internal/credential");
-    expect(env[WAKE_ENV.mindToken]).toBe("n");
-  });
 });

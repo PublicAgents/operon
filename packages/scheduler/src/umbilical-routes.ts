@@ -90,17 +90,9 @@ export function doorHost(door: string): string {
   return `${door}${INTERNAL_SUFFIX}`;
 }
 
-/**
- * The mind door (spec 0010 §5) is handled by the router itself, not
- * forwarded: a refreshed file credential is stored for the next launch.
- * No binding, no bearer beyond the nonce, so it is not a DOOR_ROUTES
- * entry; it is intercepted like one.
- */
-export const MIND_DOOR = "mind";
-
 /** All door virtual hosts (for the WakeContainer to intercept). */
 export function allDoorHosts(): string[] {
-  return [...Object.keys(DOOR_ROUTES), MIND_DOOR].map(doorHost);
+  return Object.keys(DOOR_ROUTES).map(doorHost);
 }
 
 /** "promoter" -> "TILL_TOKEN_PROMOTER". */

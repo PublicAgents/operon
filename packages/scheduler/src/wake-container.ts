@@ -50,8 +50,6 @@ export interface LaunchArgs {
   mcpHosts?: string[];
   /** The doors closed for this wake (spec 0006 §7); the router refuses them by name. */
   closedDoors?: string[];
-  /** The mind credential's seed (spec 0010 §5), for the router's refresh relay. */
-  mindSeed?: { fingerprint: string; account?: string };
 }
 
 export type LaunchResult =
@@ -190,9 +188,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
           props: {
             nonce: args.umbilicalNonce,
             agentId: args.agentId,
-            closedDoors: args.closedDoors ?? [],
-            ...(args.harness ? { harness: args.harness } : {}),
-            ...(args.mindSeed ? { mindSeed: args.mindSeed } : {})
+            closedDoors: args.closedDoors ?? []
           }
         });
         const intercept = this.ctx.container as unknown as {

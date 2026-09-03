@@ -9,7 +9,7 @@ import {
   resolveMind,
   type LaunchContext
 } from "./launch.js";
-import { credentialFingerprint } from "./mind-credential.js";
+import { credentialFingerprint, RefreshError } from "./mind-credential.js";
 
 const agent: RosterAgent = {
   id: "growth",
@@ -67,51 +67,89 @@ describe("resolveMind (spec 0010 §4)", () => {
 
 describe("prepareLaunch on an alternate harness (spec 0010)", () => {
   const withAlternate: RosterAgent = { ...agent, harnesses: { codex: { model: "gpt-5.5" } } };
-  const login = JSON.stringify({ tokens: { account_id: "acct-1", refresh_token: "r1" } });
-  const secrets: Record<string, string> = {
+  const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.s`;
+  const loginFile = (lastRefresh: string, expSeconds = Date.now() / 1000 + 86400) =>
+    JSON.stringify({
+      tokens: { access_token: jwt(expSeconds), refresh_token: "r1", account_id: "acct-1" },
+      last_refresh: lastRefresh
+    });
+  const fresh = loginFile(new Date().toISOString());
+  const due = loginFile("2026-01-01T00:00:00Z");
+  const secrets = (login: string): Record<string, string> => ({
     MIND_CREDENTIAL_CLAUDE_CODE: "mind-token",
     MIND_CREDENTIAL_CODEX: login,
     HARNESS_EXTRA_ARGS: '["--claude"]',
     HARNESS_EXTRA_ARGS_CODEX: '["--codex"]'
-  };
-  const codexContext = (overrides: Partial<LaunchContext> = {}) =>
-    context({ getSecret: name => secrets[name], ...overrides });
+  });
+  const codexContext = (login: string, overrides: Partial<LaunchContext> = {}) =>
+    context({ getSecret: name => secrets(login)[name], log: () => undefined, ...overrides });
 
-  it("carries the alternate's mind, credential, and extra args, and opens the mind door for a file credential", async () => {
-    const prepared = await prepareLaunch(withAlternate, "manual", "wake-c", codexContext(), "codex");
+  it("carries the alternate's mind, credential, and extra args", async () => {
+    const prepared = await prepareLaunch(withAlternate, "manual", "wake-c", codexContext(fresh), "codex");
     expect(prepared.harness).toBe("codex");
     expect(prepared.env[WAKE_ENV.harness]).toBe("codex");
     expect(prepared.env[WAKE_ENV.model]).toBe("gpt-5.5");
     expect(prepared.env[WAKE_ENV.fallbackModel]).toBeUndefined();
-    expect(prepared.env[WAKE_ENV.mindCredential]).toBe(login);
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe(fresh);
     expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--codex"]');
-    expect(prepared.env[WAKE_ENV.mindUrl]).toBe("http://mind.operon.internal/credential");
-    expect(prepared.env[WAKE_ENV.mindToken]).toBe(prepared.umbilicalNonce);
-    expect(prepared.mindSeed).toEqual({ fingerprint: await credentialFingerprint(login), account: "acct-1" });
   });
 
-  it("keeps the primary's extra args and opens no mind door for a token credential", async () => {
-    const prepared = await prepareLaunch(withAlternate, "cron", "wake-p", codexContext());
+  it("keeps the primary's extra args and never refreshes a token credential", async () => {
+    let refreshes = 0;
+    const prepared = await prepareLaunch(withAlternate, "cron", "wake-p", codexContext(fresh, {
+      refreshLogin: async () => {
+        refreshes += 1;
+        return "x";
+      }
+    }));
     expect(prepared.harness).toBe("claude-code");
     expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--claude"]');
-    expect(prepared.env[WAKE_ENV.mindUrl]).toBeUndefined();
-    expect(prepared.mindSeed.account).toBeUndefined();
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
+    expect(refreshes).toBe(0);
   });
 
-  it("prefers a relayed credential only while it descends from the current secret", async () => {
-    const fingerprint = await credentialFingerprint(login);
-    const fresh = await prepareLaunch(withAlternate, "manual", "w1", codexContext({
-      getRefreshedCredential: async () => ({ seed: fingerprint, value: "refreshed-login" })
+  it("prefers a stored refresh only while it descends from the current secret", async () => {
+    const fingerprint = await credentialFingerprint(fresh);
+    const stored = loginFile(new Date().toISOString());
+    const current = await prepareLaunch(withAlternate, "manual", "w1", codexContext(fresh, {
+      getRefreshedCredential: async () => ({ seed: fingerprint, value: stored })
     }), "codex");
-    expect(fresh.env[WAKE_ENV.mindCredential]).toBe("refreshed-login");
-    const orphaned = await prepareLaunch(withAlternate, "manual", "w2", codexContext({
-      getRefreshedCredential: async () => ({ seed: "older-seed", value: "refreshed-login" })
+    expect(current.env[WAKE_ENV.mindCredential]).toBe(stored);
+    const orphaned = await prepareLaunch(withAlternate, "manual", "w2", codexContext(fresh, {
+      getRefreshedCredential: async () => ({ seed: "older-seed", value: stored })
     }), "codex");
-    expect(orphaned.env[WAKE_ENV.mindCredential]).toBe(login);
+    expect(orphaned.env[WAKE_ENV.mindCredential]).toBe(fresh);
+  });
+
+  it("refreshes a login that is due, stores it under the seed, and wakes on it", async () => {
+    const stored: unknown[] = [];
+    const prepared = await prepareLaunch(withAlternate, "manual", "w3", codexContext(due, {
+      refreshLogin: async login => {
+        expect(login).toBe(due);
+        return "refreshed-login";
+      },
+      storeRefreshedCredential: async (...args) => {
+        stored.push(args);
+      }
+    }), "codex");
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("refreshed-login");
+    expect(stored).toEqual([["codex", await credentialFingerprint(due), "refreshed-login"]]);
+  });
+
+  it("wakes on a still-valid login when the refresh is refused, and refuses by name once it has expired", async () => {
+    const refused = async () => {
+      throw new RefreshError("refresh_failed:refresh_token_reused", "");
+    };
+    const valid = await prepareLaunch(withAlternate, "manual", "w4", codexContext(due, { refreshLogin: refused }), "codex");
+    expect(valid.env[WAKE_ENV.mindCredential]).toBe(due);
+    const expired = loginFile("2026-01-01T00:00:00Z", 1_600_000_000);
+    await expect(
+      prepareLaunch(withAlternate, "manual", "w5", codexContext(expired, { refreshLogin: refused }), "codex")
+    ).rejects.toThrowError(/mind_credential_refresh_failed.*authorize/);
   });
 
   it("refuses an alternate the roster did not pin, before any secret is read", async () => {
-    await expect(prepareLaunch(agent, "manual", "w3", codexContext(), "codex")).rejects.toThrowError(
+    await expect(prepareLaunch(agent, "manual", "w6", codexContext(fresh), "codex")).rejects.toThrowError(
       /harness_not_configured/
     );
   });

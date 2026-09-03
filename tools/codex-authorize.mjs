@@ -84,10 +84,10 @@ try {
     { cwd: ROOT, input: auth, stdio: ["pipe", "inherit", "inherit"] }
   );
   console.log(
-    "\n✓ MIND_CREDENTIAL_CODEX stored. Codex refreshes this login in place after eight days; the chassis" +
-      "\n  relays the refreshed copy back from the wake (spec 0010 §5), so re-run this only after a" +
-      "\n  sign-out or a revoked session. Wake an agent on codex with the console's harness picker or" +
-      "\n  the wake tool's harness field."
+    "\n✓ MIND_CREDENTIAL_CODEX stored. The scheduler refreshes this login itself before each wake that" +
+      "\n  needs it (spec 0010 §5), so re-run this only after a sign-out, a revoked session, or a" +
+      "\n  mind_credential_refresh_failed wake. Wake an agent on codex with the console's harness picker" +
+      "\n  or the wake tool's harness field."
   );
 } finally {
   rmSync(home, { recursive: true, force: true });

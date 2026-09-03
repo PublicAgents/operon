@@ -135,9 +135,9 @@ home in `CODEX_HOME=/home/mind/.codex`, created per wake and staged with:
   `--dangerously-bypass-hook-trust`; the hooks are the chassis's own.
 - `auth.json`: the mind credential (§5).
 
-The session is `codex exec <prompt> -m <model> -C <state dir>
---skip-git-repo-check --ephemeral --color never` plus the operator's
-extra args; the probe runs the same with `--sandbox read-only`. Codex
+The session is `codex exec <prompt> -m <model> --skip-git-repo-check
+--ephemeral --color never` in the state directory, plus the staged
+`--dangerously-bypass-hook-trust` and the operator's extra args; the probe runs the same with `--sandbox read-only`. Codex
 has no fallback-model flag: the entrypoint's probe-then-fallback covers
 an unavailable pinned model before the session; mid-session fallback is
 a Claude Code feature only.
@@ -165,19 +165,27 @@ The chassis denylists every literal inside a file credential (the
 tokens, not only the file as a whole), so a JWT can never ride a
 transcript or a commit.
 
-**The refresh relay.** Codex refreshes a login file in place when it is
-eight days old or rejected, and its refresh tokens are single-use, so
-the copy in the secret is stale after the first in-container refresh.
-After the session the entrypoint (root) reads the file back; if it
-changed and still names the same account, it posts it to the umbilical's
-`mind.operon.internal/credential` door, which the WakeContainer's router
-handles itself: the FleetControl store keeps the refreshed value keyed
-by the fingerprint of the secret it descends from. The next launch uses
-the stored value when its fingerprint matches the current secret, and
-the secret itself when the operator re-seeded it (a new secret orphans
-the stored value). The mind can write its own auth file, so a relayed
-file must keep the seeded `account_id`; anything else is refused by
-name and the seed stands.
+**The refresh, done by the scheduler.** Codex refreshes a login file
+in place when it is eight days old or rejected, and its refresh tokens
+are single-use, so a copy in a secret goes stale after the first
+refresh. The refresh must therefore happen where the credential is
+held, not where it is used: a file the mind owns is a file the mind can
+write, and nothing that comes back out of a container can be trusted
+to rotate a credential every agent on that harness shares. So the
+scheduler refreshes a Codex login itself at launch, one day before
+Codex would (the same grant against the same public client and token
+endpoint Codex uses), keeps the result in the FleetControl store keyed
+by the fingerprint of the secret it descends from, and starts every
+later wake from it while the operator's secret is unchanged (a new
+`authorize:codex` is a new fingerprint and orphans the stored refresh).
+A refusal by the authority while the access token is still valid lets
+the wake run on what it has, named in the log; once the access token
+has expired too, the wake is refused as
+`mind_credential_refresh_failed`: the operator authorizes again, and
+nothing the container could do would help. Inside the container a
+rewrite of the login (a revoked token, the one case left) is noted in
+the log, its tokens join the denylist before presleep, and it does not
+carry over.
 
 `HARNESS_EXTRA_ARGS` (the scheduler policy var) is the claude-code
 policy; `HARNESS_EXTRA_ARGS_CODEX` is the codex policy, defaulting to
@@ -208,10 +216,11 @@ and the JSONL event stream is the transcript.
   the primary, or a pin without a model is refused by name; the wake env
   carries the resolved mind, not the agent's primary.
 - Scheduler: `resolveMind` picks primary, alternate, or refuses;
-  `prepareLaunch` reads the per-harness extra args and prefers a
-  relayed credential only when its seed fingerprint matches; the router
-  stores a relayed credential only under the wake's nonce and the seeded
-  account.
+  `prepareLaunch` reads the per-harness extra args, prefers a stored
+  refresh only when its seed fingerprint matches, refreshes a login that
+  is due against a fake authority and stores the result, wakes on a
+  still-valid login when the authority refuses, and refuses by name
+  once the access token has expired too.
 - Container: the adapters' staged files and environments are pure and
   tested (Claude Code: settings, managed keys, flags, env; Codex:
   config.toml, hooks.json, auth.json, env); the adapter table equals

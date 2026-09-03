@@ -93,13 +93,7 @@ export interface WakeOptions {
   webUrl?: string;
   webToken?: string;
   xToken?: string;
-  /**
-   * The mind door (spec 0010 §5): where the entrypoint posts a
-   * credential the harness refreshed in place, so the next wake starts
-   * from the refreshed one. Umbilical host + the wake nonce.
-   */
-  mindUrl?: string;
-  mindToken?: string;
+
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -152,9 +146,7 @@ export const WAKE_ENV = {
   xUrl: "OPERON_X_URL",
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
-  xToken: "OPERON_X_TOKEN",
-  mindUrl: "OPERON_MIND_URL",
-  mindToken: "OPERON_MIND_TOKEN"
+  xToken: "OPERON_X_TOKEN"
 } as const;
 
 export function wakeEnv(
@@ -206,8 +198,6 @@ export function wakeEnv(
   if (options.webUrl) env[WAKE_ENV.webUrl] = options.webUrl;
   if (options.webToken) env[WAKE_ENV.webToken] = options.webToken;
   if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
-  if (options.mindUrl) env[WAKE_ENV.mindUrl] = options.mindUrl;
-  if (options.mindToken) env[WAKE_ENV.mindToken] = options.mindToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   return env;

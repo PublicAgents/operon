@@ -207,20 +207,20 @@ async function stageHarness(
 }
 
 /**
- * The refresh relay (spec 0010 §5): a file credential the harness
- * refreshed in place during the session is handed back through the
- * umbilical's mind door, so the next wake starts from it instead of
- * the stale seed. Root reads the file; the mind owns it, so the router
- * judges what it gets (same account or refused). Best-effort: a failed
- * relay is logged, never a failed wake.
+ * A file credential the harness refreshed in place (spec 0010 §5) does
+ * not carry over: the scheduler refreshes logins before they are due,
+ * so this is the exception (a revoked or rejected token), named in the
+ * log. What the refreshed file holds joins the wake's denylist before
+ * presleep, so a rotated token can no longer ride a commit or the rest
+ * of the transcript any more than the seeded one could.
  */
-async function relayRefreshedCredential(adapter: HarnessAdapter, config: WakeConfig): Promise<void> {
+async function noteRefreshedCredential(
+  adapter: HarnessAdapter,
+  config: WakeConfig,
+  denylist: string[]
+): Promise<void> {
   const relative = adapter.credentialFile?.(config.mindCredential);
   if (!relative) return;
-  if (!config.mindUrl || !config.mindToken) {
-    log("mind credential: refresh relay not wired; an in-container refresh does not carry over");
-    return;
-  }
   let current: string;
   try {
     current = await readFile(join(mindHome(), relative), "utf8");
@@ -228,21 +228,24 @@ async function relayRefreshedCredential(adapter: HarnessAdapter, config: WakeCon
     log(`mind credential: could not read the staged file back: ${String(error).slice(0, 160)}`);
     return;
   }
-  if (current === config.mindCredential) {
-    log("mind credential: unchanged this wake");
-    return;
-  }
+  if (current === config.mindCredential) return;
+  let added = 0;
   try {
-    const response = await fetch(config.mindUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${config.mindToken}` },
-      body: JSON.stringify({ credential: current })
-    });
-    if (response.ok) log("mind credential: refreshed in-container and relayed for the next wake");
-    else log(`mind credential: relay refused: ${response.status} ${(await response.text()).slice(0, 120)}`);
-  } catch (error) {
-    log(`mind credential: relay failed: ${String(error).slice(0, 160)}`);
+    for (const literal of adapter.secretsIn(current)) {
+      if (!denylist.includes(literal)) {
+        denylist.push(literal);
+        added += 1;
+      }
+    }
+  } catch {
+    denylist.push(current);
+    added += 1;
   }
+  log(
+    `mind credential: ${adapter.id} rewrote its login in-container (${added} new literal(s) denylisted); ` +
+      "the rewrite does not carry over: the scheduler refreshes logins itself, so if the next wake fails " +
+      "to sign in, authorize the account again"
+  );
 }
 
 /**
@@ -1016,7 +1019,7 @@ async function main(): Promise<number> {
     await porch.close();
   }
   log(`${label}: session exited ${sessionExit}`);
-  await relayRefreshedCredential(adapter, config);
+  await noteRefreshedCredential(adapter, config, denylist);
 
   // Change detection runs as the mind uid: a filter it triggers executes
   // unprivileged, so this needs no root and no clean mirror.

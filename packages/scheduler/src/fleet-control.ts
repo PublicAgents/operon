@@ -3,9 +3,9 @@ import type { Door } from "@operon/core";
 import { sanitizeOverrides, type DoorOverrides } from "./doors.js";
 
 /**
- * A mind credential a harness refreshed in place (spec 0010 §5),
- * descended from the operator's secret with fingerprint `seed`. Only
- * that seed's launches use it; a re-seeded secret orphans it.
+ * A mind credential the scheduler refreshed (spec 0010 §5), descended
+ * from the operator's secret with fingerprint `seed`. Only that seed's
+ * launches use it; a re-authorized secret orphans it.
  */
 export interface RefreshedCredential {
   seed: string;
@@ -58,11 +58,12 @@ export class FleetControl extends DurableObject {
   // without a deploy. Effective at the next wake; a running wake keeps
   // the doors it was wired with.
 
-  // ---- the refresh relay (spec 0010 §5) ----------------------------
-  // A file credential (Codex's login) rotates itself inside a wake; the
-  // relayed copy lives here, per harness, tagged with the fingerprint of
-  // the secret it descends from, so the operator's own re-seed always
-  // wins over a stored refresh of an older secret.
+  // ---- the refreshed credential (spec 0010 §5) ----------------------
+  // A file credential (Codex's login) rotates; the scheduler refreshes
+  // it before a launch and the result lives here, per harness, tagged
+  // with the fingerprint of the secret it descends from, so the
+  // operator's own re-authorize always wins over a stored refresh of an
+  // older secret.
 
   async refreshedCredential(harness: string): Promise<RefreshedCredential | undefined> {
     return this.ctx.storage.get<RefreshedCredential>(`mind:${harness}`);
