@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { McpConfigError, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
+import { LOCAL_BROWSER_OUTPUT_DIR, McpConfigError, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
 import type { StagedMcpServer } from "./config.js";
 
 const PORCH = "http://127.0.0.1:41414";
@@ -63,6 +63,41 @@ describe("mergedMcpConfig", () => {
       virtual: "mcp-browser.operon.internal"
     };
     expect(() => mergedMcpConfig([collision], { porchUrl: PORCH })).toThrow(McpConfigError);
+  });
+});
+
+describe("the local browser (spec 0004 §9)", () => {
+  it("stages Chrome through the Playwright server, isolated, headless, outside the repo, through the forwarder", () => {
+    const config = mergedMcpConfig([], { porchUrl: PORCH, localBrowser: { proxyUrl: "http://127.0.0.1:41415" } });
+    const entry = config.mcpServers.playwright;
+    expect(entry.command).toBe("playwright-mcp");
+    expect(entry.args).toEqual([
+      "--browser",
+      "chrome",
+      "--executable-path",
+      "/usr/bin/google-chrome-stable",
+      "--headless",
+      "--isolated",
+      "--no-sandbox",
+      "--viewport-size",
+      "1280x800",
+      "--output-dir",
+      LOCAL_BROWSER_OUTPUT_DIR,
+      "--proxy-server",
+      "http://127.0.0.1:41415"
+    ]);
+    expect(entry.args.join(" ")).not.toMatch(/user-data-dir|storage-state|save-session/);
+    expect(config.mcpServers.browser).toBeDefined();
+  });
+
+  it("goes direct without a forwarder, is absent unless asked, and reserves its name", () => {
+    expect(mergedMcpConfig([], { localBrowser: {} }).mcpServers.playwright.args).not.toContain("--proxy-server");
+    expect(mergedMcpConfig([], { porchUrl: PORCH }).mcpServers.playwright).toBeUndefined();
+    const clash: StagedMcpServer = { name: "playwright", type: "stdio", command: "npx", args: ["-y", "x@1.0.0"] };
+    expect(() => mergedMcpConfig([clash], { localBrowser: {} })).toThrowError(McpConfigError);
+    expect(mcpStagingLines([], false, true)).toEqual([
+      "mcp: playwright staged (the local browser: Chrome, unauthenticated, nothing kept between wakes)"
+    ]);
   });
 });
 

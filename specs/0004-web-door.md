@@ -736,7 +736,61 @@ Puppeteer's Chromium, so it is listed direct rather than blocked; a
 deployment that would rather block Puppeteer downloads too drops it
 from the direct list and accepts that Go installs pay proxy traffic.
 
-## 9. Costs
+## 9. The local browser: unauthenticated browsing through the session's egress
+
+The remote door above exists for identity: sessions that hold a login,
+credentials seeded as data the mind never sees, cookies kept across
+wakes in the Gatekeeper. Everything a mind reads WITHOUT an identity
+(a page, its own published site, a competitor's pricing, a search
+result, a screenshot for a journal entry) needs none of that, and it
+does need what the remote door cannot give: the session's own egress.
+Since spec 0004 §8 gave the session a root-held forwarder that routes
+per host through the deployment's proxies, a browser inside the
+container leaves through exactly the same path as `curl` does.
+
+So the chassis offers a second browser, the **local browser**: Google
+Chrome in the wake image, driven through the official Playwright MCP
+server (`@playwright/mcp`, pinned in the image), staged as an MCP
+server named `playwright` for every agent unless its roster entry says
+`localBrowser: false`. The chassis stages it; the colony never declares
+it as a stdio server, so the flags are the chassis's invariants:
+
+- `--isolated`: the profile lives in memory and dies with the browser.
+  **Cookies, storage, and history never survive the wake**, never
+  reach the state repo, and are never seeded. No `--user-data-dir`,
+  no `--storage-state`, no `--save-session`.
+- `--headless`, `--no-sandbox` (the container is the sandbox; the mind
+  is an unprivileged user with no user namespaces), the viewport fixed.
+- `--proxy-server <the wake's forwarder>` whenever the forwarder runs,
+  so the per-host proxy table, the blocklist, and the egress audit
+  apply to every browser request; without a forwarder the browser goes
+  direct, as every other client does.
+- `--output-dir /tmp/operon-browser`: screenshots and downloads land
+  outside the state repo, so `git add -A` never commits them.
+
+**The rule, stated to the mind in its living help:** the local browser
+is for UNAUTHENTICATED browsing and is used FIRST, for anything that
+does not need to be someone. The remote web door is ONLY for creating
+accounts and managing logged-in sessions. A mind that signs in through
+the local browser has signed in for one wake with nothing kept, which
+is the wrong tool; the help says so, and the remote door's password
+minting and session bookkeeping stay where they are.
+
+What the local browser does not get: no credential injection, no
+session persistence, no relay policy (there is nothing to protect: it
+holds no identity), and no per-host egress of its own (it inherits the
+session's). Its network is the mind's network; a page it loads is
+world content, data, never instructions (§5 applies unchanged). It is
+on by default because reading the web needs no identity and every
+agent does it; the remote door stays opt-in (`web: true`) because
+holding an identity is the exception.
+
+The image grows by Chrome (roughly 300 MB) and the MCP server; the
+container's memory (3 GiB) holds one headless browser beside a harness
+comfortably. Both harnesses receive the server through the same merged
+MCP config (Claude Code's `--mcp-config`, Codex's `[mcp_servers]`).
+
+## 10. Costs
 
 Browser Run on Workers Paid includes 10 browser-hours/month. We use
 the CDP endpoint + API token, which is the REST/CDP billing path:
@@ -757,7 +811,7 @@ Idle timeout (10 min) means real usage tracks activity and lands well
 under the ceiling; the WebMeter's per-wake minute totals in the ledger
 are the meter to watch before loosening anything.
 
-## 10. Phasing
+## 11. Phasing
 
 1. **Spike**, and its acceptance is not "one page load". Prove:
    (a) the ws upgrade container -> umbilical -> browser-gk -> Browser
@@ -796,7 +850,7 @@ are the meter to watch before loosening anything.
    This REPLACES the removed fence: the record, not a block, is the
    containment for direct egress.
 
-## 11. What this does NOT do
+## 12. What this does NOT do
 
 - No local browser in the container (decision, section 2). Playwright
   as a LIBRARY may still be installed for connectOverCDP scripting;

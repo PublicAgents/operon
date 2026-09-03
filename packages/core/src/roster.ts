@@ -48,6 +48,13 @@ export interface RosterAgent {
    * before.
    */
   web?: boolean;
+  /**
+   * The local browser (spec 0004 §9): Chrome inside the container,
+   * driven through the Playwright MCP server, for UNAUTHENTICATED
+   * browsing through the session's own egress. Nothing persists
+   * between wakes. ON by default; `false` opts an agent out.
+   */
+  localBrowser?: boolean;
   enabled: boolean;
   /** Names of colony-level mcp servers granted to this agent (spec 0008). */
   mcp?: string[];
@@ -141,6 +148,7 @@ const AGENT_KEYS = new Set([
   "maxWakeMinutes",
   "hosts",
   "web",
+  "localBrowser",
   "enabled",
   "mcp",
   "github",
@@ -391,6 +399,9 @@ function parseAgent(value: unknown, index: number): RosterAgent {
   if (raw.web !== undefined && typeof raw.web !== "boolean") {
     fail(`${path}.web`, "must be a boolean when present");
   }
+  if (raw.localBrowser !== undefined && typeof raw.localBrowser !== "boolean") {
+    fail(`${path}.localBrowser`, "must be a boolean when present");
+  }
 
   let mcp: string[] | undefined;
   if (raw.mcp !== undefined) {
@@ -432,6 +443,7 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     maxWakeMinutes,
     hosts,
     ...(raw.web === true ? { web: true } : {}),
+    ...(raw.localBrowser === false ? { localBrowser: false } : {}),
     enabled: raw.enabled,
     ...(mcp ? { mcp } : {}),
     ...(github ? { github } : {}),

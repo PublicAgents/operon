@@ -45,6 +45,7 @@ export const ENV = {
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
   disabledDoors: "OPERON_DISABLED_DOORS",
+  localBrowser: "OPERON_LOCAL_BROWSER",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -134,6 +135,8 @@ export interface WakeConfig {
   egressBlocklist: string[];
   /** Doors the operator closed for this wake (spec 0006 §7): named in the help, not merely unwired. */
   disabledDoors: string[];
+  /** The local browser (spec 0004 §9): Chrome through the Playwright MCP server, staged when true. */
+  localBrowser: boolean;
 }
 
 export class ConfigError extends Error {
@@ -316,7 +319,8 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     webToken: env[ENV.webToken],
     egressProxy: parseEgressProxy(env[ENV.egressProxy]),
     egressBlocklist: parseEgressBlocklist(env[ENV.egressBlocklist]),
-    disabledDoors: parseDisabledDoors(env[ENV.disabledDoors])
+    disabledDoors: parseDisabledDoors(env[ENV.disabledDoors]),
+    localBrowser: env[ENV.localBrowser] === "1"
   };
 }
 

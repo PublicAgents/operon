@@ -84,6 +84,8 @@ export interface WakeOptions {
   githubGrants?: string;
   /** JSON list of the doors the operator closed for this wake (spec 0006 §7), for the living help. */
   disabledDoors?: string;
+  /** "1" when the local browser (spec 0004 §9) is staged for this wake. */
+  localBrowser?: string;
   /** chronicle Gatekeeper endpoint + internal bearer: wake transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -155,6 +157,7 @@ export const WAKE_ENV = {
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
   disabledDoors: "OPERON_DISABLED_DOORS",
+  localBrowser: "OPERON_LOCAL_BROWSER",
   chronicleUrl: "OPERON_CHRONICLE_URL",
   chronicleToken: "OPERON_CHRONICLE_TOKEN",
   xUrl: "OPERON_X_URL",
@@ -194,6 +197,7 @@ export function wakeEnv(
   };
   if (init.mind.fallbackModel) env[WAKE_ENV.fallbackModel] = init.mind.fallbackModel;
   if (options.disabledDoors) env[WAKE_ENV.disabledDoors] = options.disabledDoors;
+  if (options.localBrowser) env[WAKE_ENV.localBrowser] = options.localBrowser;
   if (options.notifyUrl) env[WAKE_ENV.notifyUrl] = options.notifyUrl;
   if (options.notifyToken) env[WAKE_ENV.notifyToken] = options.notifyToken;
   if (options.publishUrl) env[WAKE_ENV.publishUrl] = options.publishUrl;

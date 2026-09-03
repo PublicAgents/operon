@@ -24,4 +24,11 @@ describe("wakeEnv (spec 0010 §4)", () => {
     expect(env[WAKE_ENV.model]).toBe("gpt-5.5");
     expect(env[WAKE_ENV.fallbackModel]).toBeUndefined();
   });
+
+  it("carries the local browser flag only when set", () => {
+    const init = { wakeId: "w", trigger: "cron" as const, agent, mind: { harness: "claude-code" as const, model: "m" } };
+    const secrets = { githubToken: "g", mindCredential: "c" };
+    expect(wakeEnv(init, secrets)[WAKE_ENV.localBrowser]).toBeUndefined();
+    expect(wakeEnv(init, secrets, { localBrowser: "1" })[WAKE_ENV.localBrowser]).toBe("1");
+  });
 });

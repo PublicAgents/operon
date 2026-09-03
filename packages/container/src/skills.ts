@@ -45,6 +45,7 @@ export function renderSkills(
   const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
   const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
   const door = doorMarker(new Set(Array.isArray(caps.disabledDoors) ? (caps.disabledDoors as string[]) : []));
+  const localBrowserNote = caps.localBrowser === false ? " [switched off for this agent]" : "";
   const askCeiling = askLimits
     ? `at most ${askLimits.perWake} per wake, ${askLimits.perDay} per day`
     : "there is a per-wake ceiling; the door names it if you reach it";
@@ -68,10 +69,15 @@ WHEN TO REACH FOR WHAT
     their answer reaches you at wake start or on operon pull, however
     many wakes later. Post it wherever it also belongs (a GitHub issue,
     an email) AND file the ask, so the decision has one home.
-  Browse or sign in somewhere -> the browser MCP tools (already
-    connected to session "default"); operon web password mints a
-    door-side password you never see; operon web sessions shows where
-    you are logged in.
+  Read a page, check a site, take a screenshot, research anything that
+    needs NO login -> the "playwright" MCP tools FIRST (Chrome in this
+    container, through this wake's egress; nothing it does survives the
+    wake: no cookies, no profile, no history).${localBrowserNote}
+  Create an account or work inside a logged-in session -> ONLY the
+    "browser" MCP tools of the web door (session "default", kept across
+    wakes); operon web password mints a door-side password you never
+    see; operon web sessions shows where you are logged in. Never sign
+    in through the playwright browser: that login is lost at wake end.
   Ship pages -> operon publish. Sell a path -> operon till offer. Buy
     -> operon pay. Post -> operon x post. Secrets that must survive
     wakes -> operon vault (never the repo).
