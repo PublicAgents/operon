@@ -240,8 +240,17 @@ async function operatorReads(request: Request, env: Env): Promise<Response> {
       if (kind !== "spans" && kind !== "events" && kind !== "metrics") {
         return errorResponse(400, "invalid_kind", "kind must be spans, events, or metrics");
       }
-      const rows = await queryTrace(env.CHRONICLE, traceMatch[1], kind as TraceKind, intParam(url, "after", 0), intParam(url, "limit", 200));
-      return json({ ok: true, kind, rows, nextAfter: rows.length > 0 ? (rows[rows.length - 1] as { id: number }).id : null });
+      // Fetched in insertion order (the cursor's order, so no row is
+      // skipped between pages), shown in time order (what a timeline
+      // is): the page is sorted by time here, and the cursor is the
+      // highest id in it.
+      const fetched = (await queryTrace(env.CHRONICLE, traceMatch[1], kind as TraceKind, intParam(url, "after", 0), intParam(url, "limit", 200))) as Array<
+        { id: number } & Record<string, unknown>
+      >;
+      const timeOf = (row: Record<string, unknown>) => Number(kind === "spans" ? row.startMs : row.atMs) || 0;
+      const rows = [...fetched].sort((a, b) => timeOf(a) - timeOf(b) || a.id - b.id);
+      const nextAfter = fetched.length > 0 ? Math.max(...fetched.map(row => row.id)) : null;
+      return json({ ok: true, kind, rows, nextAfter });
     }
     if (url.pathname === "/chronicle/wakes") {
       return json({

@@ -198,7 +198,7 @@ const REGISTRY: readonly ToolDefinition[] = [
     name: "wake_trace",
     title: "A wake's telemetry",
     description:
-      `One wake's exported telemetry (spec 0011): kind spans (the trace, as a list with parents and timings), events (tool calls, decisions, API requests, errors), or metrics (token and cost points). Paginate with after (the last row id). Names, timings and counts only; no prompt or tool content is exported. ${UNTRUSTED}`,
+      `One wake's exported telemetry (spec 0011): kind spans (the trace, as a list with parents and timings), events (tool calls, decisions, API requests, errors), or metrics (token and cost points). Each page is in time order; paginate with after = the page's nextAfter (an insertion id, so no row is skipped). Names, timings and counts only; no prompt or tool content is exported. ${UNTRUSTED}`,
     input: z.object({
       wakeId: z.string().regex(/^[0-9a-f-]{8,64}$/).describe("The wake id"),
       kind: z.enum(["spans", "events", "metrics"]).optional().describe("default events"),
