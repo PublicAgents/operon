@@ -222,6 +222,37 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.vars.HARNESS_EXTRA_ARGS_CODEX).toBe(
       JSON.stringify(["--dangerously-bypass-approvals-and-sandbox", "--json"])
     );
+    // The outbound proxy table renders from the manifest's egress block:
+    // absent by default, placeholders and all (never a credential) when set.
+    expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();
+    const proxies = { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } };
+    const proxy = { "*": "general", "*.registry.example": "direct" };
+    const withEgress = renderWorkers(validateManifest({ ...RAW, egress: { proxies, proxy } }), {
+      chassisDir: CHASSIS,
+      d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
+      siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+    }).find(worker => worker.key === "scheduler")?.config as Record<string, any>;
+    expect(JSON.parse(withEgress.vars.EGRESS_PROXY as string)).toEqual({ proxies, routes: proxy });
+    expect(withEgress.vars.EGRESS_BLOCKLIST).toBeUndefined();
+  });
+
+  it("renders one egress blocklist to both the browser door and the scheduler", () => {
+    const blocklist = ["tracker.example", "*.ads.example"];
+    const workers = renderWorkers(validateManifest({ ...RAW, egress: { blocklist } }), {
+      chassisDir: CHASSIS,
+      d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
+      siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+    });
+    const config = (key: string) => workers.find(worker => worker.key === key)?.config as Record<string, any>;
+    expect(config("gatekeeper-browser").vars.WEB_ORIGIN_DENYLIST).toBe("tracker.example,*.ads.example");
+    expect(JSON.parse(config("scheduler").vars.EGRESS_BLOCKLIST as string)).toEqual(blocklist);
+    // Without a blocklist the browser var is rendered empty and the scheduler has none.
+    expect(byKey["gatekeeper-browser"].vars.WEB_ORIGIN_DENYLIST).toBe("");
+    expect(byKey["scheduler"].vars.EGRESS_BLOCKLIST).toBeUndefined();
+  });
+
+  it("renders the scheduler's container and its Gatekeeper bindings", () => {
+    const scheduler = byKey["scheduler"];
     expect(scheduler.containers[0]).toMatchObject({
       class_name: "WakeContainer",
       image: `${CHASSIS}/packages/container/Dockerfile`,

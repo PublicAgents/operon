@@ -1,4 +1,5 @@
 import { rotationGroups } from "@operon/ops-tools";
+import { egressCredentialSecret, egressPolicyCredentials } from "@operon/core";
 import type { FleetManifest } from "./manifest.js";
 
 /**
@@ -101,6 +102,20 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
   add({ worker: "gatekeeper-till", name: "MPP_SECRET_KEY", purpose: "the till's MPP key", optional: true });
   add({ worker: "gatekeeper-till", name: "TEMPO_API_KEY", purpose: "the Tempo API key (till)", optional: true });
   add({ worker: "gatekeeper-browser", name: "BROWSER_RUN_TOKEN", purpose: "the Browser Run token", optional: true });
+  // The outbound proxies (spec 0004 §8) name their credentials; each
+  // one is a scheduler secret holding user:pass.
+  if (manifest.egress?.proxies !== undefined) {
+    for (const name of egressPolicyCredentials({ proxies: manifest.egress.proxies, routes: {} })) {
+      const owners = Object.entries(manifest.egress.proxies)
+        .filter(([, proxy]) => proxy.credential === name)
+        .map(([proxyName]) => proxyName);
+      add({
+        worker: "scheduler",
+        name: egressCredentialSecret(name),
+        purpose: `user:pass for the outbound proxy ${owners.map(o => `"${o}"`).join(", ")} (spec 0004 §8)`
+      });
+    }
+  }
 
   // Capability grants (spec 0008): what the manifest declares, it needs.
   const mcp = manifest.roster.mcp ?? {};

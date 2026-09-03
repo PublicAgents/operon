@@ -11,6 +11,7 @@ import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./p
 import { stageAndCollect, type StagedChanges } from "./staging.js";
 import { TranscriptShipper } from "./transcript.js";
 import { Porch } from "./porch.js";
+import { EgressProxy, directHostsFrom, proxySessionEnv, usesProxy } from "./egress-proxy.js";
 import type { AskLimits } from "./skills.js";
 import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
@@ -726,7 +727,8 @@ async function runSession(
   model: string,
   degraded: boolean,
   porchUrl: string,
-  staged: StagedHarness
+  staged: StagedHarness,
+  proxy?: { url: string; direct: string[] }
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
@@ -778,6 +780,10 @@ async function runSession(
       // warns when the journal deadline nears (the prompt's promise made
       // checkable mid-wake). Epoch ms; not a credential.
       OPERON_SESSION_DEADLINE: String(Date.now() + budgetMinutes * 60_000),
+      // The session's outbound HTTP rides the deployment's proxies when
+      // configured: a loopback address (the forwarder, root-run, holds the
+      // upstream credentials and routes per host), not a credential.
+      ...(proxy ? proxySessionEnv(proxy.url, proxy.direct) : {}),
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
@@ -996,6 +1002,25 @@ async function main(): Promise<number> {
   }
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
+  // The outbound proxy forwarder (spec 0004 section 8) lives exactly as
+  // long as the porch does: it exists for the session's traffic only.
+  let egressProxy: EgressProxy | null = null;
+  let proxy: { url: string; direct: string[] } | undefined;
+  if (usesProxy(config.egressProxy) || config.egressBlocklist.length > 0) {
+    // The chassis's own hosts are derived from THIS config, never listed:
+    // a door added later is direct without anyone remembering to say so.
+    const direct = directHostsFrom(config);
+    egressProxy = new EgressProxy({
+      routes: config.egressProxy,
+      direct,
+      blocked: config.egressBlocklist,
+      agentId: config.agentId,
+      wakeId: config.wakeId,
+      log
+    });
+    proxy = { url: await egressProxy.start(), direct };
+    log(`${label}: outbound proxy forwarder at ${proxy.url}`);
+  }
 
   // The harness home is staged before the probe: a file credential
   // (Codex's login) is what the probe signs in with (spec 0010 §4).
@@ -1008,9 +1033,10 @@ async function main(): Promise<number> {
       ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
       : verified.answer;
     log(`${label}: session starting (harness ${adapter.id}, model ${verified.model})`);
-    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, staged);
+    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, staged, proxy);
   } finally {
     await porch.close();
+    await egressProxy?.close();
   }
   log(`${label}: session exited ${sessionExit}`);
   await credentialWatch?.refresh();

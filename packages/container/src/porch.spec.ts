@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { capabilities, contentTypeFor, Porch } from "./porch.js";
 import type { WakeConfig } from "./config.js";
+import { DEFAULT_EGRESS_ROUTES } from "./egress-proxy.js";
 
 const hasGitleaks = (() => {
   try {
@@ -33,6 +34,8 @@ function config(overrides: Partial<WakeConfig> = {}): WakeConfig {
     hosts: ["@"],
     prRepos: [],
     mcpServers: [],
+    egressProxy: DEFAULT_EGRESS_ROUTES,
+    egressBlocklist: [],
     ...overrides
   };
 }

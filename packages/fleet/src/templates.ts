@@ -87,7 +87,7 @@ const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
   email: {},
   pr: {},
   deploy: { DISCLOSURE_MARKER: "autonomous agent" },
-  browser: { WEB_MAX_CONCURRENT: "3", WEB_ORIGIN_DENYLIST: "" },
+  browser: { WEB_MAX_CONCURRENT: "3" },
   scheduler: {
     HARNESS_EXTRA_ARGS: HARNESS_EXTRA_ARGS_DEFAULT,
     HARNESS_EXTRA_ARGS_CODEX: HARNESS_EXTRA_ARGS_CODEX_DEFAULT
@@ -311,7 +311,13 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           ]
         },
         migrations: [{ tag: "v1", new_sqlite_classes: ["WebSession", "WebMeter", "Ledger"] }],
-        vars: { CF_ACCOUNT_ID: manifest.accountId, ...policyVars(manifest, "browser") }
+        vars: {
+          CF_ACCOUNT_ID: manifest.accountId,
+          ...policyVars(manifest, "browser"),
+          // The one egress blocklist (spec 0004 §5): the relay and the
+          // platform guardrails read it here, the forwarder below.
+          WEB_ORIGIN_DENYLIST: (manifest.egress?.blocklist ?? []).join(",")
+        }
       }
     },
     {
@@ -428,7 +434,20 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // the umbilical, and the Gatekeepers behind them have no hostname.
         vars: {
           ...policyVars(manifest, "scheduler"),
-          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {})
+          ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {}),
+          // The outbound proxy table (spec 0004 §8), placeholders and all:
+          // the manifest carries no credential, so neither does the var.
+          ...(manifest.egress?.proxies !== undefined || manifest.egress?.proxy !== undefined
+            ? {
+                EGRESS_PROXY: JSON.stringify({
+                  proxies: manifest.egress.proxies ?? {},
+                  routes: manifest.egress.proxy ?? {}
+                })
+              }
+            : {}),
+          ...(manifest.egress?.blocklist?.length
+            ? { EGRESS_BLOCKLIST: JSON.stringify(manifest.egress.blocklist) }
+            : {})
         }
       }
     },

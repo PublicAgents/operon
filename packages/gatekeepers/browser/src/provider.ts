@@ -4,10 +4,11 @@
  * deployment choice). Cloudflare Browser Run is the default provider,
  * built from CF_ACCOUNT_ID + BROWSER_RUN_TOKEN; any other CDP endpoint
  * (Browserbase, browserless, self-hosted Chrome) plugs in via
- * WEB_CDP_ENDPOINT (+ optional WEB_CDP_TOKEN bearer) with NO code
- * change. Everything downstream of the dial (relay, policy, identity
- * persistence, metering, screenshots) is provider-neutral CDP; only
- * the vendor live-view command is capability-gated per provider.
+ * WEB_CDP_ENDPOINT (+ optional WEB_CDP_TOKEN bearer, or credentials in
+ * the URL itself) with NO code change. Everything downstream of the
+ * dial (relay, policy, identity persistence, metering, screenshots) is
+ * provider-neutral CDP; only the vendor live-view command is
+ * capability-gated per provider.
  *
  * Multiple providers per deployment (per agent or per session) are a
  * Phase 2 concern: provider selection then becomes registry data, and
@@ -17,7 +18,11 @@
 export interface ProviderEnv {
   CF_ACCOUNT_ID?: string;
   BROWSER_RUN_TOKEN?: string;
-  /** Full ws(s)/http(s) CDP endpoint of a non-default provider. */
+  /**
+   * Full wss/https CDP endpoint of a non-default provider. May carry
+   * credentials as URL userinfo (wss://user:pass@host); those become the
+   * dial's Basic authorization and never travel in the URL.
+   */
   WEB_CDP_ENDPOINT?: string;
   /** Bearer for WEB_CDP_ENDPOINT; omitted when the URL itself carries auth. */
   WEB_CDP_TOKEN?: string;
@@ -100,6 +105,13 @@ function heuristic(pages: readonly TargetInfo[]): TargetInfo {
   return best;
 }
 
+/** btoa over UTF-8 bytes: a password is not limited to Latin-1. */
+function base64Utf8(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export function resolveProvider(env: ProviderEnv): CdpProvider | { error: string } {
   if (env.WEB_CDP_ENDPOINT) {
     let parsed: URL;
@@ -112,10 +124,34 @@ export function resolveProvider(env: ProviderEnv): CdpProvider | { error: string
       return { error: "web_cdp_endpoint_insecure" };
     }
     const name = env.WEB_CDP_PROVIDER ?? "custom";
+    // Credentials in the URL (wss://user:pass@host) travel as a Basic
+    // authorization header on the dial, never in the URL: userinfo is
+    // not something a fetch reliably presents as authentication, and a
+    // dial URL is something logs and errors may quote. Two credentials
+    // at once is a misconfiguration, refused by name rather than
+    // resolved by guess.
+    const userinfo = parsed.username !== "" || parsed.password !== "";
+    if (userinfo && env.WEB_CDP_TOKEN) return { error: "web_cdp_auth_ambiguous" };
+    let headers: Record<string, string> = {};
+    if (userinfo) {
+      let user: string;
+      let pass: string;
+      try {
+        user = decodeURIComponent(parsed.username);
+        pass = decodeURIComponent(parsed.password);
+      } catch {
+        return { error: "web_cdp_endpoint_invalid" };
+      }
+      headers = { authorization: `Basic ${base64Utf8(`${user}:${pass}`)}` };
+      parsed.username = "";
+      parsed.password = "";
+    } else if (env.WEB_CDP_TOKEN) {
+      headers = { authorization: `Bearer ${env.WEB_CDP_TOKEN}` };
+    }
     return {
       name,
       url: parsed.href.replace(/^wss:/, "https:"),
-      headers: env.WEB_CDP_TOKEN ? { authorization: `Bearer ${env.WEB_CDP_TOKEN}` } : {},
+      headers,
       liveView: name === "cloudflare"
     };
   }

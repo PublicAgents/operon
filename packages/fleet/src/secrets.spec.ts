@@ -49,6 +49,26 @@ describe("requiredSecrets", () => {
     expect(byKey["scheduler/WAKE_TRIGGER_TOKEN"].optional).toBeUndefined();
   });
 
+  it("derives the outbound proxy credentials from the table's placeholders", () => {
+    const withProxy = validateManifest({
+      ...BASE,
+      egress: {
+        proxies: {
+          general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" },
+          docs: { address: "http://other.proxy.example:8888", credential: "PROXY_DOCS" }
+        },
+        proxy: { "*": "general", "docs.example": "docs", "*.registry.example": "direct" }
+      }
+    });
+    const names = requiredSecrets(withProxy).map(r => `${r.worker}/${r.name}`);
+    expect(names).toContain("scheduler/EGRESS_CREDENTIAL_PROXY_GENERAL");
+    expect(names).toContain("scheduler/EGRESS_CREDENTIAL_PROXY_DOCS");
+    expect(names.filter(n => n.startsWith("scheduler/EGRESS_CREDENTIAL_"))).toHaveLength(2);
+    // No table, no proxy secrets.
+    const without = requiredSecrets(validateManifest(BASE)).map(r => `${r.worker}/${r.name}`);
+    expect(without.some(n => n.startsWith("scheduler/EGRESS_CREDENTIAL_"))).toBe(false);
+  });
+
   it("requires what the manifest's grants declare", () => {
     const manifest = validateManifest({
       ...BASE,

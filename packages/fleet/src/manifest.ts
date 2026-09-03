@@ -1,5 +1,12 @@
 import { parse as parseYaml } from "yaml";
-import { parseRoster, type Roster } from "@operon/core";
+import {
+  EgressTableError,
+  parseEgressBlocklist,
+  parseEgressPolicy,
+  parseRoster,
+  type EgressProxyDef,
+  type Roster
+} from "@operon/core";
 
 /**
  * The operon.yaml manifest (spec 0006 §1 and §2): everything
@@ -44,7 +51,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   deploy: ["DISCLOSURE_MARKER", "GA_MEASUREMENT_ID"],
   "google-analytics": ["GA_PROPERTY_ID"],
   mcp: ["MCP_PORTAL_URL"],
-  browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
+  browser: ["WEB_MAX_CONCURRENT"],
   scheduler: ["HARNESS_EXTRA_ARGS", "HARNESS_EXTRA_ARGS_CODEX"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
@@ -80,7 +87,63 @@ export interface FleetManifest {
   };
   containers: { maxInstances: number };
   policy: Record<string, Record<string, string>>;
+  /**
+   * The mind session's egress policy (spec 0004 §5, §8). `proxies`
+   * defines the upstream proxies by name (address, and the NAME of a
+   * credential secret, never its value); `proxy` maps host patterns to
+   * a proxy name or "direct", absent meaning everything direct;
+   * `blocklist` is the hosts the session may not reach, ONE list for
+   * the browser door and the container forwarder alike. Rendered into
+   * the scheduler's EGRESS_PROXY and EGRESS_BLOCKLIST vars and the
+   * browser Gatekeeper's WEB_ORIGIN_DENYLIST.
+   */
+  egress?: { proxies?: Record<string, EgressProxyDef>; proxy?: Record<string, string>; blocklist?: string[] };
   roster: Roster;
+}
+
+const EGRESS_KEYS = ["proxies", "proxy", "blocklist"] as const;
+
+/**
+ * The egress block. The proxies and the host map are checked with the
+ * chassis grammar so a bad name, pattern or address, a route to an
+ * undefined proxy, or a LITERAL credential fails here, by name, before
+ * it can be rendered or committed. A key starting with `*` must be
+ * quoted in YAML (an unquoted one is an alias), which the YAML parser
+ * reports before this runs. Unknown keys refuse, as everywhere in this
+ * validator: a misspelt policy must not pass as no policy.
+ */
+function validateEgress(raw: unknown): FleetManifest["egress"] {
+  if (raw === undefined) return undefined;
+  const record = requireRecord(raw, "egress");
+  for (const key of Object.keys(record)) {
+    if (!(EGRESS_KEYS as readonly string[]).includes(key)) {
+      fail(`egress.${key}`, `is not a known key (known: ${EGRESS_KEYS.join(", ")})`);
+    }
+  }
+  const egress: NonNullable<FleetManifest["egress"]> = {};
+  if (record.proxies !== undefined || record.proxy !== undefined) {
+    let policy;
+    try {
+      policy = parseEgressPolicy({
+        ...(record.proxies !== undefined ? { proxies: record.proxies } : {}),
+        ...(record.proxy !== undefined ? { routes: record.proxy } : {})
+      });
+    } catch (error) {
+      if (error instanceof EgressTableError) fail("egress", error.message);
+      throw error;
+    }
+    if (record.proxies !== undefined) egress.proxies = policy.proxies;
+    if (record.proxy !== undefined) egress.proxy = policy.routes;
+  }
+  if (record.blocklist !== undefined) {
+    try {
+      egress.blocklist = parseEgressBlocklist(record.blocklist);
+    } catch (error) {
+      if (error instanceof EgressTableError) fail("egress.blocklist", error.message);
+      throw error;
+    }
+  }
+  return egress;
 }
 
 function requireRecord(value: unknown, path: string): Record<string, unknown> {
@@ -189,6 +252,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   }
 
   const policy = validatePolicy(root.policy);
+  const egress = validateEgress(root.egress);
 
   // The control plane's enrollment (spec 0006 §9): which OTHER projects
   // this project's ops worker binds to, and the default. Bindings are
@@ -269,6 +333,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     resources: { d1Name, ...(siteStoreKvId !== undefined ? { siteStoreKvId } : {}) },
     containers: { maxInstances },
     policy,
+    ...(egress !== undefined ? { egress } : {}),
     roster
   };
 }

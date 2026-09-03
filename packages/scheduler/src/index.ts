@@ -64,6 +64,8 @@ interface Env {
   // existing index signature below (spec 0002 §3).
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
+  EGRESS_PROXY?: string;
+  EGRESS_BLOCKLIST?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
   GITHUB_GATEKEEPER?: Fetcher;
   [secretName: string]: unknown;
@@ -122,7 +124,9 @@ function launchContext(env: Env): LaunchContext {
     // prepareLaunch (spec 0010 §5), not fixed here.
     options: {
       prRepos: env.PR_REPOS,
-      secretDenylist: env.SECRET_DENYLIST
+      secretDenylist: env.SECRET_DENYLIST,
+      egressProxy: env.EGRESS_PROXY,
+      egressBlocklist: env.EGRESS_BLOCKLIST
     }
   };
 }

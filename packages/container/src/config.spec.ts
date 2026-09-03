@@ -48,6 +48,48 @@ describe("readWakeConfig", () => {
     expect(config.harnessExtraArgs).toEqual([]);
   });
 
+  it("reads the egress blocklist and rejects a malformed one", () => {
+    expect(readWakeConfig(complete).egressBlocklist).toEqual([]);
+    expect(
+      readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: '["Tracker.Example", "*.ads.example"]' }).egressBlocklist
+    ).toEqual(["tracker.example", "*.ads.example"]);
+    expect(() => readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: '["bad host"]' })).toThrowError(
+      /OPERON_EGRESS_BLOCKLIST/
+    );
+    expect(() => readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: "tracker.example" })).toThrowError(ConfigError);
+  });
+
+  it("reads the outbound proxy table, defaults it to all-direct, and rejects a malformed one", () => {
+    expect(readWakeConfig(complete).egressProxy).toEqual({ rules: [{ pattern: "*", target: "direct" }] });
+    const table = JSON.stringify({
+      proxies: { a: "http://a.example:7777", b: "http://user:secret@b.example:8888" },
+      routes: { "*": "a", "docs.example": "b", "*.reg.example": "direct" }
+    });
+    expect(readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: table }).egressProxy).toEqual({
+      rules: [
+        { pattern: "*", target: { name: "a", tls: false, hostname: "a.example", port: 7777 } },
+        {
+          pattern: "docs.example",
+          target: {
+            name: "b",
+            tls: false,
+            hostname: "b.example",
+            port: 8888,
+            authorization: `Basic ${Buffer.from("user:secret").toString("base64")}`
+          }
+        },
+        { pattern: "*.reg.example", target: "direct" }
+      ]
+    });
+    // A bare address is not a policy.
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: "http://proxy.example:7777" })
+    ).toThrowError(/OPERON_EGRESS_PROXY/);
+    expect(() =>
+      readWakeConfig({ ...complete, OPERON_EGRESS_PROXY: '{"routes": {"*": "nowhere"}}' })
+    ).toThrowError(ConfigError);
+  });
+
   it("defaults maxWakeMinutes to 120 and rejects malformed values", () => {
     expect(readWakeConfig(complete).maxWakeMinutes).toBe(120);
     expect(

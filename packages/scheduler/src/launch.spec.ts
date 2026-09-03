@@ -184,6 +184,39 @@ describe("prepareLaunch", () => {
     expect(prepared.env[WAKE_ENV.webUrl]).toBeUndefined();
   });
 
+  it("substitutes the outbound proxy table's placeholders from secrets, and fails by name without one", async () => {
+    const table = JSON.stringify({
+      proxies: { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } },
+      routes: { "*": "general", "*.registry.example": "direct" }
+    });
+    const withSecret = context({
+      getSecret: name =>
+        name === "MIND_CREDENTIAL_CLAUDE_CODE"
+          ? "mind-token"
+          : name === "EGRESS_CREDENTIAL_PROXY_GENERAL"
+            ? "user:p@ss"
+            : undefined,
+      options: { egressProxy: table, egressBlocklist: '["*.ads.example"]' }
+    });
+    const prepared = await prepareLaunch(agent, "cron", "wake-proxy", withSecret);
+    expect(prepared.env[WAKE_ENV.egressBlocklist]).toBe('["*.ads.example"]');
+    expect(JSON.parse(prepared.env[WAKE_ENV.egressProxy] as string)).toEqual({
+      proxies: { general: "http://user:p%40ss@general.proxy.example:7777" },
+      routes: { "*": "general", "*.registry.example": "direct" }
+    });
+    // The committed table never carried the value.
+    expect(table).not.toContain("p@ss");
+
+    const missing = context({ options: { egressProxy: table } });
+    await expect(prepareLaunch(agent, "cron", "wake-proxy-missing", missing)).rejects.toMatchObject({
+      name: "LaunchPreconditionError",
+      code: "egress_credential_missing"
+    });
+    // No table, no variable: the container defaults to all-direct.
+    const none = await prepareLaunch(agent, "cron", "wake-no-proxy", context());
+    expect(none.env[WAKE_ENV.egressProxy]).toBeUndefined();
+  });
+
   it("wires the web door for a web-capable agent", async () => {
     const webAgent = { ...agent, web: true };
     const prepared = await prepareLaunch(webAgent, "cron", "wake-web", context());

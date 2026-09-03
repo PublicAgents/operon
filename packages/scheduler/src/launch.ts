@@ -8,6 +8,9 @@ import {
 } from "./mind-credential.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
+  EgressTableError,
+  parseEgressPolicy,
+  resolveEgressPolicy,
   isHarness,
   wakeEnv,
   KNOWN_HARNESSES,
@@ -299,6 +302,23 @@ export async function prepareLaunch(
       }
     : {};
 
+  // The outbound proxy policy (spec 0004 §8) names each proxy's
+  // credential; the values are scheduler secrets, substituted here so
+  // the committed var never holds one and the container receives the
+  // policy it can use. A named credential without its secret fails the
+  // launch by name, like a missing mind credential.
+  let egressProxy: { egressProxy: string } | Record<string, never> = {};
+  if (context.options.egressProxy !== undefined) {
+    try {
+      egressProxy = {
+        egressProxy: resolveEgressPolicy(parseEgressPolicy(context.options.egressProxy), name => context.getSecret(name))
+      };
+    } catch (error) {
+      if (error instanceof EgressTableError) throw new LaunchPreconditionError(error.code, error.message);
+      throw error;
+    }
+  }
+
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is
   // configured in the scheduler env; the container then carries the nonce
@@ -325,7 +345,8 @@ export async function prepareLaunch(
         ...doorOptions,
         ...perAgent,
         ...githubGrants,
-        ...mcpEnv
+        ...mcpEnv,
+        ...egressProxy
       }
     ),
     umbilicalNonce,

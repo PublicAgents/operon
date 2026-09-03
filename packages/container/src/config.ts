@@ -6,6 +6,8 @@
  * which turns drift into a red test instead of a broken wake.
  */
 
+import { DEFAULT_EGRESS_ROUTES, parseBlocklist, parseEgressRoutes, type EgressRoutes } from "./egress-proxy.js";
+
 export const ENV = {
   wakeId: "OPERON_WAKE_ID",
   agentId: "OPERON_AGENT_ID",
@@ -48,7 +50,9 @@ export const ENV = {
   xUrl: "OPERON_X_URL",
   xToken: "OPERON_X_TOKEN",
   webUrl: "OPERON_WEB_URL",
-  webToken: "OPERON_WEB_TOKEN"
+  webToken: "OPERON_WEB_TOKEN",
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressBlocklist: "OPERON_EGRESS_BLOCKLIST"
 } as const;
 
 export interface WakeConfig {
@@ -118,12 +122,44 @@ export interface WakeConfig {
   /** Web door (spec 0004): the browser relay endpoint + per-wake nonce. */
   webUrl?: string;
   webToken?: string;
+  /**
+   * Upstream HTTP proxies for the session's outbound HTTP (spec 0004 §8):
+   * a table of host pattern to proxy address or "direct", parsed and
+   * validated here (egress-proxy.ts). Unset means {"*": "direct"}, under
+   * which no forwarder runs. The entrypoint's forwarder holds the
+   * addresses; the session sees a loopback address.
+   */
+  egressProxy: EgressRoutes;
+  /** Host patterns the session may not reach (spec 0004 §8); the forwarder refuses them. */
+  egressBlocklist: string[];
   /** Doors the operator closed for this wake (spec 0006 §7): named in the help, not merely unwired. */
   disabledDoors: string[];
 }
 
 export class ConfigError extends Error {
   override name = "ConfigError";
+}
+
+/** Parsed at wake start like the table: a malformed blocklist fails the wake by name. */
+function parseEgressBlocklist(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    return parseBlocklist(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`invalid_env: ${ENV.egressBlocklist} ${detail}`);
+  }
+}
+
+/** Parsed at wake start: a malformed proxy table fails the wake, not the first request. */
+function parseEgressProxy(raw: string | undefined): EgressRoutes {
+  if (!raw) return DEFAULT_EGRESS_ROUTES;
+  try {
+    return parseEgressRoutes(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`invalid_env: ${ENV.egressProxy} ${detail}`);
+  }
 }
 
 /** The closed-doors list, a JSON array of names; malformed is a config error like the rest. */
@@ -278,6 +314,8 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     xToken: env[ENV.xToken],
     webUrl: env[ENV.webUrl],
     webToken: env[ENV.webToken],
+    egressProxy: parseEgressProxy(env[ENV.egressProxy]),
+    egressBlocklist: parseEgressBlocklist(env[ENV.egressBlocklist]),
     disabledDoors: parseDisabledDoors(env[ENV.disabledDoors])
   };
 }

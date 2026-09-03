@@ -95,6 +95,21 @@ Each `WebSession` DO:
   aggregate browser-minute cap when enabled, the origin denylist, and
   the CDP input sweep.
 
+### Provider configuration
+
+The upstream CDP provider is configuration, not code (browser-gk
+`provider.ts`): Cloudflare Browser Run is the default, and any other
+CDP endpoint plugs in through `WEB_CDP_ENDPOINT` (a `wss://` or
+`https://` URL) with an optional `WEB_CDP_TOKEN` bearer. An endpoint
+may instead carry its credentials as URL userinfo
+(`wss://user:pass@host`); browser-gk moves them into the dial's
+`Authorization: Basic` header and strips them from the URL, so no
+logged or ledgered URL ever holds them. An endpoint with userinfo AND
+a bearer is refused by name (`web_cdp_auth_ambiguous`) rather than
+resolved by guess. Everything behind the dial (relay, policy,
+identity persistence, metering, screenshots) is provider-neutral CDP;
+only the vendor live-view command is gated on the provider name.
+
 ### Session naming
 
 Sessions are named by purpose (`x-account`, `github`, `research`), not
@@ -247,14 +262,18 @@ layers, honestly labelled as bound-and-detect, not prevent:
   the first tenant, looser or off only where an operator has watched
   the ledger and chosen to. The wake wall is the backstop behind it;
   the next wake starts with a clean context either way.
-- **Origin denylist** (env, default empty), enforced in TWO places:
-  the relay refuses to forward a `Page.navigate` to a denied origin,
-  AND the Browser Run session is opened with `allowedDomainSets`
-  guardrails (a platform-level layer under the relay), so a denied
-  origin is unreachable even if a relay bug lets a navigation slip. The
-  list is
-  deployment policy, like every cap. An allowlist is deliberately NOT
-  the default: the whole point of the door is the open web.
+- **Origin blocklist** (the manifest's `egress.blocklist`, spec 0006
+  §2, default empty), ONE list enforced in THREE places: the relay
+  refuses to forward a `Page.navigate` to a denied origin, the Browser
+  Run session is opened with `allowedDomainSets` guardrails (a
+  platform-level layer under the relay), so a denied origin is
+  unreachable even if a relay bug lets a navigation slip, and the
+  container's egress forwarder (section 8) refuses it for the
+  session's plain HTTP. The fleet renders it to the browser Gatekeeper
+  (`WEB_ORIGIN_DENYLIST`) and to the scheduler (`EGRESS_BLOCKLIST`)
+  from the one block, so the two cannot drift. The list is deployment
+  policy, like every cap. An allowlist is deliberately NOT the default:
+  the whole point of the door is the open web.
 - **CDP input sweep**: `Input.insertText`, `Input.dispatchKeyEvent`
   batches and `Runtime.evaluate` payloads are swept against the secret
   denylist (the gitleaks doctrine, applied to keystrokes) before
@@ -507,6 +526,215 @@ interception machinery closes that gap:
   exfil path, so blocking direct egress was burden without benefit. An
   allow/deny egress POLICY remains a possible future knob, deliberately
   separate from the audit.
+
+### Outbound proxy (optional)
+
+A deployment may route the mind session's plain HTTP egress through
+upstream HTTP proxies. The policy is the manifest's `egress:` block
+(spec 0006 §2): `proxies` DEFINES each upstream once, by name, with
+its address and the NAME of its credential secret; `proxy` maps
+destination hosts to a proxy name or `direct`; the templates render
+both as the scheduler's `EGRESS_PROXY` var. **An address never
+carries a credential value**, because the manifest is committed
+configuration, and the proxy's name travels to the container so
+every audit line names which proxy carried a request:
+
+```yaml
+egress:
+  proxies:
+    general:
+      address: http://general.proxy.example:7777
+      credential: PROXY_GENERAL
+    docs:
+      address: http://other.proxy.example:8888
+      credential: PROXY_DOCS
+  proxy:
+    "*": general
+    docs.example: docs
+    "*.registry.example": direct
+```
+
+(A key starting with `*` must be quoted, or YAML reads it as an
+alias.)
+
+A key is `*` (the catch-all), an exact hostname, or `*.domain` (the
+domain and its subdomains); the most specific match wins (exact, then
+the longest domain, then `*`), a value of `direct` means no proxy, and
+a host no key matches goes direct. Unset, the table is
+`{"*": "direct"}`, under which no forwarder runs and egress is exactly
+as before.
+
+A proxy's `credential: NAME` names the scheduler secret
+`EGRESS_CREDENTIAL_<NAME>`, holding `user:pass` (the first colon
+splits; any character is allowed, each half is percent-encoded into
+the URL). A proxy without a `credential` is dialled unauthenticated.
+One grammar (`@operon/core` `egress.ts`) serves three readers:
+
+- The fleet validates the policy at manifest validation: a malformed
+  name, pattern or address, or a route to an undefined proxy, fails
+  by name, and a LITERAL credential in an address fails as
+  `egress_policy_literal_credential`, pointing at the `credential:`
+  form, so a pasted secret never reaches a commit. The secret
+  checklist (spec 0006 §2) derives `EGRESS_CREDENTIAL_<NAME>` for
+  every named credential, so bootstrap and `deploy --check` name
+  exactly the secrets the policy needs.
+- The scheduler substitutes at launch: the resolved policy (each
+  proxy's address with its credential in, the routes as written)
+  rides the wake env as `OPERON_EGRESS_PROXY`, and a named credential
+  whose secret is not configured fails the launch as
+  `egress_credential_missing`, like a missing mind credential.
+- The container receives the resolved policy only, validates it again
+  at wake start, and never sees a credential name.
+
+No credential enters the session: the ROOT entrypoint runs a loopback
+forwarder beside the porch for exactly the session's lifetime, decides
+per host which upstream carries a request, attaches that upstream's
+credential, and hands the session only the loopback address through
+the standard variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, plus
+`NODE_USE_ENV_PROXY` so node clients honour them). curl, git, npm,
+WebFetch and scripts route through it unchanged; the entrypoint's own
+traffic (clone, doors, persist, notify) does not.
+
+- **The chassis's own hosts are always direct, by derivation, not by
+  listing.** Loopback (the porch), every host under the umbilical's
+  suffix (`.operon.internal`, owned by `@operon/core` so the scheduler
+  and the container cannot drift), every door URL in the wake config
+  (found by the `Url` suffix, so a door added later is covered without
+  anyone remembering), and every MCP virtual host. Since spec 0009 the
+  container is handed no door URL outside the umbilical, so the suffix
+  rule alone covers every door today; the URL derivation stays as the
+  guard for any door that ever lives elsewhere. No table entry can
+  send them through a proxy. They ride in `NO_PROXY` for clients that
+  honour it, and the forwarder enforces the same rule for any client
+  that does not.
+- `CONNECT host:port` (every https URL) is tunnelled through the chosen
+  upstream, or straight to the origin when direct, and the sockets
+  spliced: TLS stays end to end between the session and the origin,
+  and the forwarder sees hostnames only.
+- Absolute-form `http://` requests are forwarded as they arrive.
+- The forwarder logs one compact JSON line per tunnel or request in
+  the platform audit's shape (`t: "egress"`, agent and wake ids,
+  method, host, port; never a path or query) plus what the audit
+  cannot see: `via: "forwarder"`, the `route` taken (`direct`,
+  `proxy`, `blocked`, `refused`), the NAME of the proxy that carried
+  it when proxied, and `status`, `reason` and the upstream's answer on
+  a refusal. The line rides the wake transcript. It matters because
+  the platform audit above sees only the connection TO the proxy host
+  when a route is proxied (and nothing at all for a plain-http
+  upstream, which its TLS interception does not cover): the
+  destination and the route are recorded here and nowhere else.
+- An upstream refusal (a 407, a non-200 CONNECT answer) is reported to
+  the session as a 502 gateway failure, never relayed as a challenge:
+  the session has no credential to offer and must not be invited to
+  look for one.
+- The harness's own API traffic rides the catch-all too unless a table
+  entry routes its hosts elsewhere or direct.
+- **The egress blocklist** (`egress.blocklist`, section 5) is refused
+  here too: a listed host gets a 403 (`proxy_blocked_host`) on both
+  paths, and the forwarder runs whenever the list is non-empty, proxy
+  or no proxy. Chassis hosts are never blocked (blocking the porch
+  would end the wake). This holds for every client that honours the
+  proxy variables; the rest of container egress stays observe-only,
+  as above, so the browser door is where the list is a hard fence.
+
+The platform egress audit (above) still sees every connection the
+forwarder makes; with a proxy configured, those connections address
+the proxy hosts, and the forwarder's own log is where the destination
+hosts are.
+
+### Hosts worth keeping direct
+
+A catch-all proxy carries everything the session fetches, and most of
+a wake's bytes are not pages: they are package installs, git clones,
+release downloads and the harness's own inference stream. None of
+that gains anything from a proxy, and a metered upstream bills it all.
+The table below is what a wake actually pulls, grouped by what
+generates it, so a deployment can route it `direct` deliberately
+rather than discover it on the invoice. Browser page traffic is out
+of scope here: it leaves through the browser Gatekeeper and is billed
+by the CDP provider regardless of this table.
+
+| Source | Hosts | Notes |
+|---|---|---|
+| npm, npx, pnpm, yarn | `registry.npmjs.org`, `registry.yarnpkg.com`, `get.pnpm.io` | Metadata and tarballs both come from the registry; `npx` pulls the same way. |
+| Native npm modules | `nodejs.org`, `github.com`, `objects.githubusercontent.com` | `node-gyp` fetches headers from nodejs.org; `prebuild-install` pulls binaries from GitHub releases. |
+| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The container has no browser by design (section 11), so these belong on the blocklist rather than a proxy. |
+| pip, uv | `pypi.org`, `files.pythonhosted.org`, `bootstrap.pypa.io`, `astral.sh` | Index on pypi.org, wheels on pythonhosted. uv fetches its own binary and standalone Pythons from GitHub releases. |
+| conda | `repo.anaconda.com`, `conda.anaconda.org` | Only if the agent installs it; large. |
+| Go | `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | |
+| Rust | `static.crates.io`, `index.crates.io`, `static.rust-lang.org` | Toolchain installs are hundreds of MB. |
+| Ruby | `rubygems.org`, `index.rubygems.org` | |
+| Debian | `deb.debian.org`, `security.debian.org` | The session runs unprivileged, so apt installs fail anyway. |
+| Git and GitHub | `github.com`, `api.github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `ghcr.io` | Clones, release downloads, raw file fetches, and `npm install github:owner/repo`. The state repo clone is entrypoint traffic and never passes the forwarder. |
+| Claude Code | `api.anthropic.com`, `claude.ai`, `statsig.anthropic.com`, `code.claude.com` | Inference and the WebFetch domain preflight, the OAuth flow, feature flags, docs. Inference is the largest steady stream in any wake. |
+| Codex | `api.openai.com`, `chatgpt.com`, `auth.openai.com`, `auth0.openai.com`, `platform.openai.com`, `developers.openai.com` | Inference with an API key (`api.`) or a ChatGPT subscription (`chatgpt.com`, a separate registrable domain); the device or browser OAuth flow and token refresh; docs. Updates and the native binary come from GitHub releases and npm, covered above. |
+| Model weights | `huggingface.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co` | |
+| Docker images | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | No Docker in the container, but a pull attempt still costs the manifest fetch. |
+| Cloudflare tooling | `api.cloudflare.com`, `workers.cloudflare.com` | `wrangler` runs. |
+| Script CDNs | `cdn.jsdelivr.net`, `unpkg.com`, `esm.sh`, `cdnjs.cloudflare.com` | |
+| Granted MCP servers | | Their virtual hosts are umbilical hosts, direct by derivation already. |
+
+Both harnesses honour `HTTPS_PROXY`, so without their entries the
+inference stream rides the catch-all: the single most expensive thing
+to proxy and the one with the least to gain from it.
+
+As a policy, everything above stays off the proxy and the browser
+downloads are blocked because the container can never use them:
+
+```yaml
+egress:
+  proxies:
+    general:
+      address: http://general.proxy.example:7777
+      credential: PROXY_GENERAL
+  proxy:
+    "*": general
+    # package registries
+    "*.npmjs.org": direct
+    registry.yarnpkg.com: direct
+    get.pnpm.io: direct
+    nodejs.org: direct
+    pypi.org: direct
+    "*.pythonhosted.org": direct
+    bootstrap.pypa.io: direct
+    astral.sh: direct
+    "*.anaconda.com": direct
+    "*.anaconda.org": direct
+    "*.golang.org": direct
+    "*.crates.io": direct
+    static.rust-lang.org: direct
+    "*.rubygems.org": direct
+    "*.debian.org": direct
+    # git and GitHub
+    github.com: direct
+    "*.github.com": direct
+    "*.githubusercontent.com": direct
+    ghcr.io: direct
+    # the harnesses
+    "*.anthropic.com": direct
+    claude.ai: direct
+    code.claude.com: direct
+    "*.openai.com": direct
+    chatgpt.com: direct
+    # large downloads and tooling
+    "*.huggingface.co": direct
+    "*.docker.io": direct
+    production.cloudflare.docker.com: direct
+    "*.cloudflare.com": direct
+    storage.googleapis.com: direct
+  blocklist:
+    - cdn.playwright.dev
+    - playwright.azureedge.net
+    - edgedl.me.gvt1.com
+```
+
+Two things to know when adapting it. `*.domain` covers the bare
+domain and its subdomains, so `*.anthropic.com` includes
+`api.anthropic.com` and `*.openai.com` covers every OpenAI host but
+`chatgpt.com`. And `storage.googleapis.com` serves both Go modules and
+Puppeteer's Chromium, so it is listed direct rather than blocked; a
+deployment that would rather block Puppeteer downloads too drops it
+from the direct list and accepts that Go installs pay proxy traffic.
 
 ## 9. Costs
 

@@ -48,6 +48,84 @@ describe("validateManifest", () => {
     );
   });
 
+  it("accepts named egress proxies and the routes that reference them, and refuses a credential value", () => {
+    const proxies = { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } };
+    const proxy = { "*": "general", "*.registry.example": "direct" };
+    expect(validateManifest({ ...BASE, egress: { proxies, proxy } }).egress).toEqual({ proxies, proxy });
+    expect(validateManifest({ ...BASE, egress: {} }).egress).toEqual({});
+    expect(validateManifest(BASE).egress).toBeUndefined();
+    expect(() =>
+      validateManifest({
+        ...BASE,
+        egress: { proxies: { general: { address: "http://user:secret@general.proxy.example:7777" } } }
+      })
+    ).toThrow(/egress egress_policy_literal_credential/);
+    expect(() => validateManifest({ ...BASE, egress: { proxy: { "bad host": "direct" } } })).toThrow(
+      /egress egress_policy_invalid/
+    );
+    expect(() => validateManifest({ ...BASE, egress: { proxy: { "*": "nowhere" } } })).toThrow(
+      /egress egress_policy_invalid: route "\*" names an unknown proxy "nowhere"/
+    );
+    // Unknown egress keys refuse, so a future allowlist is added
+    // deliberately and a misspelt one never passes as no policy.
+    expect(() => validateManifest({ ...BASE, egress: { allowlist: [] } })).toThrow(/egress\.allowlist is not a known key/);
+    // The string var form is gone: EGRESS_PROXY is not a policy var.
+    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "{}" } } })).toThrow(/not a known var/);
+  });
+
+  it("accepts an egress.blocklist of host patterns and retires the browser's own denylist var", () => {
+    expect(validateManifest({ ...BASE, egress: { blocklist: ["Tracker.Example", "*.ads.example"] } }).egress).toEqual({
+      blocklist: ["tracker.example", "*.ads.example"]
+    });
+    expect(() => validateManifest({ ...BASE, egress: { blocklist: ["bad host"] } })).toThrow(
+      /egress\.blocklist egress_blocklist_invalid/
+    );
+    expect(() => validateManifest({ ...BASE, egress: { blocklist: "tracker.example" } })).toThrow(
+      /egress\.blocklist egress_blocklist_invalid/
+    );
+    // One list: the browser var is rendered from it, never set directly.
+    expect(() => validateManifest({ ...BASE, policy: { browser: { WEB_ORIGIN_DENYLIST: "x" } } })).toThrow(
+      /not a known var/
+    );
+  });
+
+  it("reads the egress block from YAML, quoted wildcard keys included", () => {
+    const manifest = parseManifest(
+      [
+        "project: demo",
+        "accountId: 85c7962b4a17a841ef0689e0e7c2a050",
+        "zone: demo-colony.com",
+        "egress:",
+        "  proxies:",
+        "    general:",
+        "      address: http://general.proxy.example:7777",
+        "      credential: PROXY_GENERAL",
+        "    docs:",
+        "      address: http://other.proxy.example:8888",
+        "      credential: PROXY_DOCS",
+        "  proxy:",
+        '    "*": general',
+        "    docs.example: docs",
+        '    "*.registry.example": direct',
+        "agents:",
+        "  - id: scout",
+        "    stateRepo: demo/scout-state",
+        '    cadence: "0 6 * * *"',
+        "    harness: claude-code",
+        "    model: claude-fable-5",
+        '    hosts: ["@"]',
+        "    enabled: true"
+      ].join("\n")
+    );
+    expect(manifest.egress).toEqual({
+      proxies: {
+        general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" },
+        docs: { address: "http://other.proxy.example:8888", credential: "PROXY_DOCS" }
+      },
+      proxy: { "*": "general", "docs.example": "docs", "*.registry.example": "direct" }
+    });
+  });
+
   it("delegates roster validation to the chassis parser", () => {
     expect(() =>
       validateManifest({ ...BASE, agents: [{ ...BASE.agents[0] }, { ...BASE.agents[0] }] })

@@ -102,6 +102,20 @@ export interface WakeOptions {
    * permission/autonomy settings); the chassis hardcodes none of it.
    */
   harnessExtraArgs?: string;
+  /**
+   * The mind session's outbound proxy policy (egress.ts): named proxies
+   * and a host map ("*", "host.example", "*.example") to a proxy name
+   * or "direct"; unset means everything direct. The scheduler's var
+   * names each proxy's credential and prepareLaunch substitutes the
+   * secrets, so the value that reaches the container is the resolved
+   * policy. The entrypoint runs a loopback forwarder that holds the
+   * credentials and routes per host; the session is handed only the
+   * loopback address, through the standard proxy variables. The
+   * chassis's own hosts are always direct.
+   */
+  egressProxy?: string;
+  /** JSON array of host patterns the session may not reach (spec 0004 §8); the forwarder refuses them. */
+  egressBlocklist?: string;
 }
 
 export const WAKE_ENV = {
@@ -146,8 +160,18 @@ export const WAKE_ENV = {
   xUrl: "OPERON_X_URL",
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
-  xToken: "OPERON_X_TOKEN"
+  xToken: "OPERON_X_TOKEN",
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressBlocklist: "OPERON_EGRESS_BLOCKLIST"
 } as const;
+
+/**
+ * The umbilical's virtual-host suffix (spec 0003): every door the
+ * container is handed lives under it, and so does every MCP server's
+ * virtual host. Owned here so the scheduler (which routes it) and the
+ * container (which keeps it off any outbound proxy) cannot drift.
+ */
+export const INTERNAL_SUFFIX = ".operon.internal";
 
 export function wakeEnv(
   init: WakeInit,
@@ -200,6 +224,8 @@ export function wakeEnv(
   if (options.xToken) env[WAKE_ENV.xToken] = options.xToken;
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
+  if (options.egressProxy) env[WAKE_ENV.egressProxy] = options.egressProxy;
+  if (options.egressBlocklist) env[WAKE_ENV.egressBlocklist] = options.egressBlocklist;
   return env;
 }
 
