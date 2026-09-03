@@ -93,6 +93,12 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
   add({ worker: "gatekeeper-till", name: "MPP_SECRET_KEY", purpose: "the till's MPP key", optional: true });
   add({ worker: "gatekeeper-till", name: "TEMPO_API_KEY", purpose: "the Tempo API key (till)", optional: true });
   add({ worker: "gatekeeper-browser", name: "BROWSER_RUN_TOKEN", purpose: "the Browser Run token", optional: true });
+  add({
+    worker: "scheduler",
+    name: "EGRESS_PROXY",
+    purpose: "the mind session's outbound proxy table, JSON host pattern -> proxy address or direct (spec 0004 §8; it carries proxy credentials)",
+    optional: true
+  });
 
   // Capability grants (spec 0008): what the manifest declares, it needs.
   const mcp = manifest.roster.mcp ?? {};

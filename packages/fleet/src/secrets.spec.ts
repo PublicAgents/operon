@@ -46,6 +46,7 @@ describe("requiredSecrets", () => {
     const byKey = Object.fromEntries(requiredSecrets(validateManifest(BASE)).map(r => [`${r.worker}/${r.name}`, r]));
     expect(byKey["gatekeeper-telegram/TELEGRAM_BOT_TOKEN"].optional).toBe(true);
     expect(byKey["gatekeeper-x/X_ACCESS_TOKEN_PROMOTER"].optional).toBe(true);
+    expect(byKey["scheduler/EGRESS_PROXY"].optional).toBe(true);
     expect(byKey["scheduler/WAKE_TRIGGER_TOKEN"].optional).toBeUndefined();
   });
 

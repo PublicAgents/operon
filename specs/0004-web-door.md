@@ -562,10 +562,16 @@ traffic (clone, doors, persist, notify) does not.
   suffix (`.operon.internal`, owned by `@operon/core` so the scheduler
   and the container cannot drift), every door URL in the wake config
   (found by the `Url` suffix, so a door added later is covered without
-  anyone remembering), and every MCP virtual host. No table entry can
+  anyone remembering), and every MCP virtual host. Since spec 0009 the
+  container is handed no door URL outside the umbilical, so the suffix
+  rule alone covers every door today; the URL derivation stays as the
+  guard for any door that ever lives elsewhere. No table entry can
   send them through a proxy. They ride in `NO_PROXY` for clients that
   honour it, and the forwarder enforces the same rule for any client
   that does not.
+- The proxy table is declared to the fleet tooling as an optional
+  scheduler secret (spec 0006 §2), so bootstrap and `deploy --check`
+  list it beside the other credentials rather than forgetting it.
 - `CONNECT host:port` (every https URL) is tunnelled through the chosen
   upstream, or straight to the origin when direct, and the sockets
   spliced: TLS stays end to end between the session and the origin,
