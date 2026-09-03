@@ -89,6 +89,9 @@ describe("claude-code adapter", () => {
     const settings = JSON.parse(staged.files[0].content) as Record<string, unknown>;
     expect(settings.autoMemoryEnabled).toBe(false);
     expect(settings.disableClaudeAiConnectors).toBe(true);
+    // True on purpose: false pauses a flagged session for a human who
+    // is not there (spec 0010 §3).
+    expect(settings.switchModelsOnFlag).toBe(true);
     expect(JSON.stringify(settings.hooks)).toContain("pull-hook.js");
     expect(JSON.stringify(settings.hooks)).toContain("journal-guard.js");
     expect(staged.files[0].mode).toBe(0o600);

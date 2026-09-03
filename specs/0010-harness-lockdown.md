@@ -81,9 +81,20 @@ rewritten every wake):
 {
   "autoMemoryEnabled": false,
   "disableClaudeAiConnectors": true,
+  "switchModelsOnFlag": true,
   "hooks": { "PostToolUse": [...pull hook...], "Stop": [...journal guard...] }
 }
 ```
+
+`switchModelsOnFlag` is the one key set TRUE deliberately. When a
+safety classifier flags a request the harness either switches to its
+own fixed fallback (Opus 4.8 for a cyber flag, Opus 5 for a biology
+one; the choice is the harness's, not the roster's `fallbackModel`,
+which covers overload only) or, when this is false, pauses the session
+and asks a human which to do. A wake has no human at the keyboard, so
+a pause is a wake that hangs until its wall clock kills it. The switch
+is named in the wake's usage line and summary (spec 0011 §2), so the
+operator hears about it without the session stopping.
 
 Baked into the image at `/etc/claude-code/managed-settings.json`
 (root-owned; managed settings outrank every other file and the mind
