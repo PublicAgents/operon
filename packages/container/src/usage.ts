@@ -60,19 +60,19 @@ export function claudeUsageAccumulator(): UsageAccumulator {
   const switchedTo: string[] = [];
   return {
     add(line) {
-      if (!line.startsWith("{")) return;
-      if (line.includes('"model_refusal_fallback"')) {
-        const event = parseLine(line);
-        const model = event ? claudeModelSwitch(event) : undefined;
-        if (model && !switchedTo.includes(model)) switchedTo.push(model);
+      // Parsed once and classified by its type and subtype, never by a
+      // substring: the stream is JSON, and a payload value must not
+      // decide the dispatch.
+      const event = parseLine(line);
+      if (!event) return;
+      const model = claudeModelSwitch(event);
+      if (model) {
+        if (!switchedTo.includes(model)) switchedTo.push(model);
         return;
       }
       // A result event without a usage table (an errored session) still
       // ends the wake: it is kept, and its counts read as zero.
-      if (line.includes('"type":"result"')) {
-        const event = parseLine(line);
-        if (event?.type === "result") last = event;
-      }
+      if (event.type === "result") last = event;
     },
     finish() {
       return last === undefined ? undefined : claudeResultUsage(last, switchedTo);
@@ -85,7 +85,6 @@ export function codexUsageAccumulator(): UsageAccumulator {
   const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   return {
     add(line) {
-      if (!isUsageLine(line)) return;
       const event = parseLine(line);
       if (!event || event.type !== "turn.completed") return;
       const usage = (event.usage ?? {}) as Record<string, unknown>;
