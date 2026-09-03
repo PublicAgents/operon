@@ -95,15 +95,15 @@ export interface WakeOptions {
    */
   harnessExtraArgs?: string;
   /**
-   * Upstream HTTP proxies for the mind session's outbound HTTP: a JSON
-   * object of host pattern ("*", "host.example", "*.example") to proxy
-   * address or "direct"; unset means {"*": "direct"}. The scheduler's
-   * var carries credential PLACEHOLDERS (egress.ts) and prepareLaunch
-   * substitutes the secrets they name, so the value that reaches the
-   * container is the resolved table. The entrypoint runs a loopback
-   * forwarder that holds the credentials and routes per host; the
-   * session is handed only the loopback address, through the standard
-   * proxy variables. The chassis's own hosts are always direct.
+   * The mind session's outbound proxy policy (egress.ts): named proxies
+   * and a host map ("*", "host.example", "*.example") to a proxy name
+   * or "direct"; unset means everything direct. The scheduler's var
+   * names each proxy's credential and prepareLaunch substitutes the
+   * secrets, so the value that reaches the container is the resolved
+   * policy. The entrypoint runs a loopback forwarder that holds the
+   * credentials and routes per host; the session is handed only the
+   * loopback address, through the standard proxy variables. The
+   * chassis's own hosts are always direct.
    */
   egressProxy?: string;
   /** JSON array of host patterns the session may not reach (spec 0004 §8); the forwarder refuses them. */

@@ -12,12 +12,12 @@ export {
   EgressTableError,
   EGRESS_CREDENTIAL_PREFIX,
   egressCredentialSecret,
-  egressTableCredentials,
+  egressPolicyCredentials,
   parseEgressBlocklist,
-  parseEgressTable,
-  resolveEgressTable,
-  type EgressTableEntry,
-  type EgressProxyTarget
+  parseEgressPolicy,
+  resolveEgressPolicy,
+  type EgressPolicy,
+  type EgressProxyDef
 } from "./egress.js";
 export {
   wakeEnv,

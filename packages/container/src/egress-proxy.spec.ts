@@ -113,17 +113,20 @@ async function startUpstream(options: { refuseWith?: number } = {}): Promise<{ p
 }
 
 /** A bare address here means "that proxy for everything". */
+/** Each forwarder log line is one JSON audit record; tests read them parsed. */
 async function startForwarder(
   routes: string | EgressRoutes,
   direct: string[] = [],
   blocked: string[] = []
-): Promise<{ url: string; port: number; logs: string[] }> {
-  const logs: string[] = [];
+): Promise<{ url: string; port: number; logs: Record<string, unknown>[] }> {
+  const logs: Record<string, unknown>[] = [];
   const proxy = new EgressProxy({
-    routes: typeof routes === "string" ? parseEgressRoutes(JSON.stringify({ "*": routes })) : routes,
+    routes: typeof routes === "string" ? policy({ p: routes }, { "*": "p" }) : routes,
     direct,
     blocked,
-    log: message => logs.push(message)
+    agentId: "growth",
+    wakeId: "w1",
+    log: message => logs.push(JSON.parse(message) as Record<string, unknown>)
   });
   const url = await proxy.start(0);
   cleanups.push(() => proxy.close());
@@ -181,8 +184,18 @@ function fetchViaProxy(
 }
 
 const BASIC = `Basic ${Buffer.from("user:p@ss w").toString("base64")}`;
-const PROXY_A = { tls: false, hostname: "a.proxy.example", port: 7777 };
-const PROXY_B = { tls: false, hostname: "b.proxy.example", port: 8888 };
+const PROXY_A = { name: "a", tls: false, hostname: "a.proxy.example", port: 7777 };
+const PROXY_B = { name: "b", tls: false, hostname: "b.proxy.example", port: 8888 };
+
+/** The wake-env policy shape: named proxies (credentials already in) and routes. */
+function policy(proxies: Record<string, string>, routes: Record<string, string>): EgressRoutes {
+  return parseEgressRoutes(JSON.stringify({ proxies, routes }));
+}
+
+/** A named upstream for hand-built rule lists. */
+function named(name: string, address: string) {
+  return parseUpstreamProxy(name, address);
+}
 
 describe("INTERNAL_SUFFIX", () => {
   it("matches @operon/core's, so the always-direct rule and the umbilical agree", () => {
@@ -192,18 +205,20 @@ describe("INTERNAL_SUFFIX", () => {
 
 describe("parseUpstreamProxy", () => {
   it("reads host, port, scheme, and percent-encoded credentials", () => {
-    expect(parseUpstreamProxy("http://user:p%40ss%20w@proxy.example:7777")).toEqual({
+    expect(parseUpstreamProxy("p", "http://user:p%40ss%20w@proxy.example:7777")).toEqual({
+      name: "p",
       tls: false,
       hostname: "proxy.example",
       port: 7777,
       authorization: BASIC
     });
-    expect(parseUpstreamProxy("https://proxy.example")).toEqual({
+    expect(parseUpstreamProxy("p", "https://proxy.example")).toEqual({
+      name: "p",
       tls: true,
       hostname: "proxy.example",
       port: 443
     });
-    expect(parseUpstreamProxy("http://[::1]:3128").hostname).toBe("::1");
+    expect(parseUpstreamProxy("p", "http://[::1]:3128").hostname).toBe("::1");
   });
 
   it("refuses anything that is not a bare proxy address", () => {
@@ -214,7 +229,7 @@ describe("parseUpstreamProxy", () => {
       "http://proxy.example/?q=1",
       "http://us%ZZer@proxy.example"
     ]) {
-      expect(() => parseUpstreamProxy(bad)).toThrowError(/egress_proxy_invalid/);
+      expect(() => parseUpstreamProxy("p", bad)).toThrowError(/egress_proxy_invalid/);
     }
   });
 });
@@ -223,17 +238,14 @@ describe("parseEgressRoutes", () => {
   it("defaults to everything direct, which needs no forwarder", () => {
     expect(DEFAULT_EGRESS_ROUTES).toEqual({ rules: [{ pattern: "*", target: "direct" }] });
     expect(usesProxy(DEFAULT_EGRESS_ROUTES)).toBe(false);
-    expect(usesProxy(parseEgressRoutes('{"*": "direct", "docs.example": "direct"}'))).toBe(false);
-    expect(usesProxy(parseEgressRoutes('{"docs.example": "http://a.proxy.example:7777"}'))).toBe(true);
+    expect(usesProxy(policy({}, { "*": "direct", "docs.example": "direct" }))).toBe(false);
+    expect(usesProxy(policy({ a: "http://a.proxy.example:7777" }, { "docs.example": "a" }))).toBe(true);
   });
 
-  it("reads a table of patterns to addresses or direct", () => {
-    const routes = parseEgressRoutes(
-      JSON.stringify({
-        "*": "http://a.proxy.example:7777",
-        "Docs.Example": "http://b.proxy.example:8888",
-        "*.registry.example": "direct"
-      })
+  it("reads named proxies and routes to them or direct", () => {
+    const routes = policy(
+      { a: "http://a.proxy.example:7777", b: "http://b.proxy.example:8888" },
+      { "*": "a", "Docs.Example": "b", "*.registry.example": "direct" }
     );
     expect(routes.rules).toEqual([
       { pattern: "*", target: PROXY_A },
@@ -242,16 +254,18 @@ describe("parseEgressRoutes", () => {
     ]);
   });
 
-  it("refuses malformed tables by name, a bare address included", () => {
+  it("refuses malformed policies by name, a bare address included", () => {
     for (const bad of [
       "http://a.proxy.example:7777",
       "{not json",
       "[]",
-      "{}",
-      '{"*": 7}',
-      '{"bad host": "http://p.example"}',
-      '{"*.": "http://p.example"}',
-      '{"*": "socks5://p.example"}'
+      '{"proxies": []}',
+      '{"proxies": {"Bad Name": "http://p.example"}}',
+      '{"proxies": {"p": 7}}',
+      '{"proxies": {"p": "socks5://p.example"}}',
+      '{"routes": {"bad host": "direct"}}',
+      '{"routes": {"*": 7}}',
+      '{"routes": {"*": "nowhere"}}'
     ]) {
       expect(() => parseEgressRoutes(bad)).toThrowError(/egress_proxy_invalid/);
     }
@@ -259,25 +273,30 @@ describe("parseEgressRoutes", () => {
 });
 
 describe("routeFor", () => {
-  const routes = parseEgressRoutes(
-    JSON.stringify({
-      "*": "http://a.proxy.example:7777",
-      "*.example.org": "http://b.proxy.example:8888",
+  const routes = policy(
+    {
+      a: "http://a.proxy.example:7777",
+      b: "http://b.proxy.example:8888",
+      c: "http://c.proxy.example:9999"
+    },
+    {
+      "*": "a",
+      "*.example.org": "b",
       "deep.sub.example.org": "direct",
-      "*.sub.example.org": "http://c.proxy.example:9999"
-    })
+      "*.sub.example.org": "c"
+    }
   );
 
   it("picks the most specific match: exact, then longest domain, then the catch-all", () => {
     expect(routeFor(routes, "anything.test")).toEqual(PROXY_A);
     expect(routeFor(routes, "example.org")).toEqual(PROXY_B);
     expect(routeFor(routes, "www.example.org")).toEqual(PROXY_B);
-    expect(routeFor(routes, "x.sub.example.org")).toMatchObject({ hostname: "c.proxy.example" });
+    expect(routeFor(routes, "x.sub.example.org")).toMatchObject({ name: "c", hostname: "c.proxy.example" });
     expect(routeFor(routes, "DEEP.sub.example.org")).toBe("direct");
   });
 
   it("sends an unmatched host direct when there is no catch-all", () => {
-    const partial = parseEgressRoutes('{"docs.example": "http://a.proxy.example:7777"}');
+    const partial = policy({ a: "http://a.proxy.example:7777" }, { "docs.example": "a" });
     expect(routeFor(partial, "docs.example")).toEqual(PROXY_A);
     expect(routeFor(partial, "other.example")).toBe("direct");
   });
@@ -352,8 +371,22 @@ describe("EgressProxy", () => {
     expect(upstream.seen).toEqual([{ kind: "request", auth: BASIC, target: `http://${target}/x?k=v` }]);
     expect(origin.headers[0]["x-seen-by-upstream"]).toBe("1");
     expect(origin.headers[0]["proxy-authorization"]).toBeUndefined();
-    // The log names the host and the route, never the query.
-    expect(forwarder.logs).toEqual([`egress proxy: GET ${target} via 127.0.0.1:${upstream.port}`]);
+    // The audit line names the host, the port, and the route, never the
+    // path or query, in the platform audit's shape plus the route taken.
+    expect(forwarder.logs).toEqual([
+      {
+        t: "egress",
+        via: "forwarder",
+        agentId: "growth",
+        wakeId: "w1",
+        method: "GET",
+        host: "origin.example",
+        port: origin.port,
+        route: "proxy",
+        proxy: "p"
+      }
+    ]);
+    expect(JSON.stringify(forwarder.logs)).not.toContain("k=v");
   });
 
   it("tunnels a CONNECT through the upstream and splices the sockets", async () => {
@@ -366,7 +399,9 @@ describe("EgressProxy", () => {
     expect(transcript.startsWith("HTTP/1.1 200 Connection Established\r\n\r\n")).toBe(true);
     expect(transcript).toContain("hello /y");
     expect(upstream.seen).toEqual([{ kind: "connect", auth: BASIC, target }]);
-    expect(forwarder.logs).toEqual([`egress proxy: CONNECT ${target} via 127.0.0.1:${upstream.port}`]);
+    expect(forwarder.logs).toMatchObject([
+      { method: "CONNECT", host: "origin.example", port: origin.port, route: "proxy", proxy: "p" }
+    ]);
   });
 
   it("routes each host to its own upstream, the catch-all taking the rest", async () => {
@@ -375,8 +410,8 @@ describe("EgressProxy", () => {
     const forDocs = await startUpstream();
     const forwarder = await startForwarder({
       rules: [
-        { pattern: "*", target: parseUpstreamProxy(`http://127.0.0.1:${catchAll.port}`) },
-        { pattern: "*.docs.example", target: parseUpstreamProxy(`http://127.0.0.1:${forDocs.port}`) }
+        { pattern: "*", target: named("catch-all", `http://127.0.0.1:${catchAll.port}`) },
+        { pattern: "*.docs.example", target: named("docs", `http://127.0.0.1:${forDocs.port}`) }
       ]
     });
 
@@ -393,8 +428,8 @@ describe("EgressProxy", () => {
     const upstream = await startUpstream();
     const forwarder = await startForwarder({
       rules: [
-        { pattern: "*", target: parseUpstreamProxy(`http://127.0.0.1:${upstream.port}`) },
-        { pattern: "127.0.0.1", target: parseUpstreamProxy(`http://127.0.0.1:${upstream.port}`) },
+        { pattern: "*", target: named("p", `http://127.0.0.1:${upstream.port}`) },
+        { pattern: "127.0.0.1", target: named("p", `http://127.0.0.1:${upstream.port}`) },
         { pattern: "direct.example", target: "direct" }
       ]
     });
@@ -412,11 +447,12 @@ describe("EgressProxy", () => {
     const marked = await connectThrough(forwarder.port, "direct.example:443");
     expect(marked).toContain("502 proxy_origin_unreachable");
     expect(upstream.seen).toEqual([]);
-    expect(forwarder.logs).toEqual([
-      `egress proxy: CONNECT ${loopback} direct`,
-      `egress proxy: GET ${loopback} direct`,
-      "egress proxy: CONNECT direct.example:443 direct"
+    expect(forwarder.logs).toMatchObject([
+      { method: "CONNECT", host: "127.0.0.1", port: origin.port, route: "direct" },
+      { method: "GET", host: "127.0.0.1", port: origin.port, route: "direct" },
+      { method: "CONNECT", host: "direct.example", port: 443, route: "direct" }
     ]);
+    expect(forwarder.logs.some(line => "proxy" in line)).toBe(false);
   });
 
   it("refuses blocklisted hosts on both paths, chassis hosts excepted", async () => {
@@ -438,9 +474,9 @@ describe("EgressProxy", () => {
     });
     // Nothing blocked reached the upstream, and the log names the decision.
     expect(upstream.seen).toEqual([]);
-    expect(forwarder.logs).toEqual([
-      "egress proxy: CONNECT tracker.example:443 blocked",
-      "egress proxy: GET cdn.ads.example blocked"
+    expect(forwarder.logs).toMatchObject([
+      { method: "CONNECT", host: "tracker.example", port: 443, route: "blocked", status: 403, reason: "proxy_blocked_host" },
+      { method: "GET", host: "cdn.ads.example", port: 80, route: "blocked", status: 403, reason: "proxy_blocked_host" }
     ]);
     // Loopback and the chassis's hosts stay direct even when listed.
     expect((await connectThrough(forwarder.port, `127.0.0.1:${origin.port}`)).includes("hello /y")).toBe(true);
@@ -462,7 +498,7 @@ describe("EgressProxy", () => {
       expect(plainHttp).toMatchObject({ status: 502, body: "proxy_origin_unreachable" });
     }
     expect(upstream.seen).toEqual([]);
-    expect(forwarder.logs.every(line => line.endsWith(" direct"))).toBe(true);
+    expect(forwarder.logs.every(line => line.route === "direct")).toBe(true);
   });
 
   it("reports an upstream refusal as a gateway failure, never as a challenge", async () => {
@@ -477,7 +513,12 @@ describe("EgressProxy", () => {
     const result = await fetchViaProxy(forwarder.port, `http://${target}/z`);
     expect(result.status).toBe(502);
     expect(result.body).toBe("proxy_upstream_refused");
-    expect(forwarder.logs.filter(line => line.includes("refused upstream (407)"))).toHaveLength(2);
+    const refusals = forwarder.logs.filter(line => line.reason === "proxy_upstream_refused");
+    expect(refusals).toHaveLength(2);
+    expect(refusals).toMatchObject([
+      { method: "CONNECT", route: "proxy", status: 502, upstream: 407 },
+      { method: "GET", route: "proxy", status: 502, upstream: 407 }
+    ]);
   });
 
   it("reports an unreachable upstream", async () => {
@@ -536,7 +577,7 @@ describe("EgressProxy", () => {
     const upstream = await startUpstream();
     const forwarder = await startForwarder({
       rules: [
-        { pattern: "*", target: parseUpstreamProxy(`http://127.0.0.1:${upstream.port}`) },
+        { pattern: "*", target: named("p", `http://127.0.0.1:${upstream.port}`) },
         { pattern: "direct.example", target: "direct" }
       ]
     });

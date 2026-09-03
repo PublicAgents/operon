@@ -1,5 +1,12 @@
 import { parse as parseYaml } from "yaml";
-import { EgressTableError, parseEgressBlocklist, parseEgressTable, parseRoster, type Roster } from "@operon/core";
+import {
+  EgressTableError,
+  parseEgressBlocklist,
+  parseEgressPolicy,
+  parseRoster,
+  type EgressProxyDef,
+  type Roster
+} from "@operon/core";
 
 /**
  * The operon.yaml manifest (spec 0006 §1 and §2): everything
@@ -81,29 +88,29 @@ export interface FleetManifest {
   containers: { maxInstances: number };
   policy: Record<string, Record<string, string>>;
   /**
-   * The mind session's egress policy (spec 0004 §5, §8). `proxy` is the
-   * outbound proxy table: host pattern to proxy address or "direct",
-   * credentials by placeholder only; absent means everything direct.
+   * The mind session's egress policy (spec 0004 §5, §8). `proxies`
+   * defines the upstream proxies by name (address, and the NAME of a
+   * credential secret, never its value); `proxy` maps host patterns to
+   * a proxy name or "direct", absent meaning everything direct;
    * `blocklist` is the hosts the session may not reach, ONE list for
    * the browser door and the container forwarder alike. Rendered into
    * the scheduler's EGRESS_PROXY and EGRESS_BLOCKLIST vars and the
-   * browser Gatekeeper's WEB_ORIGIN_DENYLIST; the proxy credentials are
-   * scheduler secrets.
+   * browser Gatekeeper's WEB_ORIGIN_DENYLIST.
    */
-  egress?: { proxy?: Record<string, string>; blocklist?: string[] };
+  egress?: { proxies?: Record<string, EgressProxyDef>; proxy?: Record<string, string>; blocklist?: string[] };
   roster: Roster;
 }
 
-const EGRESS_KEYS = ["proxy", "blocklist"] as const;
+const EGRESS_KEYS = ["proxies", "proxy", "blocklist"] as const;
 
 /**
- * The egress block. The proxy table is checked with the chassis grammar
- * so a bad pattern, a malformed address, or a LITERAL credential fails
- * here, by name, before it can be rendered or committed. A key starting
- * with `*` must be quoted in YAML (an unquoted one is an alias), which
- * the YAML parser reports before this runs. Unknown keys refuse, as
- * everywhere in this validator: a misspelt policy must not pass as no
- * policy.
+ * The egress block. The proxies and the host map are checked with the
+ * chassis grammar so a bad name, pattern or address, a route to an
+ * undefined proxy, or a LITERAL credential fails here, by name, before
+ * it can be rendered or committed. A key starting with `*` must be
+ * quoted in YAML (an unquoted one is an alias), which the YAML parser
+ * reports before this runs. Unknown keys refuse, as everywhere in this
+ * validator: a misspelt policy must not pass as no policy.
  */
 function validateEgress(raw: unknown): FleetManifest["egress"] {
   if (raw === undefined) return undefined;
@@ -114,20 +121,19 @@ function validateEgress(raw: unknown): FleetManifest["egress"] {
     }
   }
   const egress: NonNullable<FleetManifest["egress"]> = {};
-  if (record.proxy !== undefined) {
-    const table = requireRecord(record.proxy, "egress.proxy");
-    const proxy: Record<string, string> = {};
-    for (const [pattern, value] of Object.entries(table)) {
-      if (typeof value !== "string") fail(`egress.proxy.${pattern}`, 'must be a proxy address or "direct"');
-      proxy[pattern] = value;
-    }
+  if (record.proxies !== undefined || record.proxy !== undefined) {
+    let policy;
     try {
-      parseEgressTable(JSON.stringify(proxy));
+      policy = parseEgressPolicy({
+        ...(record.proxies !== undefined ? { proxies: record.proxies } : {}),
+        ...(record.proxy !== undefined ? { routes: record.proxy } : {})
+      });
     } catch (error) {
-      if (error instanceof EgressTableError) fail("egress.proxy", error.message);
+      if (error instanceof EgressTableError) fail("egress", error.message);
       throw error;
     }
-    egress.proxy = proxy;
+    if (record.proxies !== undefined) egress.proxies = policy.proxies;
+    if (record.proxy !== undefined) egress.proxy = policy.routes;
   }
   if (record.blocklist !== undefined) {
     try {

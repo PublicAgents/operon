@@ -530,19 +530,27 @@ interception machinery closes that gap:
 ### Outbound proxy (optional)
 
 A deployment may route the mind session's plain HTTP egress through
-upstream HTTP proxies. The table is `egress.proxy` in the manifest
-(spec 0006 §2; `egress:` is the home of the session's egress policy,
-with room for an allowlist or blocklist beside it), routing by
-destination host to a proxy address or `direct`; the templates render
-it as the scheduler's `EGRESS_PROXY` var. **A proxy address names its
-credential by placeholder, never by value**, because the manifest is
-committed configuration:
+upstream HTTP proxies. The policy is the manifest's `egress:` block
+(spec 0006 §2): `proxies` DEFINES each upstream once, by name, with
+its address and the NAME of its credential secret; `proxy` maps
+destination hosts to a proxy name or `direct`; the templates render
+both as the scheduler's `EGRESS_PROXY` var. **An address never
+carries a credential value**, because the manifest is committed
+configuration, and the proxy's name travels to the container so
+every audit line names which proxy carried a request:
 
 ```yaml
 egress:
+  proxies:
+    general:
+      address: http://general.proxy.example:7777
+      credential: PROXY_GENERAL
+    docs:
+      address: http://other.proxy.example:8888
+      credential: PROXY_DOCS
   proxy:
-    "*": http://${PROXY_GENERAL}@general.proxy.example:7777
-    docs.example: http://${PROXY_DOCS}@other.proxy.example:8888
+    "*": general
+    docs.example: docs
     "*.registry.example": direct
 ```
 
@@ -556,25 +564,27 @@ a host no key matches goes direct. Unset, the table is
 `{"*": "direct"}`, under which no forwarder runs and egress is exactly
 as before.
 
-A placeholder `${NAME}` names the scheduler secret
+A proxy's `credential: NAME` names the scheduler secret
 `EGRESS_CREDENTIAL_<NAME>`, holding `user:pass` (the first colon
 splits; any character is allowed, each half is percent-encoded into
-the URL). One grammar (`@operon/core` `egress.ts`) serves three
-readers:
+the URL). A proxy without a `credential` is dialled unauthenticated.
+One grammar (`@operon/core` `egress.ts`) serves three readers:
 
-- The fleet validates the table at manifest validation: a malformed
-  pattern or address fails by name, and a LITERAL credential in an
-  address fails as `egress_table_literal_credential`, pointing at the
-  placeholder form, so a pasted secret never reaches a commit. The
-  secret checklist (spec 0006 §2) derives `EGRESS_CREDENTIAL_<NAME>`
-  for every placeholder, so bootstrap and `deploy --check` name
-  exactly the secrets the table needs.
-- The scheduler substitutes at launch: the resolved table rides the
-  wake env as `OPERON_EGRESS_PROXY`, and a placeholder whose secret is
-  not configured fails the launch as `egress_credential_missing`, like
-  a missing mind credential.
-- The container receives the resolved table only, validates it again
-  at wake start, and never sees a placeholder.
+- The fleet validates the policy at manifest validation: a malformed
+  name, pattern or address, or a route to an undefined proxy, fails
+  by name, and a LITERAL credential in an address fails as
+  `egress_policy_literal_credential`, pointing at the `credential:`
+  form, so a pasted secret never reaches a commit. The secret
+  checklist (spec 0006 §2) derives `EGRESS_CREDENTIAL_<NAME>` for
+  every named credential, so bootstrap and `deploy --check` name
+  exactly the secrets the policy needs.
+- The scheduler substitutes at launch: the resolved policy (each
+  proxy's address with its credential in, the routes as written)
+  rides the wake env as `OPERON_EGRESS_PROXY`, and a named credential
+  whose secret is not configured fails the launch as
+  `egress_credential_missing`, like a missing mind credential.
+- The container receives the resolved policy only, validates it again
+  at wake start, and never sees a credential name.
 
 No credential enters the session: the ROOT entrypoint runs a loopback
 forwarder beside the porch for exactly the session's lifetime, decides
@@ -605,9 +615,17 @@ traffic (clone, doors, persist, notify) does not.
   spliced: TLS stays end to end between the session and the origin,
   and the forwarder sees hostnames only.
 - Absolute-form `http://` requests are forwarded as they arrive.
-- The forwarder logs one compact line per tunnel or request (method,
-  host, and the route taken, never a path or query), in the
-  egress-audit style above.
+- The forwarder logs one compact JSON line per tunnel or request in
+  the platform audit's shape (`t: "egress"`, agent and wake ids,
+  method, host, port; never a path or query) plus what the audit
+  cannot see: `via: "forwarder"`, the `route` taken (`direct`,
+  `proxy`, `blocked`, `refused`), the NAME of the proxy that carried
+  it when proxied, and `status`, `reason` and the upstream's answer on
+  a refusal. The line rides the wake transcript. It matters because
+  the platform audit above sees only the connection TO the proxy host
+  when a route is proxied (and nothing at all for a plain-http
+  upstream, which its TLS interception does not cover): the
+  destination and the route are recorded here and nowhere else.
 - An upstream refusal (a 407, a non-200 CONNECT answer) is reported to
   the session as a 502 gateway failure, never relayed as a challenge:
   the session has no credential to offer and must not be invited to

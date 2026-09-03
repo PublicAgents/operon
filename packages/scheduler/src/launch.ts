@@ -2,7 +2,8 @@ import { doorHost } from "./umbilical-routes.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
   EgressTableError,
-  resolveEgressTable,
+  parseEgressPolicy,
+  resolveEgressPolicy,
   wakeEnv,
   type RosterAgent,
   type WakeTrigger,
@@ -188,15 +189,17 @@ export async function prepareLaunch(
       }
     : {};
 
-  // The outbound proxy table (spec 0004 §8) names its credentials by
-  // placeholder; the values are scheduler secrets, substituted here so
+  // The outbound proxy policy (spec 0004 §8) names each proxy's
+  // credential; the values are scheduler secrets, substituted here so
   // the committed var never holds one and the container receives the
-  // table it can use. A placeholder without its secret fails the launch
-  // by name, like a missing mind credential.
+  // policy it can use. A named credential without its secret fails the
+  // launch by name, like a missing mind credential.
   let egressProxy: { egressProxy: string } | Record<string, never> = {};
   if (context.options.egressProxy !== undefined) {
     try {
-      egressProxy = { egressProxy: resolveEgressTable(context.options.egressProxy, name => context.getSecret(name)) };
+      egressProxy = {
+        egressProxy: resolveEgressPolicy(parseEgressPolicy(context.options.egressProxy), name => context.getSecret(name))
+      };
     } catch (error) {
       if (error instanceof EgressTableError) throw new LaunchPreconditionError(error.code, error.message);
       throw error;

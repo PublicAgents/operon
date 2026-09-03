@@ -53,11 +53,11 @@ describe("requiredSecrets", () => {
     const withProxy = validateManifest({
       ...BASE,
       egress: {
-        proxy: {
-          "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-          "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
-          "*.registry.example": "direct"
-        }
+        proxies: {
+          general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" },
+          docs: { address: "http://other.proxy.example:8888", credential: "PROXY_DOCS" }
+        },
+        proxy: { "*": "general", "docs.example": "docs", "*.registry.example": "direct" }
       }
     });
     const names = requiredSecrets(withProxy).map(r => `${r.worker}/${r.name}`);

@@ -58,6 +58,8 @@ export const EGRESS_PROXY_PORT = 41415;
 export const INTERNAL_SUFFIX = ".operon.internal";
 
 export interface UpstreamProxy {
+  /** The proxy's name from the policy: what the audit line records. */
+  name: string;
   tls: boolean;
   hostname: string;
   port: number;
@@ -115,7 +117,7 @@ export class EgressProxyError extends Error {
  * no path or query, and anything that looks like one is a mistake worth
  * refusing rather than a URL worth guessing at.
  */
-export function parseUpstreamProxy(raw: string): UpstreamProxy {
+export function parseUpstreamProxy(name: string, raw: string): UpstreamProxy {
   let url: URL;
   try {
     url = new URL(raw);
@@ -144,6 +146,7 @@ export function parseUpstreamProxy(raw: string): UpstreamProxy {
     authorization = `Basic ${Buffer.from(`${user}:${pass}`, "utf8").toString("base64")}`;
   }
   return {
+    name,
     tls,
     // The URL parser keeps IPv6 brackets; the socket dial wants none.
     hostname: unbracket(url.hostname),
@@ -155,34 +158,59 @@ export function parseUpstreamProxy(raw: string): UpstreamProxy {
 const HOST_PATTERN = /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
 /**
- * The route table: a JSON object of host pattern -> proxy address or
- * "direct", and nothing else (a bare address is refused: the table is
- * the one shape, so a reader never has to guess which form is in use).
- * Every entry is validated here, at wake start, so a typo fails the wake
- * by name instead of the first request.
+ * The policy as the wake env carries it: `proxies`, name -> address
+ * (credentials already substituted by the scheduler), and `routes`,
+ * host pattern -> proxy name or "direct". Every entry is validated
+ * here, at wake start, so a typo fails the wake by name instead of the
+ * first request.
  */
+const PROXY_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+
 export function parseEgressRoutes(raw: string): EgressRoutes {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new EgressProxyError("egress_proxy_invalid: routes are not valid JSON");
+    throw new EgressProxyError("egress_proxy_invalid: policy is not valid JSON");
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new EgressProxyError("egress_proxy_invalid: routes must be a JSON object");
+    throw new EgressProxyError("egress_proxy_invalid: policy must be a JSON object");
+  }
+  const { proxies: rawProxies, routes: rawRoutes } = parsed as { proxies?: unknown; routes?: unknown };
+  const proxies = new Map<string, UpstreamProxy>();
+  if (rawProxies !== undefined) {
+    if (typeof rawProxies !== "object" || rawProxies === null || Array.isArray(rawProxies)) {
+      throw new EgressProxyError("egress_proxy_invalid: proxies must be a JSON object");
+    }
+    for (const [name, address] of Object.entries(rawProxies as Record<string, unknown>)) {
+      if (!PROXY_NAME.test(name)) throw new EgressProxyError(`egress_proxy_invalid: bad proxy name "${name}"`);
+      if (typeof address !== "string") throw new EgressProxyError(`egress_proxy_invalid: proxy "${name}" must be an address`);
+      proxies.set(name, parseUpstreamProxy(name, address));
+    }
   }
   const rules: EgressRule[] = [];
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const pattern = key.trim().toLowerCase();
-    if (pattern !== "*" && !HOST_PATTERN.test(pattern)) {
-      throw new EgressProxyError(`egress_proxy_invalid: bad host pattern "${key}"`);
+  if (rawRoutes !== undefined) {
+    if (typeof rawRoutes !== "object" || rawRoutes === null || Array.isArray(rawRoutes)) {
+      throw new EgressProxyError("egress_proxy_invalid: routes must be a JSON object");
     }
-    if (typeof value !== "string") {
-      throw new EgressProxyError(`egress_proxy_invalid: route "${key}" must be a proxy address or "direct"`);
+    for (const [key, value] of Object.entries(rawRoutes as Record<string, unknown>)) {
+      const pattern = key.trim().toLowerCase();
+      if (pattern !== "*" && !HOST_PATTERN.test(pattern)) {
+        throw new EgressProxyError(`egress_proxy_invalid: bad host pattern "${key}"`);
+      }
+      if (typeof value !== "string") {
+        throw new EgressProxyError(`egress_proxy_invalid: route "${key}" must name a proxy or "direct"`);
+      }
+      const name = value.trim();
+      if (name === "direct") {
+        rules.push({ pattern, target: "direct" });
+        continue;
+      }
+      const proxy = proxies.get(name);
+      if (!proxy) throw new EgressProxyError(`egress_proxy_invalid: route "${key}" names an unknown proxy "${name}"`);
+      rules.push({ pattern, target: proxy });
     }
-    rules.push({ pattern, target: value.trim() === "direct" ? "direct" : parseUpstreamProxy(value) });
   }
-  if (rules.length === 0) throw new EgressProxyError("egress_proxy_invalid: no routes");
   return { rules };
 }
 
@@ -279,11 +307,39 @@ export interface EgressProxyContext {
   direct: readonly string[];
   /** Host patterns refused outright (spec 0004 §5); chassis hosts are never among them. */
   blocked?: readonly string[];
+  /** Stamped on every audit line, as the platform audit stamps its own. */
+  agentId?: string;
+  wakeId?: string;
   log(message: string): void;
 }
 
 /** Where a destination goes: a route, or nowhere. */
 export type EgressDecision = EgressTarget | "blocked";
+
+/**
+ * One audit line per request, in the shape of the platform egress audit
+ * (spec 0004 §8) plus the ROUTE the forwarder took, so the two records
+ * are queried alike. The platform audit sees only the connection to the
+ * proxy host (or, for a plain-http upstream, nothing at all); this line
+ * is where the destination and the route are recorded. Host and port
+ * only, never a path or query. A refusal carries its status and reason.
+ */
+export interface ForwarderAuditLine {
+  t: "egress";
+  via: "forwarder";
+  agentId: string;
+  wakeId: string;
+  method: string;
+  host: string;
+  port?: number;
+  route: "direct" | "proxy" | "blocked" | "refused";
+  /** The proxy's NAME (from the policy), when the route is a proxy. */
+  proxy?: string;
+  status?: number;
+  reason?: string;
+  /** What the upstream answered, when it refused. */
+  upstream?: number;
+}
 
 const CONNECT_TARGET = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/;
 /** An upstream that answers a CONNECT with more head than this is not a proxy. */
@@ -339,9 +395,10 @@ export function endToEndHeaders(
   return kept;
 }
 
-function describe(target: EgressDecision): string {
-  if (target === "blocked") return "blocked";
-  return target === "direct" ? "direct" : `via ${target.hostname}:${target.port}`;
+function routeOf(target: EgressDecision): Pick<ForwarderAuditLine, "route" | "proxy"> {
+  if (target === "blocked") return { route: "blocked" };
+  if (target === "direct") return { route: "direct" };
+  return { route: "proxy", proxy: target.name };
 }
 
 export class EgressProxy {
@@ -363,6 +420,17 @@ export class EgressProxy {
     const address = this.server.address();
     const boundPort = typeof address === "object" && address !== null ? address.port : port;
     return `http://127.0.0.1:${boundPort}`;
+  }
+
+  private audit(line: Omit<ForwarderAuditLine, "t" | "via" | "agentId" | "wakeId">): void {
+    const full: ForwarderAuditLine = {
+      t: "egress",
+      via: "forwarder",
+      agentId: this.context.agentId ?? "unknown",
+      wakeId: this.context.wakeId ?? "unknown",
+      ...line
+    };
+    this.context.log(JSON.stringify(full));
   }
 
   async close(): Promise<void> {
@@ -394,6 +462,7 @@ export class EgressProxy {
     const targetSpec = request.url ?? "";
     const match = CONNECT_TARGET.exec(targetSpec);
     if (!match) {
+      this.audit({ method: "CONNECT", host: targetSpec.slice(0, 256), route: "refused", status: 400, reason: "proxy_bad_target" });
       refuse(client, 400, "proxy_bad_target");
       return;
     }
@@ -402,15 +471,17 @@ export class EgressProxy {
     // The regex bounds the digits, not the value: a port outside the TCP
     // range would throw synchronously from the dial, inside root.
     if (port < 1 || port > 65535) {
+      this.audit({ method: "CONNECT", host, port, route: "refused", status: 400, reason: "proxy_bad_target" });
       refuse(client, 400, "proxy_bad_target");
       return;
     }
     const target = this.targetFor(host);
-    this.context.log(`egress proxy: CONNECT ${targetSpec} ${describe(target)}`);
     if (target === "blocked") {
+      this.audit({ method: "CONNECT", host, port, route: "blocked", status: 403, reason: "proxy_blocked_host" });
       refuse(client, 403, "proxy_blocked_host");
       return;
     }
+    this.audit({ method: "CONNECT", host, port, ...routeOf(target) });
     if (target === "direct") {
       const origin = netConnect({ host, port });
       let settled = false;
@@ -456,7 +527,15 @@ export class EgressProxy {
       const statusLine = buffered.subarray(0, end).toString("latin1");
       const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(statusLine)?.[1]);
       if (status !== 200) {
-        this.context.log(`egress proxy: CONNECT ${targetSpec} refused upstream (${status || "no status"})`);
+        this.audit({
+          method: "CONNECT",
+          host,
+          port,
+          ...routeOf(target),
+          status: 502,
+          reason: "proxy_upstream_refused",
+          upstream: status || 0
+        });
         failed(502, "proxy_upstream_refused");
         return;
       }
@@ -509,17 +588,21 @@ export class EgressProxy {
     // above as not-a-URL); this closes the rest of the range so no port
     // ever reaches a dial unvalidated, the same rule as CONNECT.
     const port = url.port ? Number(url.port) : 80;
+    const method = request.method ?? "GET";
+    const host = unbracket(url.hostname);
     if (port < 1 || port > 65535) {
+      this.audit({ method, host, port, route: "refused", status: 400, reason: "proxy_bad_target" });
       plain(response, 400, "proxy_bad_target");
       return;
     }
     const target = this.targetFor(url.hostname);
-    // Host only, as with every egress line: a query string can carry secrets.
-    this.context.log(`egress proxy: ${request.method} ${url.host} ${describe(target)}`);
     if (target === "blocked") {
+      this.audit({ method, host, port, route: "blocked", status: 403, reason: "proxy_blocked_host" });
       plain(response, 403, "proxy_blocked_host");
       return;
     }
+    // Host and port only, as with every egress line: a query string can carry secrets.
+    this.audit({ method, host, port, ...routeOf(target) });
     const headers = endToEndHeaders(request.headers);
     const proxied =
       target === "direct"
@@ -542,7 +625,7 @@ export class EgressProxy {
       if (target !== "direct" && upstreamResponse.statusCode === 407) {
         // The upstream wants a credential the session cannot supply; say
         // so as a gateway failure rather than relaying a challenge.
-        this.context.log(`egress proxy: ${request.method} ${url.host} refused upstream (407)`);
+        this.audit({ method, host, port, ...routeOf(target), status: 502, reason: "proxy_upstream_refused", upstream: 407 });
         upstreamResponse.resume();
         plain(response, 502, "proxy_upstream_refused");
         return;

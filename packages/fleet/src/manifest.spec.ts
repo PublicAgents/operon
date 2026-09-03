@@ -48,22 +48,23 @@ describe("validateManifest", () => {
     );
   });
 
-  it("accepts an egress.proxy table with placeholders and refuses one with a credential in it", () => {
-    const proxy = {
-      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-      "*.registry.example": "direct"
-    };
-    expect(validateManifest({ ...BASE, egress: { proxy } }).egress).toEqual({ proxy });
+  it("accepts named egress proxies and the routes that reference them, and refuses a credential value", () => {
+    const proxies = { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } };
+    const proxy = { "*": "general", "*.registry.example": "direct" };
+    expect(validateManifest({ ...BASE, egress: { proxies, proxy } }).egress).toEqual({ proxies, proxy });
     expect(validateManifest({ ...BASE, egress: {} }).egress).toEqual({});
     expect(validateManifest(BASE).egress).toBeUndefined();
     expect(() =>
-      validateManifest({ ...BASE, egress: { proxy: { "*": "http://user:secret@general.proxy.example:7777" } } })
-    ).toThrow(/egress\.proxy egress_table_literal_credential/);
+      validateManifest({
+        ...BASE,
+        egress: { proxies: { general: { address: "http://user:secret@general.proxy.example:7777" } } }
+      })
+    ).toThrow(/egress egress_policy_literal_credential/);
     expect(() => validateManifest({ ...BASE, egress: { proxy: { "bad host": "direct" } } })).toThrow(
-      /egress\.proxy egress_table_invalid/
+      /egress egress_policy_invalid/
     );
-    expect(() => validateManifest({ ...BASE, egress: { proxy: { "*": 7 } } })).toThrow(
-      /egress\.proxy\.\* must be a proxy address/
+    expect(() => validateManifest({ ...BASE, egress: { proxy: { "*": "nowhere" } } })).toThrow(
+      /egress egress_policy_invalid: route "\*" names an unknown proxy "nowhere"/
     );
     // Unknown egress keys refuse, so a future allowlist is added
     // deliberately and a misspelt one never passes as no policy.
@@ -95,9 +96,16 @@ describe("validateManifest", () => {
         "accountId: 85c7962b4a17a841ef0689e0e7c2a050",
         "zone: demo-colony.com",
         "egress:",
+        "  proxies:",
+        "    general:",
+        "      address: http://general.proxy.example:7777",
+        "      credential: PROXY_GENERAL",
+        "    docs:",
+        "      address: http://other.proxy.example:8888",
+        "      credential: PROXY_DOCS",
         "  proxy:",
-        '    "*": http://${PROXY_GENERAL}@general.proxy.example:7777',
-        "    docs.example: http://${PROXY_DOCS}@other.proxy.example:8888",
+        '    "*": general',
+        "    docs.example: docs",
         '    "*.registry.example": direct',
         "agents:",
         "  - id: scout",
@@ -110,11 +118,11 @@ describe("validateManifest", () => {
       ].join("\n")
     );
     expect(manifest.egress).toEqual({
-      proxy: {
-        "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-        "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
-        "*.registry.example": "direct"
-      }
+      proxies: {
+        general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" },
+        docs: { address: "http://other.proxy.example:8888", credential: "PROXY_DOCS" }
+      },
+      proxy: { "*": "general", "docs.example": "docs", "*.registry.example": "direct" }
     });
   });
 

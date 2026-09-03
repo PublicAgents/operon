@@ -222,16 +222,14 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     // The outbound proxy table renders from the manifest's egress block:
     // absent by default, placeholders and all (never a credential) when set.
     expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();
-    const proxy = {
-      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-      "*.registry.example": "direct"
-    };
-    const withEgress = renderWorkers(validateManifest({ ...RAW, egress: { proxy } }), {
+    const proxies = { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } };
+    const proxy = { "*": "general", "*.registry.example": "direct" };
+    const withEgress = renderWorkers(validateManifest({ ...RAW, egress: { proxies, proxy } }), {
       chassisDir: CHASSIS,
       d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
       siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
     }).find(worker => worker.key === "scheduler")?.config as Record<string, any>;
-    expect(JSON.parse(withEgress.vars.EGRESS_PROXY as string)).toEqual(proxy);
+    expect(JSON.parse(withEgress.vars.EGRESS_PROXY as string)).toEqual({ proxies, routes: proxy });
     expect(withEgress.vars.EGRESS_BLOCKLIST).toBeUndefined();
   });
 

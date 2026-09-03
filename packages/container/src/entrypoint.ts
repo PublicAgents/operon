@@ -1006,7 +1006,14 @@ async function main(): Promise<number> {
     // The chassis's own hosts are derived from THIS config, never listed:
     // a door added later is direct without anyone remembering to say so.
     const direct = directHostsFrom(config);
-    egressProxy = new EgressProxy({ routes: config.egressProxy, direct, blocked: config.egressBlocklist, log });
+    egressProxy = new EgressProxy({
+      routes: config.egressProxy,
+      direct,
+      blocked: config.egressBlocklist,
+      agentId: config.agentId,
+      wakeId: config.wakeId,
+      log
+    });
     proxy = { url: await egressProxy.start(), direct };
     log(`${label}: outbound proxy forwarder at ${proxy.url}`);
   }

@@ -430,7 +430,14 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {}),
           // The outbound proxy table (spec 0004 §8), placeholders and all:
           // the manifest carries no credential, so neither does the var.
-          ...(manifest.egress?.proxy !== undefined ? { EGRESS_PROXY: JSON.stringify(manifest.egress.proxy) } : {}),
+          ...(manifest.egress?.proxies !== undefined || manifest.egress?.proxy !== undefined
+            ? {
+                EGRESS_PROXY: JSON.stringify({
+                  proxies: manifest.egress.proxies ?? {},
+                  routes: manifest.egress.proxy ?? {}
+                })
+              }
+            : {}),
           ...(manifest.egress?.blocklist?.length
             ? { EGRESS_BLOCKLIST: JSON.stringify(manifest.egress.blocklist) }
             : {})

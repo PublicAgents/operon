@@ -66,8 +66,8 @@ describe("prepareLaunch", () => {
 
   it("substitutes the outbound proxy table's placeholders from secrets, and fails by name without one", async () => {
     const table = JSON.stringify({
-      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-      "*.registry.example": "direct"
+      proxies: { general: { address: "http://general.proxy.example:7777", credential: "PROXY_GENERAL" } },
+      routes: { "*": "general", "*.registry.example": "direct" }
     });
     const withSecret = context({
       getSecret: name =>
@@ -81,8 +81,8 @@ describe("prepareLaunch", () => {
     const prepared = await prepareLaunch(agent, "cron", "wake-proxy", withSecret);
     expect(prepared.env[WAKE_ENV.egressBlocklist]).toBe('["*.ads.example"]');
     expect(JSON.parse(prepared.env[WAKE_ENV.egressProxy] as string)).toEqual({
-      "*": "http://user:p%40ss@general.proxy.example:7777",
-      "*.registry.example": "direct"
+      proxies: { general: "http://user:p%40ss@general.proxy.example:7777" },
+      routes: { "*": "general", "*.registry.example": "direct" }
     });
     // The committed table never carried the value.
     expect(table).not.toContain("p@ss");

@@ -1,18 +1,24 @@
 /**
- * The outbound proxy table (spec 0004 §8) as the MANIFEST carries it:
- * host pattern -> proxy address or "direct", where a proxy address
- * names its credential by PLACEHOLDER, never by value:
+ * The session's egress policy (spec 0004 §5, §8) as the MANIFEST carries
+ * it. Proxies are DEFINED once, by name, and the host map REFERENCES
+ * them, so a proxy's address and credential live in one place and the
+ * name travels to the container, where every audit line records it:
  *
- *   { "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
- *     "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
- *     "*.registry.example": "direct" }
+ *   egress:
+ *     proxies:
+ *       general: { address: http://general.proxy.example:7777, credential: PROXY_GENERAL }
+ *       docs:    { address: http://other.proxy.example:8888,   credential: PROXY_DOCS }
+ *     proxy:
+ *       "*": general
+ *       docs.example: docs
+ *       "*.registry.example": direct
  *
- * A placeholder names a scheduler secret, EGRESS_CREDENTIAL_<NAME>,
- * holding `user:pass`. The fleet validates the table and derives the
- * secrets it needs from it; the scheduler substitutes the values at
- * launch, and only the substituted table reaches the container. A
- * literal credential in the table is refused by name: the table is
- * committed configuration, and credentials do not live in repositories.
+ * A proxy's `credential` NAMES a scheduler secret, EGRESS_CREDENTIAL_<NAME>,
+ * holding `user:pass`; the address itself never carries one, and a
+ * literal credential is refused by name because the manifest is
+ * committed configuration. The fleet validates the policy and derives
+ * the secrets it needs; the scheduler substitutes the values at launch;
+ * only the substituted policy reaches the container.
  *
  * Owned here so the fleet (which validates) and the scheduler (which
  * substitutes) read one grammar; the container's own parser stays
@@ -32,24 +38,26 @@ export class EgressTableError extends Error {
 
 export const EGRESS_CREDENTIAL_PREFIX = "EGRESS_CREDENTIAL_";
 
-/** "PROXY_GENERAL" -> "EGRESS_CREDENTIAL_PROXY_GENERAL", the scheduler secret a placeholder names. */
+/** "PROXY_GENERAL" -> "EGRESS_CREDENTIAL_PROXY_GENERAL", the scheduler secret a proxy names. */
 export function egressCredentialSecret(name: string): string {
   return `${EGRESS_CREDENTIAL_PREFIX}${name}`;
 }
 
-export interface EgressProxyTarget {
+export interface EgressProxyDef {
   /** scheme://host[:port], with no credential in it. */
   address: string;
-  /** The placeholder name, when the address carries one. */
+  /** The credential's name; the secret is EGRESS_CREDENTIAL_<NAME>. */
   credential?: string;
 }
 
-export interface EgressTableEntry {
-  pattern: string;
-  target: "direct" | EgressProxyTarget;
+export interface EgressPolicy {
+  proxies: Record<string, EgressProxyDef>;
+  /** Host pattern -> proxy name, or "direct". */
+  routes: Record<string, string>;
 }
 
-const PLACEHOLDER_ADDRESS = /^(https?:\/\/)\$\{([A-Z][A-Z0-9_]*)\}@(.+)$/;
+const PROXY_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
 const HOST_PATTERN = /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 /**
  * A bare proxy address: http(s), a hostname or bracketed IPv6 literal,
@@ -60,7 +68,7 @@ const HOST_PATTERN = /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]
 const BARE_ADDRESS = /^(https?):\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?\/?$/;
 
 function invalid(detail: string): never {
-  throw new EgressTableError("egress_table_invalid", detail);
+  throw new EgressTableError("egress_policy_invalid", detail);
 }
 
 /** Does the authority part (between scheme and the first slash) carry userinfo? */
@@ -70,69 +78,127 @@ function hasUserinfo(address: string): boolean {
 }
 
 /** Validate a bare address, returning its parts. */
-function checkAddress(address: string, pattern: string): { scheme: string; hostport: string } {
+function checkAddress(address: string, name: string): { scheme: string; hostport: string } {
+  if (/^https?:\/\//.test(address) && hasUserinfo(address)) {
+    throw new EgressTableError(
+      "egress_policy_literal_credential",
+      `proxy "${name}" carries a credential in its address; name it with \`credential: NAME\` and set the secret ${egressCredentialSecret("NAME")} instead`
+    );
+  }
   const match = BARE_ADDRESS.exec(address);
   if (!match) {
-    if (!/^https?:\/\//.test(address)) invalid(`"${pattern}": scheme must be http or https`);
+    if (!/^https?:\/\//.test(address)) invalid(`proxy "${name}": scheme must be http or https`);
     if (/[?#]/.test(address) || /^https?:\/\/[^/]+\/./.test(address)) {
-      invalid(`"${pattern}": a proxy address carries no path or query`);
+      invalid(`proxy "${name}": a proxy address carries no path or query`);
     }
-    return invalid(`"${pattern}": not a proxy address (http(s)://host[:port])`);
+    return invalid(`proxy "${name}": not a proxy address (http(s)://host[:port])`);
   }
   const port = match[3] === undefined ? undefined : Number(match[3]);
-  if (port !== undefined && (port < 1 || port > 65535)) invalid(`"${pattern}": port out of range`);
+  if (port !== undefined && (port < 1 || port > 65535)) invalid(`proxy "${name}": port out of range`);
   return { scheme: match[1], hostport: match[2] + (match[3] === undefined ? "" : `:${match[3]}`) };
 }
 
+function requireRecord(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) invalid(`${what} must be a mapping`);
+  return value as Record<string, unknown>;
+}
+
 /**
- * Parse and validate the table. Every entry is checked, so a typo fails
- * at manifest validation (the fleet) or wake launch (the scheduler), by
- * name, never at the first request.
+ * Parse and validate the policy, from the manifest's object or the
+ * scheduler's JSON var. Every proxy and every route is checked, so a
+ * typo fails at manifest validation (the fleet) or wake launch (the
+ * scheduler), by name, never at the first request.
  */
-export function parseEgressTable(raw: string): EgressTableEntry[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    invalid("not valid JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    invalid("must be a JSON object of host pattern to proxy address or \"direct\"");
-  }
-  const entries: EgressTableEntry[] = [];
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const pattern = key.trim().toLowerCase();
-    if (pattern !== "*" && !HOST_PATTERN.test(pattern)) invalid(`bad host pattern "${key}"`);
-    if (typeof value !== "string") invalid(`"${key}" must be a proxy address or "direct"`);
-    const text = value.trim();
-    if (text === "direct") {
-      entries.push({ pattern, target: "direct" });
-      continue;
+export function parseEgressPolicy(raw: unknown): EgressPolicy {
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      invalid("not valid JSON");
     }
-    const placeholder = PLACEHOLDER_ADDRESS.exec(text);
-    if (placeholder) {
-      const address = placeholder[1] + placeholder[3];
-      if (hasUserinfo(address)) {
-        throw new EgressTableError(
-          "egress_table_literal_credential",
-          `"${pattern}" carries a credential beside its placeholder; only the placeholder belongs here`
-        );
+  }
+  const record = requireRecord(value, "the egress policy");
+  for (const key of Object.keys(record)) {
+    if (key !== "proxies" && key !== "routes") invalid(`unknown key "${key}" (known: proxies, routes)`);
+  }
+  const proxies: Record<string, EgressProxyDef> = {};
+  if (record.proxies !== undefined) {
+    for (const [name, def] of Object.entries(requireRecord(record.proxies, "proxies"))) {
+      if (!PROXY_NAME.test(name)) invalid(`bad proxy name "${name}" (lowercase, digits, hyphens)`);
+      const entry = requireRecord(def, `proxy "${name}"`);
+      for (const key of Object.keys(entry)) {
+        if (key !== "address" && key !== "credential") invalid(`proxy "${name}": unknown key "${key}"`);
       }
-      checkAddress(address, pattern);
-      entries.push({ pattern, target: { address, credential: placeholder[2] } });
+      if (typeof entry.address !== "string") invalid(`proxy "${name}": address must be a string`);
+      checkAddress(entry.address.trim(), name);
+      const proxy: EgressProxyDef = { address: entry.address.trim() };
+      if (entry.credential !== undefined) {
+        if (typeof entry.credential !== "string" || !CREDENTIAL_NAME.test(entry.credential)) {
+          invalid(`proxy "${name}": credential must be a NAME (uppercase, digits, underscores)`);
+        }
+        proxy.credential = entry.credential;
+      }
+      proxies[name] = proxy;
+    }
+  }
+  const routes: Record<string, string> = {};
+  if (record.routes !== undefined) {
+    for (const [key, target] of Object.entries(requireRecord(record.routes, "routes"))) {
+      const pattern = key.trim().toLowerCase();
+      if (pattern !== "*" && !HOST_PATTERN.test(pattern)) invalid(`bad host pattern "${key}"`);
+      if (typeof target !== "string") invalid(`route "${key}" must name a proxy or "direct"`);
+      const name = target.trim();
+      if (name !== "direct" && !(name in proxies)) invalid(`route "${key}" names an unknown proxy "${name}"`);
+      routes[pattern] = name;
+    }
+  }
+  return { proxies, routes };
+}
+
+/** The credential names the policy uses, in definition order, each once. */
+export function egressPolicyCredentials(policy: EgressPolicy): string[] {
+  const names: string[] = [];
+  for (const proxy of Object.values(policy.proxies)) {
+    if (proxy.credential && !names.includes(proxy.credential)) names.push(proxy.credential);
+  }
+  return names;
+}
+
+/**
+ * The policy with every credential substituted, as the JSON the
+ * container is handed (OPERON_EGRESS_PROXY): each proxy's address with
+ * its `user:pass` percent-encoded into the URL, and the routes as
+ * written. A secret holds `user:pass` (the first colon splits; a value
+ * without one is a username alone). A named credential whose secret is
+ * not configured fails the launch by name.
+ */
+export function resolveEgressPolicy(policy: EgressPolicy, getSecret: (name: string) => string | undefined): string {
+  const proxies: Record<string, string> = {};
+  for (const [name, proxy] of Object.entries(policy.proxies)) {
+    if (!proxy.credential) {
+      proxies[name] = proxy.address;
       continue;
     }
-    if (/^https?:\/\//.test(text) && hasUserinfo(text)) {
+    const secretName = egressCredentialSecret(proxy.credential);
+    const value = getSecret(secretName);
+    if (!value) {
       throw new EgressTableError(
-        "egress_table_literal_credential",
-        `"${pattern}" carries a literal credential; name it as \${NAME} and set the secret ${egressCredentialSecret("NAME")} instead`
+        "egress_credential_missing",
+        `secret ${secretName} is not configured (named by proxy "${name}")`
       );
     }
-    checkAddress(text, pattern);
-    entries.push({ pattern, target: { address: text } });
+    const colon = value.indexOf(":");
+    // Percent-encoded, so any character survives the round trip through
+    // the container's parser (which decodes each half).
+    const userinfo =
+      colon < 0
+        ? encodeURIComponent(value)
+        : `${encodeURIComponent(value.slice(0, colon))}:${encodeURIComponent(value.slice(colon + 1))}`;
+    const { scheme, hostport } = checkAddress(proxy.address, name);
+    proxies[name] = `${scheme}://${userinfo}@${hostport}`;
   }
-  if (entries.length === 0) invalid("no routes");
-  return entries;
+  return JSON.stringify({ proxies, routes: policy.routes });
 }
 
 /**
@@ -153,55 +219,4 @@ export function parseEgressBlocklist(raw: unknown): string[] {
     if (!patterns.includes(pattern)) patterns.push(pattern);
   }
   return patterns;
-}
-
-/** The placeholder names a table uses, in table order, each once. */
-export function egressTableCredentials(raw: string): string[] {
-  const names: string[] = [];
-  for (const entry of parseEgressTable(raw)) {
-    if (entry.target !== "direct" && entry.target.credential && !names.includes(entry.target.credential)) {
-      names.push(entry.target.credential);
-    }
-  }
-  return names;
-}
-
-/**
- * The table with every placeholder replaced by its secret's value, as
- * the JSON the container is handed (OPERON_EGRESS_PROXY). A secret holds
- * `user:pass` (the first colon splits; a value without one is a
- * username alone); each half is percent-encoded into the URL, so a
- * password may hold any character. A placeholder whose secret is not
- * configured fails the launch by name.
- */
-export function resolveEgressTable(raw: string, getSecret: (name: string) => string | undefined): string {
-  const resolved: Record<string, string> = {};
-  for (const entry of parseEgressTable(raw)) {
-    if (entry.target === "direct") {
-      resolved[entry.pattern] = "direct";
-      continue;
-    }
-    if (!entry.target.credential) {
-      resolved[entry.pattern] = entry.target.address;
-      continue;
-    }
-    const secretName = egressCredentialSecret(entry.target.credential);
-    const value = getSecret(secretName);
-    if (!value) {
-      throw new EgressTableError(
-        "egress_credential_missing",
-        `secret ${secretName} is not configured (named by the proxy table's "${entry.pattern}" entry)`
-      );
-    }
-    const colon = value.indexOf(":");
-    // Percent-encoded, so any character survives the round trip through
-    // the container's parser (which decodes each half).
-    const userinfo =
-      colon < 0
-        ? encodeURIComponent(value)
-        : `${encodeURIComponent(value.slice(0, colon))}:${encodeURIComponent(value.slice(colon + 1))}`;
-    const { scheme, hostport } = checkAddress(entry.target.address, entry.pattern);
-    resolved[entry.pattern] = `${scheme}://${userinfo}@${hostport}`;
-  }
-  return JSON.stringify(resolved);
 }
