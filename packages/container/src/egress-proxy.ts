@@ -345,10 +345,23 @@ const CONNECT_TARGET = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/;
 /** An upstream that answers a CONNECT with more head than this is not a proxy. */
 const MAX_UPSTREAM_HEAD = 16 * 1024;
 
+/**
+ * Answer a raw client socket with a status line and close. end(), not
+ * destroy(): destroy() discards a write still queued for the kernel
+ * and resets the connection, which under load turned a 502 into an
+ * ECONNRESET at the session (the spec saw it in one run out of three).
+ * The FIN follows the flushed head; a peer that never closes its side
+ * is cut after a short grace period.
+ */
 function refuse(socket: Duplex, status: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-  socket.destroy();
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+  const cut = setTimeout(() => socket.destroy(), REFUSE_LINGER_MS);
+  cut.unref();
+  socket.once("close", () => clearTimeout(cut));
 }
+
+/** How long a refused socket may linger for the peer to read the head and close. */
+const REFUSE_LINGER_MS = 5_000;
 
 function plain(response: ServerResponse, status: number, text: string): void {
   response.writeHead(status, { "content-type": "text/plain", connection: "close" });
