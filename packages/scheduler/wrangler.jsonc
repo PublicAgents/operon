@@ -71,6 +71,9 @@
   //                             {"*": "direct"}. The container's root-run forwarder holds
   //                             the credentials and routes per host; the session gets a
   //                             loopback address. The chassis's own hosts are always direct.
+  //   EGRESS_BLOCKLIST          optional JSON array of host patterns the session may not
+  //                             reach (the manifest's egress.blocklist, spec 0004 §8); the
+  //                             forwarder refuses them, the browser door refuses them too
   // Service bindings, set per deployment:
   //   GITHUB_GATEKEEPER         the github Gatekeeper Worker (mints state-repo tokens)
 }

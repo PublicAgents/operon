@@ -6,7 +6,7 @@
  * which turns drift into a red test instead of a broken wake.
  */
 
-import { DEFAULT_EGRESS_ROUTES, parseEgressRoutes, type EgressRoutes } from "./egress-proxy.js";
+import { DEFAULT_EGRESS_ROUTES, parseBlocklist, parseEgressRoutes, type EgressRoutes } from "./egress-proxy.js";
 
 export const ENV = {
   wakeId: "OPERON_WAKE_ID",
@@ -51,7 +51,8 @@ export const ENV = {
   xToken: "OPERON_X_TOKEN",
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
-  egressProxy: "OPERON_EGRESS_PROXY"
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressBlocklist: "OPERON_EGRESS_BLOCKLIST"
 } as const;
 
 export interface WakeConfig {
@@ -129,12 +130,25 @@ export interface WakeConfig {
    * addresses; the session sees a loopback address.
    */
   egressProxy: EgressRoutes;
+  /** Host patterns the session may not reach (spec 0004 §8); the forwarder refuses them. */
+  egressBlocklist: string[];
   /** Doors the operator closed for this wake (spec 0006 §7): named in the help, not merely unwired. */
   disabledDoors: string[];
 }
 
 export class ConfigError extends Error {
   override name = "ConfigError";
+}
+
+/** Parsed at wake start like the table: a malformed blocklist fails the wake by name. */
+function parseEgressBlocklist(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    return parseBlocklist(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`invalid_env: ${ENV.egressBlocklist} ${detail}`);
+  }
 }
 
 /** Parsed at wake start: a malformed proxy table fails the wake, not the first request. */
@@ -301,6 +315,7 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     webUrl: env[ENV.webUrl],
     webToken: env[ENV.webToken],
     egressProxy: parseEgressProxy(env[ENV.egressProxy]),
+    egressBlocklist: parseEgressBlocklist(env[ENV.egressBlocklist]),
     disabledDoors: parseDisabledDoors(env[ENV.disabledDoors])
   };
 }

@@ -262,14 +262,18 @@ layers, honestly labelled as bound-and-detect, not prevent:
   the first tenant, looser or off only where an operator has watched
   the ledger and chosen to. The wake wall is the backstop behind it;
   the next wake starts with a clean context either way.
-- **Origin denylist** (env, default empty), enforced in TWO places:
-  the relay refuses to forward a `Page.navigate` to a denied origin,
-  AND the Browser Run session is opened with `allowedDomainSets`
-  guardrails (a platform-level layer under the relay), so a denied
-  origin is unreachable even if a relay bug lets a navigation slip. The
-  list is
-  deployment policy, like every cap. An allowlist is deliberately NOT
-  the default: the whole point of the door is the open web.
+- **Origin blocklist** (the manifest's `egress.blocklist`, spec 0006
+  §2, default empty), ONE list enforced in THREE places: the relay
+  refuses to forward a `Page.navigate` to a denied origin, the Browser
+  Run session is opened with `allowedDomainSets` guardrails (a
+  platform-level layer under the relay), so a denied origin is
+  unreachable even if a relay bug lets a navigation slip, and the
+  container's egress forwarder (section 8) refuses it for the
+  session's plain HTTP. The fleet renders it to the browser Gatekeeper
+  (`WEB_ORIGIN_DENYLIST`) and to the scheduler (`EGRESS_BLOCKLIST`)
+  from the one block, so the two cannot drift. The list is deployment
+  policy, like every cap. An allowlist is deliberately NOT the default:
+  the whole point of the door is the open web.
 - **CDP input sweep**: `Input.insertText`, `Input.dispatchKeyEvent`
   batches and `Runtime.evaluate` payloads are swept against the secret
   denylist (the gitleaks doctrine, applied to keystrokes) before
@@ -610,6 +614,13 @@ traffic (clone, doors, persist, notify) does not.
   look for one.
 - The harness's own API traffic rides the catch-all too unless a table
   entry routes its hosts elsewhere or direct.
+- **The egress blocklist** (`egress.blocklist`, section 5) is refused
+  here too: a listed host gets a 403 (`proxy_blocked_host`) on both
+  paths, and the forwarder runs whenever the list is non-empty, proxy
+  or no proxy. Chassis hosts are never blocked (blocking the porch
+  would end the wake). This holds for every client that honours the
+  proxy variables; the rest of container egress stays observe-only,
+  as above, so the browser door is where the list is a hard fence.
 
 The platform egress audit (above) still sees every connection the
 forwarder makes; with a proxy configured, those connections address

@@ -106,6 +106,8 @@ export interface WakeOptions {
    * proxy variables. The chassis's own hosts are always direct.
    */
   egressProxy?: string;
+  /** JSON array of host patterns the session may not reach (spec 0004 §8); the forwarder refuses them. */
+  egressBlocklist?: string;
 }
 
 export const WAKE_ENV = {
@@ -151,7 +153,8 @@ export const WAKE_ENV = {
   webUrl: "OPERON_WEB_URL",
   webToken: "OPERON_WEB_TOKEN",
   xToken: "OPERON_X_TOKEN",
-  egressProxy: "OPERON_EGRESS_PROXY"
+  egressProxy: "OPERON_EGRESS_PROXY",
+  egressBlocklist: "OPERON_EGRESS_BLOCKLIST"
 } as const;
 
 /**
@@ -214,6 +217,7 @@ export function wakeEnv(
   if (options.secretDenylist) env[WAKE_ENV.secretDenylist] = options.secretDenylist;
   if (options.harnessExtraArgs) env[WAKE_ENV.harnessExtraArgs] = options.harnessExtraArgs;
   if (options.egressProxy) env[WAKE_ENV.egressProxy] = options.egressProxy;
+  if (options.egressBlocklist) env[WAKE_ENV.egressBlocklist] = options.egressBlocklist;
   return env;
 }
 

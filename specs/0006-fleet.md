@@ -62,8 +62,9 @@ split inverts:
 - **The project owns `operon.yaml`**: zone, account id, worker name
   prefix, policy values (caps, currencies, hold ceiling, allowance
   days), optional features (telegram), the session's egress policy
-  (`egress:`, today the `proxy` table of spec 0004 §8, credentials by
-  placeholder only; an allowlist or blocklist joins it there), the
+  (`egress:`: the `proxy` table of spec 0004 §8, credentials by
+  placeholder only, and the `blocklist` of spec 0004 §5, one list for
+  the browser door and the container forwarder), the
   agent list, and per-agent settings (state repo, hosts, cadence,
   model, doors). Nothing else.
 - **The deploy renders**: templates plus manifest produce final

@@ -19,7 +19,9 @@
   ]
   // No routes and no workers_dev: a service binding is the only way in
   // (binding-only auth; identity is x-operon-agent from the umbilical).
-  // Vars: CF_ACCOUNT_ID, WEB_ORIGIN_DENYLIST, WEB_MAX_CONCURRENT.
+  // Vars: CF_ACCOUNT_ID, WEB_MAX_CONCURRENT, and WEB_ORIGIN_DENYLIST, which
+  // the fleet renders from the manifest's egress.blocklist (spec 0004 §5):
+  // one list for this relay and the container's egress forwarder alike.
   // Secrets: BROWSER_RUN_TOKEN (Cloudflare API token, Browser Run perm).
   // The CDP provider is CONFIGURATION (provider.ts): Cloudflare Browser
   // Run is the default, built from the two values above. Any other CDP

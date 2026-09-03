@@ -13,6 +13,7 @@ export {
   EGRESS_CREDENTIAL_PREFIX,
   egressCredentialSecret,
   egressTableCredentials,
+  parseEgressBlocklist,
   parseEgressTable,
   resolveEgressTable,
   type EgressTableEntry,

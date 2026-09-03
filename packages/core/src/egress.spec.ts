@@ -3,6 +3,7 @@ import {
   EgressTableError,
   egressCredentialSecret,
   egressTableCredentials,
+  parseEgressBlocklist,
   parseEgressTable,
   resolveEgressTable
 } from "./egress.js";
@@ -48,6 +49,20 @@ describe("parseEgressTable", () => {
       '{"*": "http://${lower}@p.example"}'
     ]) {
       expect(() => parseEgressTable(bad)).toThrowError(/egress_table_invalid|egress_table_literal_credential/);
+    }
+  });
+});
+
+describe("parseEgressBlocklist", () => {
+  it("normalises host patterns and refuses anything else by name", () => {
+    expect(parseEgressBlocklist([" Tracker.Example ", "*.ads.example", "*", "tracker.example"])).toEqual([
+      "tracker.example",
+      "*.ads.example",
+      "*"
+    ]);
+    expect(parseEgressBlocklist([])).toEqual([]);
+    for (const bad of ["not a list", [7], ["bad host"], ["http://host.example"]]) {
+      expect(() => parseEgressBlocklist(bad)).toThrowError(/egress_blocklist_invalid/);
     }
   });
 });

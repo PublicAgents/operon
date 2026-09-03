@@ -76,9 +76,10 @@ describe("prepareLaunch", () => {
           : name === "EGRESS_CREDENTIAL_PROXY_GENERAL"
             ? "user:p@ss"
             : undefined,
-      options: { egressProxy: table }
+      options: { egressProxy: table, egressBlocklist: '["*.ads.example"]' }
     });
     const prepared = await prepareLaunch(agent, "cron", "wake-proxy", withSecret);
+    expect(prepared.env[WAKE_ENV.egressBlocklist]).toBe('["*.ads.example"]');
     expect(JSON.parse(prepared.env[WAKE_ENV.egressProxy] as string)).toEqual({
       "*": "http://user:p%40ss@general.proxy.example:7777",
       "*.registry.example": "direct"

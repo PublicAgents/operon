@@ -64,6 +64,7 @@ interface Env {
   SECRET_DENYLIST?: string;
   HARNESS_EXTRA_ARGS?: string;
   EGRESS_PROXY?: string;
+  EGRESS_BLOCKLIST?: string;
   WAKE_CONTAINER: DurableObjectNamespace<WakeContainer>;
   GITHUB_GATEKEEPER?: Fetcher;
   [secretName: string]: unknown;
@@ -118,7 +119,8 @@ function launchContext(env: Env): LaunchContext {
       prRepos: env.PR_REPOS,
       secretDenylist: env.SECRET_DENYLIST,
       harnessExtraArgs: env.HARNESS_EXTRA_ARGS,
-      egressProxy: env.EGRESS_PROXY
+      egressProxy: env.EGRESS_PROXY,
+      egressBlocklist: env.EGRESS_BLOCKLIST
     }
   };
 }

@@ -9,6 +9,7 @@ import {
   INTERNAL_SUFFIX,
   directHostsFrom,
   endToEndHeaders,
+  parseBlocklist,
   parseEgressRoutes,
   parseUpstreamProxy,
   proxySessionEnv,
@@ -114,12 +115,14 @@ async function startUpstream(options: { refuseWith?: number } = {}): Promise<{ p
 /** A bare address here means "that proxy for everything". */
 async function startForwarder(
   routes: string | EgressRoutes,
-  direct: string[] = []
+  direct: string[] = [],
+  blocked: string[] = []
 ): Promise<{ url: string; port: number; logs: string[] }> {
   const logs: string[] = [];
   const proxy = new EgressProxy({
     routes: typeof routes === "string" ? parseEgressRoutes(JSON.stringify({ "*": routes })) : routes,
     direct,
+    blocked,
     log: message => logs.push(message)
   });
   const url = await proxy.start(0);
@@ -306,6 +309,19 @@ describe("directHostsFrom", () => {
   });
 });
 
+describe("parseBlocklist", () => {
+  it("normalises host patterns and refuses anything else by name", () => {
+    expect(parseBlocklist('[" Tracker.Example ", "*.ads.example", "*", "tracker.example"]')).toEqual([
+      "tracker.example",
+      "*.ads.example",
+      "*"
+    ]);
+    for (const bad of ["not json", '"tracker.example"', "[7]", '["bad host"]']) {
+      expect(() => parseBlocklist(bad)).toThrowError(/egress_blocklist_invalid/);
+    }
+  });
+});
+
 describe("proxySessionEnv", () => {
   it("sets the standard variables and spells the direct hosts in NO_PROXY form", () => {
     const env = proxySessionEnv("http://127.0.0.1:41415", ["*.operon.internal", "web.operon.internal"]);
@@ -401,6 +417,36 @@ describe("EgressProxy", () => {
       `egress proxy: GET ${loopback} direct`,
       "egress proxy: CONNECT direct.example:443 direct"
     ]);
+  });
+
+  it("refuses blocklisted hosts on both paths, chassis hosts excepted", async () => {
+    const origin = await startOrigin();
+    const upstream = await startUpstream();
+    const forwarder = await startForwarder(
+      `http://127.0.0.1:${upstream.port}`,
+      ["*.operon.internal"],
+      ["tracker.example", "*.ads.example", "127.0.0.1"]
+    );
+    const blocked = await rawExchange(
+      forwarder.port,
+      "CONNECT tracker.example:443 HTTP/1.1\r\nHost: tracker.example:443\r\n\r\n"
+    );
+    expect(blocked).toContain("403 proxy_blocked_host");
+    expect(await fetchViaProxy(forwarder.port, "http://cdn.ads.example/pixel")).toMatchObject({
+      status: 403,
+      body: "proxy_blocked_host"
+    });
+    // Nothing blocked reached the upstream, and the log names the decision.
+    expect(upstream.seen).toEqual([]);
+    expect(forwarder.logs).toEqual([
+      "egress proxy: CONNECT tracker.example:443 blocked",
+      "egress proxy: GET cdn.ads.example blocked"
+    ]);
+    // Loopback and the chassis's hosts stay direct even when listed.
+    expect((await connectThrough(forwarder.port, `127.0.0.1:${origin.port}`)).includes("hello /y")).toBe(true);
+    // An unlisted host still takes its route.
+    expect((await connectThrough(forwarder.port, `origin.example:${origin.port}`)).includes("hello /y")).toBe(true);
+    expect(upstream.seen.map(s => s.target)).toEqual([`origin.example:${origin.port}`]);
   });
 
   it("keeps the chassis's own hosts direct even when the table would proxy them", async () => {

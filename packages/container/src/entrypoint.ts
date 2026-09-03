@@ -1002,11 +1002,11 @@ async function main(): Promise<number> {
   // long as the porch does: it exists for the session's traffic only.
   let egressProxy: EgressProxy | null = null;
   let proxy: { url: string; direct: string[] } | undefined;
-  if (usesProxy(config.egressProxy)) {
+  if (usesProxy(config.egressProxy) || config.egressBlocklist.length > 0) {
     // The chassis's own hosts are derived from THIS config, never listed:
     // a door added later is direct without anyone remembering to say so.
     const direct = directHostsFrom(config);
-    egressProxy = new EgressProxy({ routes: config.egressProxy, direct, log });
+    egressProxy = new EgressProxy({ routes: config.egressProxy, direct, blocked: config.egressBlocklist, log });
     proxy = { url: await egressProxy.start(), direct };
     log(`${label}: outbound proxy forwarder at ${proxy.url}`);
   }

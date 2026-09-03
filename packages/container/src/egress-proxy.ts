@@ -27,7 +27,11 @@ import type { WakeConfig } from "./config.js";
  * catch-all, "host.example" an exact host, "*.example" a domain and its
  * subdomains; the most specific match wins, and a value of "direct" means
  * no proxy. The default table is {"*": "direct"}, under which no
- * forwarder runs at all. Hosts the chassis itself serves (loopback, the umbilical's
+ * forwarder runs unless a blocklist needs enforcing. A blocklist (spec
+ * 0004 §5, the same list the browser door enforces) names hosts the
+ * session may not reach: the forwarder answers 403 for them, which
+ * holds for every client that honours the proxy variables (the rest of
+ * container egress stays observe-only, as section 8 says). Hosts the chassis itself serves (loopback, the umbilical's
  * virtual hosts, every door URL the wake was handed) are ALWAYS direct,
  * derived from the wake config rather than listed in it, so a new door
  * cannot be forgotten.
@@ -79,6 +83,27 @@ export const DEFAULT_EGRESS_ROUTES: EgressRoutes = { rules: [{ pattern: "*", tar
 /** Does any route name an upstream? If not, there is nothing for a forwarder to do. */
 export function usesProxy(routes: EgressRoutes): boolean {
   return routes.rules.some(rule => rule.target !== "direct");
+}
+
+/** The blocklist as the wake env carries it: a JSON array of host patterns. */
+export function parseBlocklist(raw: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new EgressProxyError("egress_blocklist_invalid: not valid JSON");
+  }
+  if (!Array.isArray(parsed)) throw new EgressProxyError("egress_blocklist_invalid: must be a JSON array");
+  const patterns: string[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== "string") throw new EgressProxyError("egress_blocklist_invalid: entries must be strings");
+    const pattern = entry.trim().toLowerCase();
+    if (pattern !== "*" && !HOST_PATTERN.test(pattern)) {
+      throw new EgressProxyError(`egress_blocklist_invalid: bad host pattern "${entry}"`);
+    }
+    if (!patterns.includes(pattern)) patterns.push(pattern);
+  }
+  return patterns;
 }
 
 export class EgressProxyError extends Error {
@@ -252,8 +277,13 @@ export interface EgressProxyContext {
   routes: EgressRoutes;
   /** Always-direct host patterns (directHostsFrom); loopback is implied. */
   direct: readonly string[];
+  /** Host patterns refused outright (spec 0004 §5); chassis hosts are never among them. */
+  blocked?: readonly string[];
   log(message: string): void;
 }
+
+/** Where a destination goes: a route, or nowhere. */
+export type EgressDecision = EgressTarget | "blocked";
 
 const CONNECT_TARGET = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/;
 /** An upstream that answers a CONNECT with more head than this is not a proxy. */
@@ -309,7 +339,8 @@ export function endToEndHeaders(
   return kept;
 }
 
-function describe(target: EgressTarget): string {
+function describe(target: EgressDecision): string {
+  if (target === "blocked") return "blocked";
   return target === "direct" ? "direct" : `via ${target.hostname}:${target.port}`;
 }
 
@@ -341,10 +372,15 @@ export class EgressProxy {
     await new Promise<void>(resolve => this.server?.close(() => resolve()));
   }
 
-  /** Chassis-served hosts are direct whatever the table says; the table decides the rest. */
-  targetFor(hostname: string): EgressTarget {
+  /**
+   * Chassis-served hosts are direct whatever the table or the blocklist
+   * says (blocking the porch would end the wake); a blocked host goes
+   * nowhere; the table decides the rest.
+   */
+  targetFor(hostname: string): EgressDecision {
     const host = unbracket(hostname).toLowerCase();
     if (isLoopback(host) || this.context.direct.some(pattern => hostMatches(pattern, host))) return "direct";
+    if (this.context.blocked?.some(pattern => hostMatches(pattern, host))) return "blocked";
     return routeFor(this.context.routes, host);
   }
 
@@ -371,6 +407,10 @@ export class EgressProxy {
     }
     const target = this.targetFor(host);
     this.context.log(`egress proxy: CONNECT ${targetSpec} ${describe(target)}`);
+    if (target === "blocked") {
+      refuse(client, 403, "proxy_blocked_host");
+      return;
+    }
     if (target === "direct") {
       const origin = netConnect({ host, port });
       let settled = false;
@@ -476,6 +516,10 @@ export class EgressProxy {
     const target = this.targetFor(url.hostname);
     // Host only, as with every egress line: a query string can carry secrets.
     this.context.log(`egress proxy: ${request.method} ${url.host} ${describe(target)}`);
+    if (target === "blocked") {
+      plain(response, 403, "proxy_blocked_host");
+      return;
+    }
     const headers = endToEndHeaders(request.headers);
     const proxied =
       target === "direct"

@@ -1,5 +1,5 @@
 import { parse as parseYaml } from "yaml";
-import { EgressTableError, parseEgressTable, parseRoster, type Roster } from "@operon/core";
+import { EgressTableError, parseEgressBlocklist, parseEgressTable, parseRoster, type Roster } from "@operon/core";
 
 /**
  * The operon.yaml manifest (spec 0006 §1 and §2): everything
@@ -44,7 +44,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   deploy: ["DISCLOSURE_MARKER", "GA_MEASUREMENT_ID"],
   "google-analytics": ["GA_PROPERTY_ID"],
   mcp: ["MCP_PORTAL_URL"],
-  browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
+  browser: ["WEB_MAX_CONCURRENT"],
   scheduler: ["HARNESS_EXTRA_ARGS"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
@@ -81,18 +81,20 @@ export interface FleetManifest {
   containers: { maxInstances: number };
   policy: Record<string, Record<string, string>>;
   /**
-   * The mind session's egress policy (spec 0004 §8). `proxy` is the
+   * The mind session's egress policy (spec 0004 §5, §8). `proxy` is the
    * outbound proxy table: host pattern to proxy address or "direct",
    * credentials by placeholder only; absent means everything direct.
-   * Rendered into the scheduler's EGRESS_PROXY var; the credentials are
-   * scheduler secrets. The block is the home for further egress policy
-   * (an allowlist or blocklist) as it arrives.
+   * `blocklist` is the hosts the session may not reach, ONE list for
+   * the browser door and the container forwarder alike. Rendered into
+   * the scheduler's EGRESS_PROXY and EGRESS_BLOCKLIST vars and the
+   * browser Gatekeeper's WEB_ORIGIN_DENYLIST; the proxy credentials are
+   * scheduler secrets.
    */
-  egress?: { proxy?: Record<string, string> };
+  egress?: { proxy?: Record<string, string>; blocklist?: string[] };
   roster: Roster;
 }
 
-const EGRESS_KEYS = ["proxy"] as const;
+const EGRESS_KEYS = ["proxy", "blocklist"] as const;
 
 /**
  * The egress block. The proxy table is checked with the chassis grammar
@@ -126,6 +128,14 @@ function validateEgress(raw: unknown): FleetManifest["egress"] {
       throw error;
     }
     egress.proxy = proxy;
+  }
+  if (record.blocklist !== undefined) {
+    try {
+      egress.blocklist = parseEgressBlocklist(record.blocklist);
+    } catch (error) {
+      if (error instanceof EgressTableError) fail("egress.blocklist", error.message);
+      throw error;
+    }
   }
   return egress;
 }

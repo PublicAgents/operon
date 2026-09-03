@@ -48,6 +48,17 @@ describe("readWakeConfig", () => {
     expect(config.harnessExtraArgs).toEqual([]);
   });
 
+  it("reads the egress blocklist and rejects a malformed one", () => {
+    expect(readWakeConfig(complete).egressBlocklist).toEqual([]);
+    expect(
+      readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: '["Tracker.Example", "*.ads.example"]' }).egressBlocklist
+    ).toEqual(["tracker.example", "*.ads.example"]);
+    expect(() => readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: '["bad host"]' })).toThrowError(
+      /OPERON_EGRESS_BLOCKLIST/
+    );
+    expect(() => readWakeConfig({ ...complete, OPERON_EGRESS_BLOCKLIST: "tracker.example" })).toThrowError(ConfigError);
+  });
+
   it("reads the outbound proxy table, defaults it to all-direct, and rejects a malformed one", () => {
     expect(readWakeConfig(complete).egressProxy).toEqual({ rules: [{ pattern: "*", target: "direct" }] });
     const table = '{"*": "http://a.example:7777", "docs.example": "http://user:secret@b.example:8888", "*.reg.example": "direct"}';

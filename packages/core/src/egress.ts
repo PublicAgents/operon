@@ -135,6 +135,26 @@ export function parseEgressTable(raw: string): EgressTableEntry[] {
   return entries;
 }
 
+/**
+ * The egress blocklist (spec 0004 §5, §8): host patterns the session
+ * may not reach, "*", an exact host, or "*.domain". One list serves
+ * the browser door (the relay and the platform guardrails) and the
+ * container forwarder, rendered from the manifest to both.
+ */
+export function parseEgressBlocklist(raw: unknown): string[] {
+  if (!Array.isArray(raw)) throw new EgressTableError("egress_blocklist_invalid", "must be a list of host patterns");
+  const patterns: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") throw new EgressTableError("egress_blocklist_invalid", "entries must be strings");
+    const pattern = entry.trim().toLowerCase();
+    if (pattern !== "*" && !HOST_PATTERN.test(pattern)) {
+      throw new EgressTableError("egress_blocklist_invalid", `bad host pattern "${entry}"`);
+    }
+    if (!patterns.includes(pattern)) patterns.push(pattern);
+  }
+  return patterns;
+}
+
 /** The placeholder names a table uses, in table order, each once. */
 export function egressTableCredentials(raw: string): string[] {
   const names: string[] = [];

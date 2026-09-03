@@ -35,6 +35,7 @@ function config(overrides: Partial<WakeConfig> = {}): WakeConfig {
     prRepos: [],
     mcpServers: [],
     egressProxy: DEFAULT_EGRESS_ROUTES,
+    egressBlocklist: [],
     ...overrides
   };
 }

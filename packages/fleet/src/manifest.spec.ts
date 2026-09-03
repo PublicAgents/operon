@@ -65,11 +65,27 @@ describe("validateManifest", () => {
     expect(() => validateManifest({ ...BASE, egress: { proxy: { "*": 7 } } })).toThrow(
       /egress\.proxy\.\* must be a proxy address/
     );
-    // Unknown egress keys refuse, so a future allowlist or blocklist is
-    // added deliberately and a misspelt one never passes as no policy.
-    expect(() => validateManifest({ ...BASE, egress: { blocklist: [] } })).toThrow(/egress\.blocklist is not a known key/);
+    // Unknown egress keys refuse, so a future allowlist is added
+    // deliberately and a misspelt one never passes as no policy.
+    expect(() => validateManifest({ ...BASE, egress: { allowlist: [] } })).toThrow(/egress\.allowlist is not a known key/);
     // The string var form is gone: EGRESS_PROXY is not a policy var.
     expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "{}" } } })).toThrow(/not a known var/);
+  });
+
+  it("accepts an egress.blocklist of host patterns and retires the browser's own denylist var", () => {
+    expect(validateManifest({ ...BASE, egress: { blocklist: ["Tracker.Example", "*.ads.example"] } }).egress).toEqual({
+      blocklist: ["tracker.example", "*.ads.example"]
+    });
+    expect(() => validateManifest({ ...BASE, egress: { blocklist: ["bad host"] } })).toThrow(
+      /egress\.blocklist egress_blocklist_invalid/
+    );
+    expect(() => validateManifest({ ...BASE, egress: { blocklist: "tracker.example" } })).toThrow(
+      /egress\.blocklist egress_blocklist_invalid/
+    );
+    // One list: the browser var is rendered from it, never set directly.
+    expect(() => validateManifest({ ...BASE, policy: { browser: { WEB_ORIGIN_DENYLIST: "x" } } })).toThrow(
+      /not a known var/
+    );
   });
 
   it("reads the egress block from YAML, quoted wildcard keys included", () => {
