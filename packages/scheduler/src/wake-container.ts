@@ -394,6 +394,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       wakeId: args.wakeId,
       agentId: args.agentId,
       trigger: args.trigger,
+      ...(args.harness ? { harness: args.harness } : {}),
       startedAt: now,
       endedAt: now,
       status: "failed",
