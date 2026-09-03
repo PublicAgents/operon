@@ -54,14 +54,21 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
   const needs = [];
   const call = (method, path, body) => api(apiToken, method, path, body);
 
-  // The Zero Trust organization names the team domain the plane verifies against.
-  const organization = await call("GET", `/accounts/${accountId}/access/organizations`);
-  const authDomain = organization?.auth_domain;
-  if (!authDomain) {
-    needs.push("no Zero Trust organization on this account: create one (Zero Trust → Settings) and re-run");
-    return { teamDomain: undefined, aud: undefined, lines, needs };
+  // The Zero Trust organization names the team domain the plane verifies
+  // against. The manifest carries it once bootstrap has run, and reading
+  // it from there spares the CI token a third permission (Organizations,
+  // Identity Providers, and Groups: Read); the organization is read only
+  // when the manifest does not yet say.
+  let teamDomain = manifest.access?.teamDomain;
+  if (!teamDomain) {
+    const organization = await call("GET", `/accounts/${accountId}/access/organizations`);
+    const authDomain = organization?.auth_domain;
+    if (!authDomain) {
+      needs.push("no Zero Trust organization on this account: create one (Zero Trust → Settings) and re-run");
+      return { teamDomain: undefined, aud: undefined, lines, needs };
+    }
+    teamDomain = `https://${authDomain}`;
   }
-  const teamDomain = `https://${authDomain}`;
 
   // The application, by domain.
   const apps = await call("GET", `/accounts/${accountId}/access/apps`);
