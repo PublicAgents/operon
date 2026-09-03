@@ -35,11 +35,15 @@ policy, everything ledgered, and the operator able to watch.
 
 ## 2. Decisions
 
-- **Remote browser only.** No browser is installed in the container.
-  Every browser the agent touches is a Cloudflare Browser Run session,
-  reached through the gateway below. Testing local code does not weaken
-  this: a short-lived Cloudflare Tunnel exposes the container's dev
-  server to the remote browser (section 7). One path, one audit trail.
+- **Remote browser for identity.** Every browser session that holds a
+  login is a Cloudflare Browser Run session, reached through the
+  gateway below: credentials never enter the container. Since §9 the
+  container also carries a local Chrome for UNAUTHENTICATED browsing
+  through the session's own egress; it holds no identity and keeps
+  nothing between wakes, so it weakens none of this. Testing local
+  code does not either: a short-lived Cloudflare Tunnel exposes the
+  container's dev server to the remote browser (section 7). Two
+  browsers, one rule: identity only ever lives in the remote one.
 - **CDP is the protocol, the relay is a POLICY POINT.** Browser Run
   exposes a raw Chrome DevTools Protocol WebSocket; every client
   (Playwright, Puppeteer, chrome-devtools-mcp, Stagehand) speaks it,
@@ -466,10 +470,11 @@ Through the ops gateway (spec 0003 section 3), new routes:
   MVP, not optional: without it "recordings are never deleted" is
   false, since Cloudflare deletes them.
 
-## 7. Local testing without a local browser
+## 7. Local testing through the remote browser
 
-The container gets no browser, but agents build sites and need to see
-them rendered. The dev-server path:
+Agents build sites and need to see them rendered as a logged-in user
+would, in the identity-bearing remote browser (the local browser of §9
+covers the anonymous view directly). The dev-server path:
 
 - `operon web expose <port>` starts a short-lived Cloudflare quick
   tunnel to a local port. The tunnel client has to run IN the container
@@ -658,7 +663,7 @@ by the CDP provider regardless of this table.
 |---|---|---|
 | npm, npx, pnpm, yarn | `registry.npmjs.org`, `registry.yarnpkg.com`, `get.pnpm.io` | Metadata and tarballs both come from the registry; `npx` pulls the same way. |
 | Native npm modules | `nodejs.org`, `github.com`, `objects.githubusercontent.com` | `node-gyp` fetches headers from nodejs.org; `prebuild-install` pulls binaries from GitHub releases. |
-| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The container has no browser by design (section 11), so these belong on the blocklist rather than a proxy. |
+| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The image already carries Chrome for the local browser (§9) and a mind needs no second one, so these belong on the blocklist rather than a proxy. |
 | pip, uv | `pypi.org`, `files.pythonhosted.org`, `bootstrap.pypa.io`, `astral.sh` | Index on pypi.org, wheels on pythonhosted. uv fetches its own binary and standalone Pythons from GitHub releases. |
 | conda | `repo.anaconda.com`, `conda.anaconda.org` | Only if the agent installs it; large. |
 | Go | `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | |
@@ -855,9 +860,9 @@ are the meter to watch before loosening anything.
 
 ## 12. What this does NOT do
 
-- No local browser in the container (decision, section 2). Playwright
-  as a LIBRARY may still be installed for connectOverCDP scripting;
-  the Chromium download is not.
+- No identity in the local browser (§9): no seeded credentials, no
+  persisted profile, no session bookkeeping. Playwright as a LIBRARY
+  may be installed for scripting; a second Chromium download is not.
 - No `--chrome` / Claude in Chrome: that integration requires a
   visible browser and an interactive login session; it is the
   human-paired variant of exactly this door.
