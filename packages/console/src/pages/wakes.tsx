@@ -1,5 +1,5 @@
 import { Link, Navigate, useParams } from "react-router-dom";
-import { type AgentRow, type WakeRecordRow } from "../api.js";
+import { type AgentRow, type WakeRecordRow, type WakeUsageRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
 import { UntrustedText } from "../untrusted.js";
@@ -29,6 +29,14 @@ export function WakesPage() {
     { agentId },
     { pollMs: 10_000, enabled: Boolean(agentId) }
   );
+  // What each wake spent (spec 0011), joined by wake id; a wake with no
+  // row shows nothing rather than a zero.
+  const usage = useTool<{ wakes: WakeUsageRow[] }>(
+    "wakes_usage",
+    { agentId, limit: 100 },
+    { pollMs: 30_000, enabled: Boolean(agentId) }
+  );
+  const usageByWake = new Map((usage.data?.wakes ?? []).map(row => [row.wakeId, row]));
   // No agent in the URL: pick the first one instead of asking (a
   // one-agent colony should land on its wakes directly).
   const firstAgent = agents.data?.agents[0]?.id;
@@ -72,6 +80,7 @@ export function WakesPage() {
                   ? `${Math.max(1, Math.round((Date.parse(wake.endedAt) - Date.parse(wake.startedAt)) / 60_000))}m`
                   : "…"}
               </td>
+              <td className="usage">{formatUsage(usageByWake.get(wake.wakeId))}</td>
               <td className="reason">
                 {wake.reason ? <UntrustedText text={wake.reason} /> : null}
               </td>
@@ -82,4 +91,13 @@ export function WakesPage() {
       </LoadingGate>
     </section>
   );
+}
+
+/** "412k in / 3.8k out" and the cost when known; empty when no row exists. */
+export function formatUsage(row: WakeUsageRow | undefined): string {
+  if (!row) return "";
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n));
+  const parts = [`${k(row.inputTokens)} in / ${k(row.outputTokens)} out`];
+  if (row.costUsd !== null && row.costUsd !== undefined) parts.push(`$${row.costUsd.toFixed(2)}`);
+  return parts.join(" · ");
 }

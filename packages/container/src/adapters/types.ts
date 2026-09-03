@@ -6,6 +6,7 @@
  */
 
 import type { MergedMcpConfig } from "../mcp-config.js";
+import type { UsageAccumulator, WakeUsage } from "../usage.js";
 
 export interface CommandSpec {
   command: string;
@@ -32,6 +33,13 @@ export interface StageInput {
   mcp?: MergedMcpConfig;
   /** The chassis hooks (pull hook, journal guard) as shell commands. */
   hooks: { pullHook: string; journalGuard: string };
+  /**
+   * Where the harness exports its telemetry (spec 0011 §4): the porch's
+   * OTLP relay, a loopback base URL the harness appends /v1/<signal>
+   * to. Absent when the chronicle is not wired, and then no exporter
+   * is configured at all.
+   */
+  telemetry?: { endpoint: string };
 }
 
 export interface StagedHarness {
@@ -70,6 +78,10 @@ export interface HarnessAdapter {
    * token in it.
    */
   secretsIn(credential: string): string[];
+  /** What the wake spent, folded from the stream as it passes (spec 0011 §2). */
+  usageAccumulator(): UsageAccumulator;
+  /** The same over lines already in hand (tests, replays). */
+  usageFrom(lines: string[]): WakeUsage | undefined;
   /** A cheap invocation whose stdout names the model that actually answered. */
   probe(model: string, credential: string): CommandSpec;
   /** The wake session itself. */

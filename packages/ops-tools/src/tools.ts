@@ -146,6 +146,79 @@ const REGISTRY: readonly ToolDefinition[] = [
     }
   },
   {
+    name: "wake_usage",
+    title: "What one wake spent",
+    description:
+      "Token counts (input, output, cache read, cache write), cost in USD when the harness reports one, turns and duration for one wake, read from the harness's own stream at the end of the wake (spec 0011). Null when the wake recorded no usage.",
+    input: z.object({ wakeId: z.string().regex(/^[0-9a-f-]{8,64}$/).describe("The wake id") }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { wakeId } = input as { wakeId: string };
+      return context.ops("CHRONICLE_GK", "GET", `/chronicle/usage/${wakeId}`);
+    }
+  },
+  {
+    name: "wakes_usage",
+    title: "Recent wakes' usage",
+    description:
+      "Usage rows for recent wakes, newest first: one per wake with harness, model, token counts and cost. Filter by agent.",
+    input: z.object({
+      agentId: agentId.optional(),
+      limit: z.number().int().min(1).max(500).optional()
+    }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { agentId: id, limit } = input as { agentId?: string; limit?: number };
+      return context.ops("CHRONICLE_GK", "GET", "/chronicle/usage", {
+        query: { agent: id, limit: limit === undefined ? undefined : String(limit) }
+      });
+    }
+  },
+  {
+    name: "fleet_usage",
+    title: "Usage per agent per day",
+    description:
+      "Token and cost totals per agent, per harness, per UTC day over the last N days (default 7, max 90). The subscription's meter, as the chassis saw it.",
+    input: z.object({
+      agentId: agentId.optional(),
+      days: z.number().int().min(1).max(90).optional()
+    }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { agentId: id, days } = input as { agentId?: string; days?: number };
+      return context.ops("CHRONICLE_GK", "GET", "/chronicle/usage-by-day", {
+        query: { agent: id, days: days === undefined ? undefined : String(days) }
+      });
+    }
+  },
+  {
+    name: "wake_trace",
+    title: "A wake's telemetry",
+    description:
+      `One wake's exported telemetry (spec 0011): kind spans (the trace, as a list with parents and timings), events (tool calls, decisions, API requests, errors), or metrics (token and cost points). Each page is in time order; paginate with after = the page's nextAfter (an insertion id, so no row is skipped). Names, timings and counts only; no prompt or tool content is exported. ${UNTRUSTED}`,
+    input: z.object({
+      wakeId: z.string().regex(/^[0-9a-f-]{8,64}$/).describe("The wake id"),
+      kind: z.enum(["spans", "events", "metrics"]).optional().describe("default events"),
+      after: z.number().int().min(0).optional().describe("Return rows with id greater than this"),
+      limit: z.number().int().min(1).max(500).optional()
+    }),
+    readOnly: true,
+    decision: false,
+    handler: (input, context) => {
+      const { wakeId, kind, after, limit } = input as { wakeId: string; kind?: string; after?: number; limit?: number };
+      return context.ops("CHRONICLE_GK", "GET", `/chronicle/trace/${wakeId}`, {
+        query: {
+          kind,
+          after: after === undefined ? undefined : String(after),
+          limit: limit === undefined ? undefined : String(limit)
+        }
+      });
+    }
+  },
+  {
     name: "wake_log",
     title: "Read a wake transcript",
     description:

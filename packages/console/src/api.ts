@@ -129,6 +129,43 @@ export interface AgentRow {
   currentWake?: { wakeId: string; startedAt: string; trigger: string; harness?: string };
 }
 
+/** One wake's usage row (spec 0011), or null when none was recorded. */
+export interface WakeUsageRow {
+  wakeId: string;
+  agentId: string;
+  harness: string;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number | null;
+  turns: number | null;
+  durationMs: number | null;
+  recordedAt: string;
+}
+
+export interface TraceSpanRow {
+  id: number;
+  traceId: string;
+  spanId: string;
+  parentSpanId: string | null;
+  name: string;
+  startMs: number;
+  endMs: number;
+  status: "ok" | "error" | "unset";
+  attributes: Record<string, unknown>;
+}
+
+export interface TraceEventRow {
+  id: number;
+  atMs: number;
+  name: string;
+  severity: string | null;
+  body: string | null;
+  attributes: Record<string, unknown>;
+}
+
 export interface WakeRecordRow {
   wakeId: string;
   agentId: string;

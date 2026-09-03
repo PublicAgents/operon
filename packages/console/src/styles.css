@@ -330,3 +330,20 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
   padding: 0 0.35rem;
   font-size: 0.8em;
 }
+
+/* Telemetry (spec 0011): the usage line, the events table, the span waterfall. */
+.usage-line { color: var(--muted); font-size: 13px; }
+.timeline { padding: 8px 0 24px; font-size: 13px; }
+.timeline-tabs { display: flex; gap: 8px; margin: 8px 12px; }
+.timeline-tabs button.active { color: var(--accent); border-color: var(--accent); }
+.timeline-events td.when { color: var(--muted); white-space: nowrap; width: 1%; font-variant-numeric: tabular-nums; }
+.timeline-events td.name { white-space: nowrap; color: var(--accent); }
+.timeline-events td.attrs { color: var(--muted); word-break: break-word; }
+.timeline-events .body { color: var(--text); }
+.waterfall { display: flex; flex-direction: column; gap: 2px; padding: 0 12px; }
+.span-row { display: grid; grid-template-columns: minmax(180px, 30%) 1fr 64px; align-items: center; gap: 8px; }
+.span-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.span-bar-track { position: relative; height: 10px; background: color-mix(in srgb, var(--muted) 12%, transparent); border-radius: 3px; }
+.span-bar { position: absolute; top: 0; height: 100%; background: var(--accent); border-radius: 3px; }
+.span-row.status-error .span-bar { background: var(--danger); }
+.span-ms { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }

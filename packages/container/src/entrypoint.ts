@@ -16,6 +16,7 @@ import type { AskLimits } from "./skills.js";
 import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
 import { CredentialWatch } from "./credential-watch.js";
+import { describeUsage, type WakeUsage } from "./usage.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -192,6 +193,9 @@ async function stageHarness(
     home: mindHome(),
     credential: config.mindCredential,
     ...(mcp ? { mcp } : {}),
+    // Telemetry (spec 0011) rides the porch's relay to the chronicle
+    // door; without that door there is nowhere to export to.
+    ...(config.chronicleUrl && config.chronicleToken ? { telemetry: { endpoint: `${porchUrl}/otel` } } : {}),
     hooks: {
       pullHook: "node /opt/operon/pull-hook.js",
       journalGuard: "node /opt/operon/journal-guard.js"
@@ -729,7 +733,7 @@ async function runSession(
   porchUrl: string,
   staged: StagedHarness,
   proxy?: { url: string; direct: string[] }
-): Promise<number> {
+): Promise<{ exit: number; usage: WakeUsage | undefined }> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
     wakePrompt(budgetMinutes, wakeStamp(config.wakeId)),
@@ -769,7 +773,18 @@ async function runSession(
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
   }
-  return runStreaming(spec.command, [...spec.args, ...staged.args, ...config.harnessExtraArgs], {
+  // The usage in the harness's stream (spec 0011 §2), folded as it
+  // passes: whole lines only, and the accumulator keeps sums rather
+  // than lines, so a wake of any length is counted in full.
+  const usage = adapter.usageAccumulator();
+  let carry = "";
+  const retain = (text: string) => {
+    const combined = carry + text;
+    const lines = combined.split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) usage.add(line);
+  };
+  const exit = await runStreaming(spec.command, [...spec.args, ...staged.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
     env: {
       ...sessionBaseEnv(),
@@ -787,9 +802,44 @@ async function runSession(
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
     timeoutMs: budgetMinutes * 60_000,
-    onOutput: text => transcriptTee?.(text),
+    onOutput: text => {
+      transcriptTee?.(text);
+      retain(text);
+    },
     ...ids
   });
+  if (carry) usage.add(carry);
+  return { exit, usage: usage.finish() };
+}
+
+/**
+ * Record what the wake spent through the chronicle door (spec 0011
+ * §2). Best-effort: the figure also rides the summary, so a missed row
+ * is a gap in the ledger, not a lost number.
+ */
+async function recordUsage(config: WakeConfig, harness: string, usage: WakeUsage | undefined, model: string): Promise<void> {
+  if (!usage) {
+    log("usage: the harness stream carried no usage figures");
+    return;
+  }
+  log(`usage: ${describeUsage(usage)}`);
+  if (!config.chronicleUrl || !config.chronicleToken) return;
+  try {
+    const response = await fetch(`${config.chronicleUrl}/chronicle/wake-usage`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.chronicleToken}` },
+      body: JSON.stringify({
+        wakeId: config.wakeId,
+        agentId: config.agentId,
+        harness,
+        model: usage.model ?? model,
+        usage
+      })
+    });
+    if (!response.ok) log(`usage: chronicle refused the record: ${response.status}`);
+  } catch (error) {
+    log(`usage: could not record: ${String(error).slice(0, 160)}`);
+  }
 }
 
 /**
@@ -1026,6 +1076,7 @@ async function main(): Promise<number> {
   // (Codex's login) is what the probe signs in with (spec 0010 §4).
   let probedModel: string;
   let sessionExit: number;
+  let usage: WakeUsage | undefined;
   try {
     const staged = await stageHarness(adapter, config, porchUrl);
     const verified = await verifyModel(adapter, config, staged);
@@ -1033,7 +1084,10 @@ async function main(): Promise<number> {
       ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
       : verified.answer;
     log(`${label}: session starting (harness ${adapter.id}, model ${verified.model})`);
-    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, staged, proxy);
+    const session = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, staged, proxy);
+    sessionExit = session.exit;
+    usage = session.usage;
+    await recordUsage(config, adapter.id, usage, verified.model);
   } finally {
     await porch.close();
     await egressProxy?.close();
@@ -1090,7 +1144,7 @@ async function main(): Promise<number> {
       config,
       `${label}: PERSIST WITHHELD, presleep blocked it (${verification.failures
         .map(f => f.code)
-        .join(", ")}). Harness ${adapter.id}, model ${probedModel}. Investigate the container log; nothing was persisted.`
+        .join(", ")}). Harness ${adapter.id}, model ${probedModel}; ${describeUsage(usage)}. Investigate the container log; nothing was persisted.`
     );
     return 2;
   }
@@ -1107,8 +1161,8 @@ async function main(): Promise<number> {
   const summary = failed
     ? `${label}: finished with problems (session exit ${sessionExit}${
         verification.ok ? "" : `; ${verification.failures.map(f => f.code).join(", ")}`
-      }). Harness ${adapter.id}, model ${probedModel}.`
-    : `${label}: completed. Harness ${adapter.id}, model ${probedModel}.`;
+      }). Harness ${adapter.id}, model ${probedModel}; ${describeUsage(usage)}.`
+    : `${label}: completed. Harness ${adapter.id}, model ${probedModel}; ${describeUsage(usage)}.`;
   await notify(config, summary);
   return failed ? 1 : 0;
 }
