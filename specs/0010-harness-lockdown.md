@@ -183,9 +183,12 @@ the wake run on what it has, named in the log; once the access token
 has expired too, the wake is refused as
 `mind_credential_refresh_failed`: the operator authorizes again, and
 nothing the container could do would help. Inside the container a
-rewrite of the login (a revoked token, the one case left) is noted in
-the log, its tokens join the denylist before presleep, and it does not
-carry over.
+rewrite of the login (a revoked token, the one case left) is watched:
+the file is re-read before every transcript flush, every porch request,
+and presleep, and whatever it holds joins the denylist before that scan
+runs, so a rotated token can no longer leave the container than the
+seeded one could. The rewrite is noted in the log and does not carry
+over.
 
 `HARNESS_EXTRA_ARGS` (the scheduler policy var) is the claude-code
 policy; `HARNESS_EXTRA_ARGS_CODEX` is the codex policy, defaulting to

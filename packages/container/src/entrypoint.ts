@@ -14,6 +14,7 @@ import { Porch } from "./porch.js";
 import type { AskLimits } from "./skills.js";
 import { newAsks, type AskDelivered } from "./asks-delivery.js";
 import { gitCredentialEnv, githubRepoUrl, hardenedGitFlags } from "./git-cred.js";
+import { CredentialWatch } from "./credential-watch.js";
 
 /**
  * One wake, start to finish. Every failure path still notifies: silence is
@@ -207,45 +208,28 @@ async function stageHarness(
 }
 
 /**
- * A file credential the harness refreshed in place (spec 0010 §5) does
- * not carry over: the scheduler refreshes logins before they are due,
- * so this is the exception (a revoked or rejected token), named in the
- * log. What the refreshed file holds joins the wake's denylist before
- * presleep, so a rotated token can no longer ride a commit or the rest
- * of the transcript any more than the seeded one could.
+ * Watch a file credential the harness may rewrite mid-session (spec
+ * 0010 §5): the scheduler refreshes logins before they are due, so a
+ * rewrite is the exception (a revoked or rejected token), but its
+ * tokens must be on the denylist before the transcript flushes, the
+ * porch sweeps, or presleep judges, never after. Undefined for a
+ * harness whose credential is a variable and nothing rotates.
  */
-async function noteRefreshedCredential(
+function credentialWatchFor(
   adapter: HarnessAdapter,
   config: WakeConfig,
   denylist: string[]
-): Promise<void> {
+): CredentialWatch | undefined {
   const relative = adapter.credentialFile?.(config.mindCredential);
-  if (!relative) return;
-  let current: string;
-  try {
-    current = await readFile(join(mindHome(), relative), "utf8");
-  } catch (error) {
-    log(`mind credential: could not read the staged file back: ${String(error).slice(0, 160)}`);
-    return;
-  }
-  if (current === config.mindCredential) return;
-  let added = 0;
-  try {
-    for (const literal of adapter.secretsIn(current)) {
-      if (!denylist.includes(literal)) {
-        denylist.push(literal);
-        added += 1;
-      }
-    }
-  } catch {
-    denylist.push(current);
-    added += 1;
-  }
-  log(
-    `mind credential: ${adapter.id} rewrote its login in-container (${added} new literal(s) denylisted); ` +
-      "the rewrite does not carry over: the scheduler refreshes logins itself, so if the next wake fails " +
-      "to sign in, authorize the account again"
-  );
+  if (!relative) return undefined;
+  const path = join(mindHome(), relative);
+  return new CredentialWatch({
+    read: () => readFile(path, "utf8").catch(() => null),
+    seed: config.mindCredential,
+    secretsIn: credential => adapter.secretsIn(credential),
+    denylist,
+    log
+  });
 }
 
 /**
@@ -883,6 +867,10 @@ async function main(): Promise<number> {
     config.vaultToken = undefined;
   }
   const denylist = [...autoDenylist(adapter, config), ...vault.values];
+  // Consulted before every transcript flush, porch request, and
+  // presleep: a token the harness rotates mid-session joins the list
+  // before anything scans against it.
+  const credentialWatch = credentialWatchFor(adapter, config, denylist);
 
   // The wake transcript: everything said from here on (entrypoint lines
   // and the session's own output) ships to the chronicle in redacted
@@ -895,7 +883,10 @@ async function main(): Promise<number> {
       wakeId: config.wakeId,
       agentId: config.agentId,
       denylist,
-      log: message => console.log(`[operon] ${message}`)
+      log: message => console.log(`[operon] ${message}`),
+      beforeFlush: async () => {
+        await credentialWatch?.refresh();
+      }
     });
     transcriptTee = text => activeShipper?.write(text);
     activeShipper.ready();
@@ -934,6 +925,9 @@ async function main(): Promise<number> {
     config,
     stateDir: STATE_DIR,
     denylist,
+    refreshDenylist: async () => {
+      await credentialWatch?.refresh();
+    },
     log,
     // This colony's real ask ceilings, straight from the Gatekeeper that
     // enforces them, so `operon --help` states numbers rather than
@@ -1019,7 +1013,13 @@ async function main(): Promise<number> {
     await porch.close();
   }
   log(`${label}: session exited ${sessionExit}`);
-  await noteRefreshedCredential(adapter, config, denylist);
+  await credentialWatch?.refresh();
+  if (credentialWatch?.rewritten) {
+    log(
+      `mind credential: ${adapter.id} rewrote its login in-container; the rewrite does not carry over ` +
+        "(the scheduler refreshes logins itself), so if the next wake fails to sign in, authorize the account again"
+    );
+  }
 
   // Change detection runs as the mind uid: a filter it triggers executes
   // unprivileged, so this needs no root and no clean mirror.
