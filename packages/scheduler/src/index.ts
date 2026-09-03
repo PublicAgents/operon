@@ -11,6 +11,7 @@ import {
 } from "./launch.js";
 import { effectiveDoors } from "./doors.js";
 import { WakeContainer } from "./wake-container.js";
+import { parseCodexLogin, refreshCodexLogin, type CodexLoginFile } from "./mind-credential.js";
 export { FleetControl } from "./fleet-control.js";
 
 /**
@@ -77,6 +78,10 @@ function launchContext(env: Env): LaunchContext {
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getDoorOverrides: agentId => fleetControl(env).doorOverrides(agentId),
+    getRefreshedCredential: harness => fleetControl(env).refreshedCredential(harness),
+    refreshLogin: login => refreshCodexLogin(parseCodexLogin(login) as CodexLoginFile, fetch),
+    storeRefreshedCredential: (harness, seed, value) =>
+      fleetControl(env).setRefreshedCredential(harness, seed, value),
     async getGithubToken(agent: RosterAgent) {
       if (!env.GITHUB_GATEKEEPER) {
         throw new LaunchPreconditionError(
@@ -115,10 +120,11 @@ function launchContext(env: Env): LaunchContext {
     // launch wires virtual hosts and the per-wake nonce, and the real
     // bearers stay in this env for the router. Nothing public remains
     // to hand over (spec 0009).
+    // The harness's extra args are read per resolved harness in
+    // prepareLaunch (spec 0010 §5), not fixed here.
     options: {
       prRepos: env.PR_REPOS,
       secretDenylist: env.SECRET_DENYLIST,
-      harnessExtraArgs: env.HARNESS_EXTRA_ARGS,
       egressProxy: env.EGRESS_PROXY,
       egressBlocklist: env.EGRESS_BLOCKLIST
     }
@@ -132,8 +138,9 @@ function fleetControl(env: Env) {
 async function wake(
   env: Env,
   agent: RosterAgent,
-  trigger: "cron" | "manual"
-): Promise<{ status: string; wakeId?: string; detail?: string }> {
+  trigger: "cron" | "manual",
+  harness?: string
+): Promise<{ status: string; wakeId?: string; harness?: string; detail?: string }> {
   // The fleet pause (spec 0006 §5): a deploy drain defers NEW wakes and
   // never touches one in flight. A paused cron fires again at its next
   // cadence; manual wakes answer with the pause reason.
@@ -148,7 +155,7 @@ async function wake(
   const wakeId = crypto.randomUUID();
   const stub = env.WAKE_CONTAINER.get(env.WAKE_CONTAINER.idFromName(agent.id));
   try {
-    const prepared = await prepareLaunch(agent, trigger, wakeId, launchContext(env));
+    const prepared = await prepareLaunch(agent, trigger, wakeId, launchContext(env), harness);
     const result = await stub.launch({
       ...prepared,
       staleAfterMs: STALE_AFTER_MS,
@@ -181,11 +188,11 @@ async function wake(
       await notify(env, `[${agent.id}] wake ${wakeId} failed to start: ${result.error}`);
       return { status: "error", wakeId, detail: result.error };
     }
-    return { status: "started", wakeId };
+    return { status: "started", wakeId, harness: prepared.harness };
   } catch (error) {
     const detail =
       error instanceof LaunchPreconditionError ? error.message : String(error);
-    await stub.recordFailure({ wakeId, agentId: agent.id, trigger }, detail);
+    await stub.recordFailure({ wakeId, agentId: agent.id, trigger, ...(harness ? { harness } : {}) }, detail);
     await notify(env, `[${agent.id}] wake ${wakeId} failed preconditions: ${detail}`);
     return { status: "error", wakeId, detail };
   }
@@ -216,7 +223,13 @@ export default {
       const agent = findAgent(roster, wakeMatch[1]);
       if (!agent) return errorResponse(404, "unknown_agent", wakeMatch[1]);
       if (!agent.enabled) return errorResponse(409, "agent_disabled", agent.id);
-      return json(await wake(env, agent, "manual"));
+      // A manual wake may name one of the agent's harnesses (spec 0010
+      // §4); the body is optional and anything else in it is refused.
+      const body = (await request.json().catch(() => ({}))) as { harness?: unknown };
+      if (body.harness !== undefined && (typeof body.harness !== "string" || !/^[a-z0-9-]+$/.test(body.harness))) {
+        return errorResponse(400, "invalid_harness", "harness must be a slug");
+      }
+      return json(await wake(env, agent, "manual", body.harness as string | undefined));
     }
 
     if (url.pathname === "/pause" && request.method === "POST") {
@@ -296,6 +309,7 @@ export default {
             enabled: agent.enabled,
             cadence: agent.cadence,
             harness: agent.harness,
+            harnesses: [agent.harness, ...Object.keys(agent.harnesses ?? {})],
             model: agent.model,
             hosts: agent.hosts,
             web: agent.web === true,

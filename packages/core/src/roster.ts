@@ -1,4 +1,5 @@
 import { DOORS, isDoor, type DoorBaseline } from "./doors.js";
+import { KNOWN_HARNESSES, isHarness, type Harness } from "./harness.js";
 /**
  * The roster is the deployment's list of tenants. It arrives as JSON (the
  * deployment repo's roster.jsonc with comments stripped, or a plain JSON
@@ -16,12 +17,19 @@ export interface RosterAgent {
   stateRepo: string;
   /** Cron expression; must also be registered as a trigger in the deployment. */
   cadence: string;
-  /** Harness adapter id, e.g. "claude-code" or "codex". */
-  harness: string;
-  /** Pinned model for the mind. */
+  /** The primary harness this agent wakes on (spec 0001 §4.1). */
+  harness: Harness;
+  /** Pinned model for the mind on the primary harness. */
   model: string;
   /** Model to fall back to; a degraded wake beats a missed wake. */
   fallbackModel?: string;
+  /**
+   * The other harnesses this same agent may be woken on (spec 0010 §4),
+   * each with its own model pin: a manual wake names one of them and
+   * the agent runs there with the same memory, doors, and grants. The
+   * primary is not repeated here; its pin is `model`/`fallbackModel`.
+   */
+  harnesses?: Partial<Record<Harness, HarnessPin>>;
   /**
    * Hard wall for one wake, minutes (default 120). A wake past it is
    * stopped and its unpushed work is lost, so size generously: this is a
@@ -45,6 +53,12 @@ export interface RosterAgent {
   mcp?: string[];
   /** Per-agent GitHub grants (spec 0008 §6). */
   github?: GithubGrants;
+}
+
+/** A model pin for one alternate harness (spec 0010 §4). */
+export interface HarnessPin {
+  model: string;
+  fallbackModel?: string;
 }
 
 export interface Roster {
@@ -130,8 +144,47 @@ const AGENT_KEYS = new Set([
   "enabled",
   "mcp",
   "github",
-  "doors"
+  "doors",
+  "harnesses"
 ]);
+
+const HARNESS_PIN_KEYS = new Set(["model", "fallbackModel"]);
+
+/**
+ * The alternate harnesses of one agent (spec 0010 §4): known harnesses
+ * only, each with a model, never the primary again (two pins for one
+ * harness would leave the wake to guess which is meant).
+ */
+function parseHarnesses(value: unknown, primary: Harness, path: string): Partial<Record<Harness, HarnessPin>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail(path, "must be a mapping of harness id to { model, fallbackModel? }");
+  }
+  const pins: Partial<Record<Harness, HarnessPin>> = {};
+  for (const [harness, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!isHarness(harness)) {
+      fail(`${path}.${harness}`, `is not a harness (known: ${KNOWN_HARNESSES.join(", ")})`);
+    }
+    if (harness === primary) {
+      fail(`${path}.${harness}`, "is the primary harness; its model is agents[].model");
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      fail(`${path}.${harness}`, "must be an object { model, fallbackModel? }");
+    }
+    const pin = raw as Record<string, unknown>;
+    for (const key of Object.keys(pin)) {
+      if (!HARNESS_PIN_KEYS.has(key)) {
+        fail(`${path}.${harness}.${key}`, `is not a harness pin field (known: ${[...HARNESS_PIN_KEYS].join(", ")})`);
+      }
+    }
+    const model = requireString(pin.model, `${path}.${harness}.model`);
+    const fallbackModel =
+      pin.fallbackModel === undefined
+        ? undefined
+        : requireString(pin.fallbackModel, `${path}.${harness}.fallbackModel`);
+    pins[harness] = { model, ...(fallbackModel ? { fallbackModel } : {}) };
+  }
+  return pins;
+}
 
 /** MCP server names are slugs, and so are portal server ids (underscores allowed there). */
 const MCP_NAME = /^[a-z0-9][a-z0-9-]*$/;
@@ -298,6 +351,9 @@ function parseAgent(value: unknown, index: number): RosterAgent {
 
   const cadence = requireString(raw.cadence, `${path}.cadence`);
   const harness = requireString(raw.harness, `${path}.harness`);
+  if (!isHarness(harness)) {
+    fail(`${path}.harness`, `"${harness}" is not a harness (known: ${KNOWN_HARNESSES.join(", ")})`);
+  }
   const model = requireString(raw.model, `${path}.model`);
 
   let fallbackModel: string | undefined;
@@ -346,6 +402,11 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     github = parseGithubGrants(raw.github, `${path}.github`);
   }
 
+  let harnesses: Partial<Record<Harness, HarnessPin>> | undefined;
+  if (raw.harnesses !== undefined) {
+    harnesses = parseHarnesses(raw.harnesses, harness, `${path}.harnesses`);
+  }
+
   // The doors baseline (spec 0006 §7): named doors only, booleans only,
   // so a typo cannot silently leave a door open or closed.
   let doors: DoorBaseline | undefined;
@@ -374,7 +435,8 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     enabled: raw.enabled,
     ...(mcp ? { mcp } : {}),
     ...(github ? { github } : {}),
-    ...(doors ? { doors } : {})
+    ...(doors ? { doors } : {}),
+    ...(harnesses ? { harnesses } : {})
   };
 }
 

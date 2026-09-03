@@ -69,6 +69,10 @@ const HARNESS_EXTRA_ARGS_DEFAULT = JSON.stringify([
   "stream-json",
   "--verbose"
 ]);
+// The codex policy (spec 0010 §5): the container is the sandbox, as
+// bypassPermissions says for Claude Code; the JSONL stream is the
+// transcript.
+const HARNESS_EXTRA_ARGS_CODEX_DEFAULT = JSON.stringify(["--dangerously-bypass-approvals-and-sandbox", "--json"]);
 
 /** Chassis defaults for every policy var the manifest may override. */
 const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
@@ -84,7 +88,10 @@ const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
   pr: {},
   deploy: { DISCLOSURE_MARKER: "autonomous agent" },
   browser: { WEB_MAX_CONCURRENT: "3" },
-  scheduler: { HARNESS_EXTRA_ARGS: HARNESS_EXTRA_ARGS_DEFAULT }
+  scheduler: {
+    HARNESS_EXTRA_ARGS: HARNESS_EXTRA_ARGS_DEFAULT,
+    HARNESS_EXTRA_ARGS_CODEX: HARNESS_EXTRA_ARGS_CODEX_DEFAULT
+  }
 };
 
 /**

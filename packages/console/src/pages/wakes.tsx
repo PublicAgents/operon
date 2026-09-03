@@ -60,7 +60,10 @@ export function WakesPage() {
               <td>
                 <span className={`state wake-${wake.status}`}>{wake.status}</span>
               </td>
-              <td>{wake.trigger}</td>
+              <td>
+                {wake.trigger}
+                {wake.harness ? <span className="tag">{wake.harness}</span> : null}
+              </td>
               <td>
                 <TimeStamp at={wake.startedAt} />
               </td>

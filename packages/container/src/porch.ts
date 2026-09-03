@@ -65,6 +65,13 @@ export interface PorchContext {
   stateDir: string;
   /** The auto-denylist the presleep gate uses; the publish/PR sweep shares it. */
   denylist: string[];
+  /**
+   * Grow the denylist with anything that appeared since the wake began
+   * (a credential the harness rotated, spec 0010 §5); awaited before
+   * every door request, so the sweep below never runs against a stale
+   * list. Never throws.
+   */
+  refreshDenylist?(): Promise<void>;
   /** Overrides the image's gitleaks config path (tests run outside the image). */
   gitleaksConfig?: string;
   log(message: string): void;
@@ -234,6 +241,7 @@ export class Porch {
       if (request.headers["x-operon-porch"] !== "1") {
         return fail(403, "porch_header_missing", "send x-operon-porch: 1 (the operon CLI does)");
       }
+      await this.context.refreshDenylist?.();
       if (request.method === "GET" && url.pathname === "/capabilities") {
         return ok(capabilities(this.context.config));
       }
