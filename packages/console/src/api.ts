@@ -120,17 +120,21 @@ export interface AgentRow {
   enabled: boolean;
   cadence: string;
   harness: string;
+  /** Every harness this agent may wake on, primary first (spec 0010 §4). */
+  harnesses?: string[];
   model: string;
   hosts: string[];
   web: boolean;
   disabled: boolean;
-  currentWake?: { wakeId: string; startedAt: string; trigger: string };
+  currentWake?: { wakeId: string; startedAt: string; trigger: string; harness?: string };
 }
 
 export interface WakeRecordRow {
   wakeId: string;
   agentId: string;
   trigger: string;
+  /** The harness the wake ran on (spec 0010 §4); absent on older records. */
+  harness?: string;
   startedAt: string;
   endedAt?: string;
   status: "running" | "completed" | "failed";

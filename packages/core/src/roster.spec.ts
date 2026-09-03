@@ -225,3 +225,39 @@ describe("the doors baseline (spec 0006 §7)", () => {
     expect(() => withDoors(["x"])).toThrow(/mapping/);
   });
 });
+
+describe("harnesses (spec 0010 §4)", () => {
+  const withHarnesses = (harness: string, harnesses?: unknown) =>
+    parseRoster(
+      JSON.stringify({
+        zone: "demo.example",
+        agents: [
+          {
+            id: "a",
+            stateRepo: "o/r",
+            cadence: "0 6 * * *",
+            harness,
+            model: "m",
+            enabled: true,
+            hosts: ["@"],
+            ...(harnesses !== undefined ? { harnesses } : {})
+          }
+        ]
+      })
+    );
+
+  it("refuses a primary harness nobody implements, by name", () => {
+    expect(() => withHarnesses("gemini")).toThrow(/agents\[0\]\.harness.*not a harness/);
+  });
+
+  it("accepts pinned alternates and refuses the primary, unknown harnesses, and unpinned models", () => {
+    expect(withHarnesses("claude-code", { codex: { model: "gpt-5.5", fallbackModel: "gpt-5.5-mini" } }).agents[0].harnesses)
+      .toEqual({ codex: { model: "gpt-5.5", fallbackModel: "gpt-5.5-mini" } });
+    expect(withHarnesses("claude-code").agents[0].harnesses).toBeUndefined();
+    expect(() => withHarnesses("claude-code", { "claude-code": { model: "x" } })).toThrow(/is the primary harness/);
+    expect(() => withHarnesses("claude-code", { gemini: { model: "x" } })).toThrow(/is not a harness/);
+    expect(() => withHarnesses("claude-code", { codex: {} })).toThrow(/harnesses\.codex\.model/);
+    expect(() => withHarnesses("claude-code", { codex: { model: "x", image: "y" } })).toThrow(/not a harness pin field/);
+    expect(() => withHarnesses("claude-code", ["codex"])).toThrow(/mapping/);
+  });
+});

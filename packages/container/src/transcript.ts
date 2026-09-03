@@ -25,6 +25,12 @@ export interface TranscriptOptions {
   maxBufferBytes?: number;
   fetchImpl?: typeof fetch;
   log?: (message: string) => void;
+  /**
+   * Run before every flush, before the buffer is redacted: the place
+   * to grow the denylist with literals that appeared mid-wake (a
+   * credential the harness rotated, spec 0010 §5). Never throws.
+   */
+  beforeFlush?: () => Promise<void>;
 }
 
 export const REDACTED = "[redacted]";
@@ -104,6 +110,13 @@ export class TranscriptShipper {
 
   private async flush(done: boolean): Promise<void> {
     if (!this.started) return;
+    if (this.options.beforeFlush) {
+      try {
+        await this.options.beforeFlush();
+      } catch {
+        // The hook is best-effort; the redaction below still runs.
+      }
+    }
     // Redact the WHOLE buffer before any chunk is cut from it: a literal
     // can then never straddle a chunk boundary and ship reconstructable
     // across two chunks. Re-redacting on every flush is idempotent and is

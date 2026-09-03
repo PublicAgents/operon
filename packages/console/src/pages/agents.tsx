@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
@@ -140,13 +141,7 @@ export function AgentsPage() {
                     wake
                   </button>
                 ) : (
-                  <ConfirmButton
-                    label="wake"
-                    onConfirm={async () => {
-                      await callTool("wake", { agentId: agent.id });
-                      state.refresh();
-                    }}
-                  />
+                  <WakeControl agent={agent} onDone={state.refresh} />
                 )}
                 {agent.disabled ? (
                   <ConfirmButton
@@ -176,5 +171,35 @@ export function AgentsPage() {
       </LoadingGate>
           <DoorsMatrix />
     </section>
+  );
+}
+
+/**
+ * The wake button, with the harness choice when the roster pins more
+ * than one for this agent (spec 0010 §4). One agent, the same memory
+ * and doors, a different mind.
+ */
+function WakeControl({ agent, onDone }: { agent: AgentRow; onDone: () => void }) {
+  const harnesses = agent.harnesses ?? [agent.harness];
+  const [harness, setHarness] = useState(harnesses[0]);
+  return (
+    <span className="wake-control">
+      {harnesses.length > 1 ? (
+        <select value={harness} onChange={event => setHarness(event.target.value)} title="which harness this wake runs on">
+          {harnesses.map(id => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <ConfirmButton
+        label={harnesses.length > 1 ? `wake on ${harness}` : "wake"}
+        onConfirm={async () => {
+          await callTool("wake", { agentId: agent.id, ...(harness !== agent.harness ? { harness } : {}) });
+          onDone();
+        }}
+      />
+    </span>
   );
 }

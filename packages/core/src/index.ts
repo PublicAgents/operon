@@ -5,8 +5,10 @@ export {
   type Roster,
   type RosterAgent,
   type McpServerDef,
-  type GithubGrants
+  type GithubGrants,
+  type HarnessPin
 } from "./roster.js";
+export { KNOWN_HARNESSES, isHarness, type Harness, type MindPin } from "./harness.js";
 export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
 export {
   wakeEnv,

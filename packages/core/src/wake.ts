@@ -1,4 +1,5 @@
 import type { RosterAgent } from "./roster.js";
+import type { MindPin } from "./harness.js";
 
 /**
  * The wake environment contract: the scheduler assembles these variables,
@@ -15,6 +16,12 @@ export interface WakeInit {
   wakeId: string;
   trigger: WakeTrigger;
   agent: RosterAgent;
+  /**
+   * The mind this wake runs on (spec 0010 §4). Resolved by the scheduler
+   * from the agent's primary or one of its alternates; the same agent,
+   * a different harness, so it is not read off the agent here.
+   */
+  mind: MindPin;
 }
 
 export interface WakeSecrets {
@@ -86,6 +93,7 @@ export interface WakeOptions {
   webUrl?: string;
   webToken?: string;
   xToken?: string;
+
   /** Comma-separated literals the presleep verifier must not find in changed files. */
   secretDenylist?: string;
   /**
@@ -151,8 +159,8 @@ export function wakeEnv(
     [WAKE_ENV.agentId]: init.agent.id,
     [WAKE_ENV.trigger]: init.trigger,
     [WAKE_ENV.stateRepo]: init.agent.stateRepo,
-    [WAKE_ENV.harness]: init.agent.harness,
-    [WAKE_ENV.model]: init.agent.model,
+    [WAKE_ENV.harness]: init.mind.harness,
+    [WAKE_ENV.model]: init.mind.model,
     [WAKE_ENV.githubToken]: secrets.githubToken,
     [WAKE_ENV.mindCredential]: secrets.mindCredential,
     [WAKE_ENV.maxWakeMinutes]: String(
@@ -160,7 +168,7 @@ export function wakeEnv(
     ),
     [WAKE_ENV.hosts]: init.agent.hosts.join(",")
   };
-  if (init.agent.fallbackModel) env[WAKE_ENV.fallbackModel] = init.agent.fallbackModel;
+  if (init.mind.fallbackModel) env[WAKE_ENV.fallbackModel] = init.mind.fallbackModel;
   if (options.disabledDoors) env[WAKE_ENV.disabledDoors] = options.disabledDoors;
   if (options.notifyUrl) env[WAKE_ENV.notifyUrl] = options.notifyUrl;
   if (options.notifyToken) env[WAKE_ENV.notifyToken] = options.notifyToken;
@@ -201,6 +209,8 @@ export interface WakeRecord {
   wakeId: string;
   agentId: string;
   trigger: WakeTrigger;
+  /** The harness this wake ran on (spec 0010 §4); absent on records older than the field. */
+  harness?: string;
   startedAt: string;
   endedAt?: string;
   exitCode?: number;

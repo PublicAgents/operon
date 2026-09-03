@@ -28,8 +28,15 @@ RUN curl -fsSL -o /tmp/gitleaks.tar.gz \
   && gitleaks version
 # Pinned exactly: the image content must be a pure function of these
 # sources, because the fleet deploy's drain gate hashes them to decide
-# whether an image roll (and therefore a wake drain) is needed.
-RUN npm install -g @anthropic-ai/claude-code@2.1.251
+# whether an image roll (and therefore a wake drain) is needed. Both
+# harness CLIs live in the one image (spec 0010 §6): a wake picks its
+# harness, so the image must carry every adapter's CLI.
+RUN npm install -g @anthropic-ai/claude-code@2.1.251 @openai/codex@0.153.0
+# Claude Code's managed settings (spec 0010 §3): root-owned, above every
+# other settings file, unwritable by the mind. The same off switches the
+# adapter puts in the session environment, a layer the mind cannot edit.
+COPY managed-settings.json /etc/claude-code/managed-settings.json
+RUN chmod 644 /etc/claude-code/managed-settings.json
 # The mind session runs as this unprivileged user; the entrypoint stays
 # root so the session cannot read the supervisor's /proc environment or
 # argv (see entrypoint.ts, privilege split).
