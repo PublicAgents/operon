@@ -88,20 +88,32 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
   const appId = app.id ?? app.uid;
 
   // Policies on the application: the operator's email, and the CI token.
-  const policies = await call("GET", `/accounts/${accountId}/access/apps/${appId}/policies`);
-  const byName = new Map((policies ?? []).map(policy => [policy.name, policy]));
+  // A policy is recognized by what it DOES (its decision and include),
+  // not only by the name this tool would give it: an application made
+  // by hand before the tools owned it (spec 0009 §3) already carries
+  // the operator's allow policy under some other name, and a second
+  // one at the same precedence is refused by Access. A new policy takes
+  // the next free precedence.
+  const policies = (await call("GET", `/accounts/${accountId}/access/apps/${appId}/policies`)) ?? [];
+  const byName = new Map(policies.map(policy => [policy.name, policy]));
+  const sameRule = (policy, decision, include) =>
+    policy.decision === decision && JSON.stringify(policy.include) === JSON.stringify(include);
+  const nextPrecedence = () => Math.max(0, ...policies.map(policy => policy.precedence ?? 0)) + 1;
 
   if (want.operatorEmail) {
-    const allow = byName.get(want.allowPolicyName);
     const wantInclude = [{ email: { email: want.operatorEmail } }];
+    const allow = byName.get(want.allowPolicyName) ?? policies.find(policy => sameRule(policy, "allow", wantInclude));
     if (!allow) {
-      await call("POST", `/accounts/${accountId}/access/apps/${appId}/policies`, {
+      const created = await call("POST", `/accounts/${accountId}/access/apps/${appId}/policies`, {
         name: want.allowPolicyName,
         decision: "allow",
         include: wantInclude,
-        precedence: 1
+        precedence: nextPrecedence()
       });
+      policies.push(created);
       lines.push(`+ policy "${want.allowPolicyName}": allow ${want.operatorEmail}`);
+    } else if (allow.name !== want.allowPolicyName && sameRule(allow, "allow", wantInclude)) {
+      lines.push(`✓ policy "${allow.name}": allow ${want.operatorEmail} (adopted as the operator policy)`);
     } else if (JSON.stringify(allow.include) !== JSON.stringify(wantInclude) || allow.decision !== "allow") {
       await call("PUT", `/accounts/${accountId}/access/apps/${appId}/policies/${allow.id}`, {
         name: want.allowPolicyName,
@@ -156,16 +168,19 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
   }
 
   if (token) {
-    const serviceAuth = byName.get(want.serviceAuthPolicyName);
     const wantInclude = [{ service_token: { token_id: token.id } }];
+    const serviceAuth =
+      byName.get(want.serviceAuthPolicyName) ?? policies.find(policy => sameRule(policy, "non_identity", wantInclude));
     if (!serviceAuth) {
       await call("POST", `/accounts/${accountId}/access/apps/${appId}/policies`, {
         name: want.serviceAuthPolicyName,
         decision: "non_identity",
         include: wantInclude,
-        precedence: 2
+        precedence: nextPrecedence()
       });
       lines.push(`+ policy "${want.serviceAuthPolicyName}": service auth for ${want.serviceTokenName}`);
+    } else if (serviceAuth.name !== want.serviceAuthPolicyName && sameRule(serviceAuth, "non_identity", wantInclude)) {
+      lines.push(`✓ policy "${serviceAuth.name}": service auth for ${want.serviceTokenName} (adopted)`);
     } else if (JSON.stringify(serviceAuth.include) !== JSON.stringify(wantInclude)) {
       await call("PUT", `/accounts/${accountId}/access/apps/${appId}/policies/${serviceAuth.id}`, {
         name: want.serviceAuthPolicyName,
