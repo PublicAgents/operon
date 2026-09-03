@@ -48,18 +48,26 @@ describe("validateManifest", () => {
     );
   });
 
-  it("accepts an egress block with placeholders and refuses one with a credential in it", () => {
-    const egress = {
+  it("accepts an egress.proxy table with placeholders and refuses one with a credential in it", () => {
+    const proxy = {
       "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
       "*.registry.example": "direct"
     };
-    expect(validateManifest({ ...BASE, egress }).egress).toEqual(egress);
+    expect(validateManifest({ ...BASE, egress: { proxy } }).egress).toEqual({ proxy });
+    expect(validateManifest({ ...BASE, egress: {} }).egress).toEqual({});
     expect(validateManifest(BASE).egress).toBeUndefined();
     expect(() =>
-      validateManifest({ ...BASE, egress: { "*": "http://user:secret@general.proxy.example:7777" } })
-    ).toThrow(/egress egress_table_literal_credential/);
-    expect(() => validateManifest({ ...BASE, egress: { "bad host": "direct" } })).toThrow(/egress egress_table_invalid/);
-    expect(() => validateManifest({ ...BASE, egress: { "*": 7 } })).toThrow(/egress\.\* must be a proxy address/);
+      validateManifest({ ...BASE, egress: { proxy: { "*": "http://user:secret@general.proxy.example:7777" } } })
+    ).toThrow(/egress\.proxy egress_table_literal_credential/);
+    expect(() => validateManifest({ ...BASE, egress: { proxy: { "bad host": "direct" } } })).toThrow(
+      /egress\.proxy egress_table_invalid/
+    );
+    expect(() => validateManifest({ ...BASE, egress: { proxy: { "*": 7 } } })).toThrow(
+      /egress\.proxy\.\* must be a proxy address/
+    );
+    // Unknown egress keys refuse, so a future allowlist or blocklist is
+    // added deliberately and a misspelt one never passes as no policy.
+    expect(() => validateManifest({ ...BASE, egress: { blocklist: [] } })).toThrow(/egress\.blocklist is not a known key/);
     // The string var form is gone: EGRESS_PROXY is not a policy var.
     expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "{}" } } })).toThrow(/not a known var/);
   });
@@ -71,9 +79,10 @@ describe("validateManifest", () => {
         "accountId: 85c7962b4a17a841ef0689e0e7c2a050",
         "zone: demo-colony.com",
         "egress:",
-        '  "*": http://${PROXY_GENERAL}@general.proxy.example:7777',
-        "  docs.example: http://${PROXY_DOCS}@other.proxy.example:8888",
-        '  "*.registry.example": direct',
+        "  proxy:",
+        '    "*": http://${PROXY_GENERAL}@general.proxy.example:7777',
+        "    docs.example: http://${PROXY_DOCS}@other.proxy.example:8888",
+        '    "*.registry.example": direct',
         "agents:",
         "  - id: scout",
         "    stateRepo: demo/scout-state",
@@ -85,9 +94,11 @@ describe("validateManifest", () => {
       ].join("\n")
     );
     expect(manifest.egress).toEqual({
-      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
-      "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
-      "*.registry.example": "direct"
+      proxy: {
+        "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+        "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
+        "*.registry.example": "direct"
+      }
     });
   });
 

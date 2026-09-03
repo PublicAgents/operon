@@ -81,35 +81,51 @@ export interface FleetManifest {
   containers: { maxInstances: number };
   policy: Record<string, Record<string, string>>;
   /**
-   * The mind session's outbound proxy table (spec 0004 §8): host pattern
-   * to proxy address or "direct", credentials by placeholder only.
-   * Absent means everything direct. Rendered into the scheduler's
-   * EGRESS_PROXY var; the credentials are scheduler secrets.
+   * The mind session's egress policy (spec 0004 §8). `proxy` is the
+   * outbound proxy table: host pattern to proxy address or "direct",
+   * credentials by placeholder only; absent means everything direct.
+   * Rendered into the scheduler's EGRESS_PROXY var; the credentials are
+   * scheduler secrets. The block is the home for further egress policy
+   * (an allowlist or blocklist) as it arrives.
    */
-  egress?: Record<string, string>;
+  egress?: { proxy?: Record<string, string> };
   roster: Roster;
 }
 
+const EGRESS_KEYS = ["proxy"] as const;
+
 /**
- * The egress block, checked with the chassis grammar so a bad pattern,
- * a malformed address, or a LITERAL credential fails here, by name,
- * before it can be rendered or committed. A key starting with `*` must
- * be quoted in YAML (an unquoted one is an alias), which the YAML parser
- * reports before this runs.
+ * The egress block. The proxy table is checked with the chassis grammar
+ * so a bad pattern, a malformed address, or a LITERAL credential fails
+ * here, by name, before it can be rendered or committed. A key starting
+ * with `*` must be quoted in YAML (an unquoted one is an alias), which
+ * the YAML parser reports before this runs. Unknown keys refuse, as
+ * everywhere in this validator: a misspelt policy must not pass as no
+ * policy.
  */
-function validateEgress(raw: unknown): Record<string, string> | undefined {
+function validateEgress(raw: unknown): FleetManifest["egress"] {
   if (raw === undefined) return undefined;
   const record = requireRecord(raw, "egress");
-  const egress: Record<string, string> = {};
-  for (const [pattern, value] of Object.entries(record)) {
-    if (typeof value !== "string") fail(`egress.${pattern}`, 'must be a proxy address or "direct"');
-    egress[pattern] = value;
+  for (const key of Object.keys(record)) {
+    if (!(EGRESS_KEYS as readonly string[]).includes(key)) {
+      fail(`egress.${key}`, `is not a known key (known: ${EGRESS_KEYS.join(", ")})`);
+    }
   }
-  try {
-    parseEgressTable(JSON.stringify(egress));
-  } catch (error) {
-    if (error instanceof EgressTableError) fail("egress", error.message);
-    throw error;
+  const egress: NonNullable<FleetManifest["egress"]> = {};
+  if (record.proxy !== undefined) {
+    const table = requireRecord(record.proxy, "egress.proxy");
+    const proxy: Record<string, string> = {};
+    for (const [pattern, value] of Object.entries(table)) {
+      if (typeof value !== "string") fail(`egress.proxy.${pattern}`, 'must be a proxy address or "direct"');
+      proxy[pattern] = value;
+    }
+    try {
+      parseEgressTable(JSON.stringify(proxy));
+    } catch (error) {
+      if (error instanceof EgressTableError) fail("egress.proxy", error.message);
+      throw error;
+    }
+    egress.proxy = proxy;
   }
   return egress;
 }

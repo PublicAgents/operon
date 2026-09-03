@@ -96,8 +96,8 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
   add({ worker: "gatekeeper-browser", name: "BROWSER_RUN_TOKEN", purpose: "the Browser Run token", optional: true });
   // The outbound proxy table (spec 0004 §8) names its credentials by
   // placeholder; each one is a scheduler secret holding user:pass.
-  if (manifest.egress !== undefined) {
-    for (const name of egressTableCredentials(JSON.stringify(manifest.egress))) {
+  if (manifest.egress?.proxy !== undefined) {
+    for (const name of egressTableCredentials(JSON.stringify(manifest.egress.proxy))) {
       add({
         worker: "scheduler",
         name: egressCredentialSecret(name),

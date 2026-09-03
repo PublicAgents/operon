@@ -526,17 +526,20 @@ interception machinery closes that gap:
 ### Outbound proxy (optional)
 
 A deployment may route the mind session's plain HTTP egress through
-upstream HTTP proxies. The table is the manifest's `egress:` block
-(spec 0006 §2), routing by destination host to a proxy address or
-`direct`; the templates render it as the scheduler's `EGRESS_PROXY`
-var. **A proxy address names its credential by placeholder, never by
-value**, because the manifest is committed configuration:
+upstream HTTP proxies. The table is `egress.proxy` in the manifest
+(spec 0006 §2; `egress:` is the home of the session's egress policy,
+with room for an allowlist or blocklist beside it), routing by
+destination host to a proxy address or `direct`; the templates render
+it as the scheduler's `EGRESS_PROXY` var. **A proxy address names its
+credential by placeholder, never by value**, because the manifest is
+committed configuration:
 
 ```yaml
 egress:
-  "*": http://${PROXY_GENERAL}@general.proxy.example:7777
-  docs.example: http://${PROXY_DOCS}@other.proxy.example:8888
-  "*.registry.example": direct
+  proxy:
+    "*": http://${PROXY_GENERAL}@general.proxy.example:7777
+    docs.example: http://${PROXY_DOCS}@other.proxy.example:8888
+    "*.registry.example": direct
 ```
 
 (A key starting with `*` must be quoted, or YAML reads it as an
@@ -555,7 +558,7 @@ splits; any character is allowed, each half is percent-encoded into
 the URL). One grammar (`@operon/core` `egress.ts`) serves three
 readers:
 
-- The fleet validates the block at manifest validation: a malformed
+- The fleet validates the table at manifest validation: a malformed
   pattern or address fails by name, and a LITERAL credential in an
   address fails as `egress_table_literal_credential`, pointing at the
   placeholder form, so a pasted secret never reaches a commit. The
