@@ -13,7 +13,7 @@
  * the chronicle is rebuildable in principle from them and the operator's
  * own records.
  */
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const events = sqliteTable(
   "events",
@@ -76,5 +76,93 @@ export const messages = sqliteTable(
     index("messages_agent_at_idx").on(table.agentId, table.at),
     index("messages_kind_at_idx").on(table.kind, table.at),
     index("messages_at_idx").on(table.at)
+  ]
+);
+
+/**
+ * Telemetry (spec 0011). `wake_usage` is one row per wake, read from the
+ * harness's own stream at the end of the wake; the `otel_*` tables hold
+ * what the harness exported over OTLP through the porch, identified by
+ * the umbilical (never by the payload). Names, timings, counts and
+ * statuses only: content flags stay off, and every payload was
+ * denylist-redacted before it left the container.
+ */
+export const wakeUsage = sqliteTable(
+  "wake_usage",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    wakeId: text("wake_id").notNull().unique(),
+    agentId: text("agent_id").notNull(),
+    harness: text("harness").notNull(),
+    model: text("model"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** USD, when the harness reports one; null under a subscription that prices nothing. */
+    costUsd: real("cost_usd"),
+    turns: integer("turns"),
+    durationMs: integer("duration_ms"),
+    /** ISO timestamp of the record, which is the wake's end. */
+    recordedAt: text("recorded_at").notNull()
+  },
+  table => [index("wake_usage_agent_at_idx").on(table.agentId, table.recordedAt)]
+);
+
+export const otelSpans = sqliteTable(
+  "otel_spans",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    wakeId: text("wake_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    traceId: text("trace_id").notNull(),
+    spanId: text("span_id").notNull(),
+    parentSpanId: text("parent_span_id"),
+    name: text("name").notNull(),
+    /** Epoch milliseconds. */
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    /** "ok" | "error" | "unset". */
+    status: text("status").notNull(),
+    attributes: text("attributes", { mode: "json" }).notNull()
+  },
+  table => [
+    index("otel_spans_wake_start_idx").on(table.wakeId, table.startMs),
+    index("otel_spans_start_idx").on(table.startMs)
+  ]
+);
+
+export const otelEvents = sqliteTable(
+  "otel_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    wakeId: text("wake_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    atMs: integer("at_ms").notNull(),
+    name: text("name").notNull(),
+    severity: text("severity"),
+    body: text("body"),
+    attributes: text("attributes", { mode: "json" }).notNull()
+  },
+  table => [
+    index("otel_events_wake_at_idx").on(table.wakeId, table.atMs),
+    index("otel_events_at_idx").on(table.atMs)
+  ]
+);
+
+export const otelMetrics = sqliteTable(
+  "otel_metrics",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    wakeId: text("wake_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    atMs: integer("at_ms").notNull(),
+    name: text("name").notNull(),
+    value: real("value").notNull(),
+    attributes: text("attributes", { mode: "json" }).notNull()
+  },
+  table => [
+    index("otel_metrics_wake_at_idx").on(table.wakeId, table.atMs),
+    index("otel_metrics_at_idx").on(table.atMs)
   ]
 );

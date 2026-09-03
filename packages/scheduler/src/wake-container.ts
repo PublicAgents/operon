@@ -188,6 +188,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
           props: {
             nonce: args.umbilicalNonce,
             agentId: args.agentId,
+            wakeId: args.wakeId,
             closedDoors: args.closedDoors ?? []
           }
         });

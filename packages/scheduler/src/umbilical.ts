@@ -21,6 +21,8 @@ interface RouterEnv {
 interface RouterProps {
   nonce?: string;
   agentId?: string;
+  /** The wake this router serves (spec 0011): stored rows are identified by it, never by a payload. */
+  wakeId?: string;
   /** The doors closed for this wake (spec 0006 §7): refused here, whatever the container asks. */
   closedDoors?: string[];
 }
@@ -47,6 +49,7 @@ export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
     if (resolved.bearer) headers.set("authorization", `Bearer ${resolved.bearer}`);
     else headers.delete("authorization");
     headers.set("x-operon-agent", agentId);
+    if (props.wakeId) headers.set("x-operon-wake", props.wakeId);
     const target = `https://internal${url.pathname}${url.search}`;
     // A WebSocket upgrade (the web door's CDP relay) must pass through
     // as an upgrade: build the forward from the ORIGINAL request so the

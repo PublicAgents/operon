@@ -9,6 +9,7 @@ import { runGitleaks } from "./gitleaks.js";
 import { linesNotIn, scanForSecrets, type ChangedFile } from "./presleep.js";
 import type { WakeConfig } from "./config.js";
 import { renderSkills, type AskLimits } from "./skills.js";
+import { redactLiterals } from "./transcript.js";
 
 /**
  * The porch: a loopback-only HTTP server the entrypoint runs for the
@@ -242,6 +243,13 @@ export class Porch {
         return fail(403, "porch_header_missing", "send x-operon-porch: 1 (the operon CLI does)");
       }
       await this.context.refreshDenylist?.();
+      // The telemetry relay (spec 0011 §4): the harness's OTLP exporters
+      // post here, the porch attaches the chronicle bearer outside the
+      // session and forwards through the umbilical. Redacted against
+      // the shared denylist like the transcript; the payload's own
+      // identity claims are ignored downstream (the router names the wake).
+      const otel = /^\/otel\/v1\/(traces|metrics|logs)$/.exec(url.pathname);
+      if (otel && request.method === "POST") return await this.relayTelemetry(request, otel[1]);
       if (request.method === "GET" && url.pathname === "/capabilities") {
         return ok(capabilities(this.context.config));
       }
@@ -333,6 +341,32 @@ export class Porch {
     } catch (error) {
       this.context.log(`porch error on ${url.pathname}: ${String(error).slice(0, 300)}`);
       return fail(500, "porch_error", String(error).slice(0, 300));
+    }
+  }
+
+  /** Forward one OTLP/HTTP JSON payload to the chronicle door (spec 0011 §4). */
+  private async relayTelemetry(request: IncomingMessage, signal: string): Promise<JsonResult> {
+    const { config, denylist } = this.context;
+    if (!config.chronicleUrl || !config.chronicleToken) return fail(503, "otel_not_wired", "no chronicle door this wake");
+    let raw: string;
+    try {
+      raw = await readRawBody(request, MAX_OTLP_BYTES);
+    } catch (error) {
+      return fail(413, "otel_body_too_large", String(error).slice(0, 120));
+    }
+    if (!raw.trim().startsWith("{")) return fail(400, "otel_not_json", "OTLP/HTTP with the JSON encoding only");
+    try {
+      const response = await fetch(`${config.chronicleUrl}/v1/${signal}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${config.chronicleToken}` },
+        body: redactLiterals(raw, denylist)
+      });
+      if (!response.ok) return fail(502, "otel_relay_refused", `chronicle answered ${response.status}`);
+      // An OTLP client expects the export response shape: an empty
+      // object is "everything accepted".
+      return { status: 200, body: {} };
+    } catch (error) {
+      return fail(502, "otel_relay_failed", String(error).slice(0, 160));
     }
   }
 
@@ -1115,6 +1149,32 @@ export class Porch {
 }
 
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
+/** One OTLP export request; the harnesses batch every few seconds, so this is generous. */
+const MAX_OTLP_BYTES = 4 * 1024 * 1024;
+
+/** The body as text, bounded; unlike readBody it does not parse (OTLP is forwarded verbatim). */
+function readRawBody(request: IncomingMessage, maxBytes: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let overflowed = false;
+    request.on("data", chunk => {
+      if (overflowed) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        overflowed = true;
+        request.destroy();
+        reject(new Error("body_too_large"));
+        return;
+      }
+      chunks.push(chunk as Buffer);
+    });
+    request.on("end", () => {
+      if (!overflowed) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    request.on("error", reject);
+  });
+}
 
 function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {

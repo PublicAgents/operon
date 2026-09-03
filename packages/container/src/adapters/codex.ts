@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { chassisHooks, CredentialShapeError, type HarnessAdapter, type StageInput } from "./types.js";
 import { renderToml, type TomlTable } from "./toml.js";
+import { codexUsageFrom } from "../usage.js";
 
 /**
  * Codex CLI adapter (spec 0010 §4): the second harness, chassis spec
@@ -61,8 +62,13 @@ export function codexCredentialShape(
   return { kind: "login", login: { tokens: tokens as Record<string, unknown> } };
 }
 
-/** The config that turns off everything account-attached (spec 0010 §4). */
-export function codexConfig(mcp: StageInput["mcp"]): TomlTable {
+/** Codex's OTLP/HTTP exporter for one signal, at the porch relay (spec 0011 §4). */
+function otlpHttp(endpoint: string): TomlTable {
+  return { "otlp-http": { endpoint, protocol: "json", headers: { "x-operon-porch": "1" } } };
+}
+
+/** The config that turns off everything account-attached (spec 0010 §4) and exports telemetry to the chassis (spec 0011). */
+export function codexConfig(mcp: StageInput["mcp"], telemetry?: StageInput["telemetry"]): TomlTable {
   const config: TomlTable = {
     cli_auth_credentials_store: "file",
     approval_policy: "never",
@@ -70,7 +76,15 @@ export function codexConfig(mcp: StageInput["mcp"]): TomlTable {
     history: { persistence: "none" },
     analytics: { enabled: false },
     feedback: { enabled: false },
-    otel: { exporter: "none", trace_exporter: "none", metrics_exporter: "none", log_user_prompt: false },
+    otel: telemetry
+      ? {
+          environment: "operon",
+          log_user_prompt: false,
+          exporter: otlpHttp(`${telemetry.endpoint}/v1/logs`),
+          trace_exporter: otlpHttp(`${telemetry.endpoint}/v1/traces`),
+          metrics_exporter: otlpHttp(`${telemetry.endpoint}/v1/metrics`)
+        }
+      : { exporter: "none", trace_exporter: "none", metrics_exporter: "none", log_user_prompt: false },
     features: {
       apps: false,
       plugins: false,
@@ -118,7 +132,7 @@ export const codex: HarnessAdapter = {
     const home = codexHome(input.home);
     const shape = codexCredentialShape(input.credential);
     const files = [
-      { path: join(home, "config.toml"), content: renderToml(codexConfig(input.mcp)), mode: 0o600 },
+      { path: join(home, "config.toml"), content: renderToml(codexConfig(input.mcp, input.telemetry)), mode: 0o600 },
       {
         path: join(home, "hooks.json"),
         content: JSON.stringify({ hooks: chassisHooks(input.hooks, undefined) }, null, 2) + "\n",
@@ -136,6 +150,11 @@ export const codex: HarnessAdapter = {
     } else {
       lines.push("codex: API-key credential (rides CODEX_API_KEY; nothing to relay)");
     }
+    lines.push(
+      input.telemetry
+        ? `codex: telemetry exports to the porch relay (${input.telemetry.endpoint}): events, spans, metrics`
+        : "codex: telemetry off (no chronicle door this wake)"
+    );
     return {
       files,
       // Staged hooks are the chassis's own; Codex's hook trust is granted
@@ -153,6 +172,10 @@ export const codex: HarnessAdapter = {
       .filter(([key, value]) => key !== "account_id" && typeof value === "string" && value.length > 0)
       .map(([, value]) => value as string);
     return [credential, ...tokens];
+  },
+
+  usageFrom(lines) {
+    return codexUsageFrom(lines);
   },
 
   probe(model, credential) {

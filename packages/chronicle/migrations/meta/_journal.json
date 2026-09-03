@@ -8,6 +8,13 @@
       "when": 1787818040545,
       "tag": "0000_chronicle-initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788429979675,
+      "tag": "0001_telemetry",
+      "breakpoints": true
     }
   ]
 }

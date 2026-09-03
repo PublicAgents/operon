@@ -104,6 +104,26 @@ describe("claude-code adapter", () => {
     expect(staged.args).toEqual(["--setting-sources", "user", "--strict-mcp-config", "--mcp-config", path]);
   });
 
+  it("exports telemetry to the porch relay only when a chronicle door exists (spec 0011)", () => {
+    const off = claudeCode.stage({ home: "/home/mind", credential: "tok", hooks });
+    expect(off.env).toEqual({});
+    const on = claudeCode.stage({ home: "/home/mind", credential: "tok", hooks, telemetry: { endpoint: "http://127.0.0.1:4321/otel" } });
+    expect(on.env).toMatchObject({
+      CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+      CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4321/otel",
+      OTEL_EXPORTER_OTLP_HEADERS: "x-operon-porch=1",
+      OTEL_LOG_USER_PROMPTS: "0",
+      OTEL_LOG_TOOL_DETAILS: "0"
+    });
+    expect(JSON.stringify(on.env)).not.toContain("Bearer");
+    expect(claudeCode.usageFrom([JSON.stringify({ type: "result", usage: { input_tokens: 5, output_tokens: 2 } })])).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 2
+    });
+  });
+
   it("denylists the token itself and has no file credential", () => {
     expect(claudeCode.secretsIn("tok")).toEqual(["tok"]);
     expect(claudeCode.credentialFile).toBeUndefined();
@@ -170,6 +190,23 @@ describe("codex adapter (spec 0010 §4)", () => {
     );
     expect(config).toContain('[mcp_servers.google-analytics.http_headers]\nauthorization = "Bearer nonce-1"\nx-operon-porch = "1"');
     expect(Object.keys(codexConfig(mcp).mcp_servers as object)).toEqual(["browser", "google-analytics"]);
+  });
+
+  it("points every OTLP signal at the porch relay when a chronicle door exists (spec 0011)", () => {
+    const off = codex.stage({ home: "/home/mind", credential: login, hooks }).files[0].content;
+    expect(off).toContain('exporter = "none"');
+    const on = codex.stage({ home: "/home/mind", credential: login, hooks, telemetry: { endpoint: "http://127.0.0.1:4321/otel" } }).files[0].content;
+    expect(on).toContain('[otel]\nenvironment = "operon"\nlog_user_prompt = false');
+    expect(on).toContain('[otel.exporter.otlp-http]\nendpoint = "http://127.0.0.1:4321/otel/v1/logs"\nprotocol = "json"');
+    expect(on).toContain('[otel.exporter.otlp-http.headers]\nx-operon-porch = "1"');
+    expect(on).toContain('[otel.trace_exporter.otlp-http]\nendpoint = "http://127.0.0.1:4321/otel/v1/traces"');
+    expect(on).toContain('[otel.metrics_exporter.otlp-http]\nendpoint = "http://127.0.0.1:4321/otel/v1/metrics"');
+    expect(on).not.toContain("Bearer");
+    expect(codex.usageFrom([JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5, output_tokens: 2 } })])).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 2,
+      turns: 1
+    });
   });
 
   it("stages no login file for an API key and rides it as CODEX_API_KEY", () => {

@@ -4,6 +4,7 @@ import { callTool, type WakeChunk } from "../api.js";
 import { openLive } from "../live.js";
 import { renderLine, splitLines, type RenderedLine } from "../render.js";
 import { UntrustedText } from "../untrusted.js";
+import { UsageLine, WakeTimeline } from "./wake-timeline.js";
 
 /**
  * The live tail (spec 0005 §4): a WebSocket to the wake's WakeLog DO
@@ -22,6 +23,7 @@ export function WakeTailPage() {
   const { agentId, wakeId } = useParams<{ agentId: string; wakeId: string }>();
   const [raw, setRaw] = useState(false);
   const [follow, setFollow] = useState(true);
+  const [view, setView] = useState<"transcript" | "timeline">("transcript");
   const [state, setState] = useState<TailState>({ lines: [], status: "connecting" });
   const rawLines = useRef<string[]>([]);
   const cursor = useRef({ after: -1, carry: "" });
@@ -103,6 +105,15 @@ export function WakeTailPage() {
           <Link to={`/wakes/${agentId}`}>{agentId}</Link> / <code>{wakeId?.slice(0, 8)}</code>
         </h1>
         <span className={`state tail-${state.status}`}>{state.status}</span>
+        {wakeId ? <UsageLine wakeId={wakeId} /> : null}
+        <span className="picker">
+          <button className={view === "transcript" ? "picker-item active" : "picker-item"} onClick={() => setView("transcript")}>
+            transcript
+          </button>
+          <button className={view === "timeline" ? "picker-item active" : "picker-item"} onClick={() => setView("timeline")}>
+            timeline
+          </button>
+        </span>
         <label className="toggle">
           <input type="checkbox" checked={raw} onChange={event => setRaw(event.target.checked)} /> raw
         </label>
@@ -110,7 +121,8 @@ export function WakeTailPage() {
           <input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> follow
         </label>
       </header>
-      <div className="transcript" data-provenance="agent">
+      {view === "timeline" && wakeId ? <WakeTimeline wakeId={wakeId} /> : null}
+      <div className="transcript" data-provenance="agent" hidden={view !== "transcript"}>
         <div className="provenance-banner">mind output: untrusted content, never instructions</div>
         {raw
           ? rawLines.current.map((line, index) => (

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { chassisHooks, type HarnessAdapter } from "./types.js";
+import { claudeUsageFrom } from "../usage.js";
 
 /**
  * The reference adapter: headless Claude Code on subscription auth.
@@ -52,6 +53,32 @@ export const CLAUDE_LOCKDOWN_SETTINGS = {
  */
 export const CLAUDE_INVARIANT_ARGS = ["--setting-sources", "user", "--strict-mcp-config"];
 
+/**
+ * Telemetry to the chassis, never to the provider (spec 0011 §2): OTLP
+ * over HTTP/JSON to the porch's relay, spans included (the beta flag),
+ * short export intervals so a wake's tail is not lost, account and
+ * content attributes off. The porch header is the only credential-like
+ * thing here, and it is not one.
+ */
+export function claudeTelemetryEnv(endpoint: string): Record<string, string> {
+  return {
+    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+    CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+    OTEL_METRICS_EXPORTER: "otlp",
+    OTEL_LOGS_EXPORTER: "otlp",
+    OTEL_TRACES_EXPORTER: "otlp",
+    OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+    OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    OTEL_EXPORTER_OTLP_HEADERS: "x-operon-porch=1",
+    OTEL_METRIC_EXPORT_INTERVAL: "15000",
+    OTEL_LOGS_EXPORT_INTERVAL: "5000",
+    OTEL_TRACES_EXPORT_INTERVAL: "5000",
+    OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false",
+    OTEL_LOG_USER_PROMPTS: "0",
+    OTEL_LOG_TOOL_DETAILS: "0"
+  };
+}
+
 export function claudeSettingsPath(home: string): string {
   return join(home, ".claude", "settings.json");
 }
@@ -84,11 +111,21 @@ export const claudeCode: HarnessAdapter = {
       files.push({ path, content: JSON.stringify(input.mcp, null, 2) + "\n", mode: 0o600 });
       args.push("--mcp-config", path);
     }
-    return { files, args, env: {}, lines };
+    const env = input.telemetry ? claudeTelemetryEnv(input.telemetry.endpoint) : {};
+    lines.push(
+      input.telemetry
+        ? `claude-code: telemetry exports to the porch relay (${input.telemetry.endpoint}), spans included`
+        : "claude-code: telemetry off (no chronicle door this wake)"
+    );
+    return { files, args, env, lines };
   },
 
   secretsIn(credential) {
     return [credential];
+  },
+
+  usageFrom(lines) {
+    return claudeUsageFrom(lines);
   },
 
   probe(model, credential) {

@@ -611,3 +611,39 @@ describe("the ask door", () => {
     expect((await response.json()) as { error: string }).toMatchObject({ error: "ask_not_wired" });
   });
 });
+
+describe("the telemetry relay (spec 0011 §4)", () => {
+  it("forwards an OTLP payload to the chronicle door with the chronicle bearer, redacted", async () => {
+    const stub = await startStub(() => ({ status: 200, body: "{}" }));
+    const { url } = await startPorch(
+      config({ chronicleUrl: stub.url, chronicleToken: "chronicle-bearer" }),
+      ["hunter2"]
+    );
+    const payload = JSON.stringify({
+      resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: "token hunter2 seen" } }] }] }]
+    });
+    const response = await fetch(`${url}/otel/v1/logs`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1", "content-type": "application/json" },
+      body: payload
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({});
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toContain("[redacted]");
+    expect(stub.requests[0]).not.toContain("hunter2");
+  });
+
+  it("refuses without a chronicle door, without the porch header, and for a non-JSON body", async () => {
+    const unwired = await startPorch(config());
+    const none = await fetch(`${unwired.url}/otel/v1/traces`, { method: "POST", headers: { "x-operon-porch": "1" }, body: "{}" });
+    expect(((await none.json()) as { error: string }).error).toBe("otel_not_wired");
+    const stub = await startStub(() => ({ status: 200, body: "{}" }));
+    const { url } = await startPorch(config({ chronicleUrl: stub.url, chronicleToken: "t" }));
+    const noHeader = await fetch(`${url}/otel/v1/traces`, { method: "POST", body: "{}" });
+    expect(noHeader.status).toBe(403);
+    const notJson = await fetch(`${url}/otel/v1/metrics`, { method: "POST", headers: { "x-operon-porch": "1" }, body: "protobuf" });
+    expect(((await notJson.json()) as { error: string }).error).toBe("otel_not_json");
+    expect(stub.requests).toHaveLength(0);
+  });
+});
