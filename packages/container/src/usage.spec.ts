@@ -12,7 +12,7 @@ describe("claudeUsageFrom (spec 0011)", () => {
         num_turns: 12,
         total_cost_usd: 1.2345,
         usage: { input_tokens: 4200, cache_creation_input_tokens: 800, cache_read_input_tokens: 120_000, output_tokens: 3100 },
-        modelUsage: { "claude-fable-5": { inputTokens: 4200 } }
+        modelUsage: { "claude-fable-5": { inputTokens: 4200, outputTokens: 3100, cacheReadInputTokens: 120_000 } }
       })
     ];
     expect(claudeUsageFrom(lines)).toEqual({
@@ -25,6 +25,25 @@ describe("claudeUsageFrom (spec 0011)", () => {
       durationMs: 61_000,
       model: "claude-fable-5"
     });
+  });
+
+  it("reports the model that did most of the work and names a switch the harness made on its own", () => {
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", model: "claude-fable-5" }),
+      JSON.stringify({ type: "system", subtype: "model_refusal_fallback", fallback_model: "claude-opus-4-8" }),
+      JSON.stringify({
+        type: "result",
+        usage: { input_tokens: 104, output_tokens: 31_598 },
+        modelUsage: {
+          "claude-fable-5": { inputTokens: 2, outputTokens: 34, cacheReadInputTokens: 10_109, cacheCreationInputTokens: 5573 },
+          "claude-opus-4-8": { inputTokens: 102, outputTokens: 31_564, cacheReadInputTokens: 3_561_874, cacheCreationInputTokens: 97_956 }
+        }
+      })
+    ];
+    const usage = claudeUsageFrom(lines);
+    expect(usage?.model).toBe("claude-opus-4-8");
+    expect(usage?.switchedTo).toEqual(["claude-opus-4-8"]);
+    expect(describeUsage(usage)).toContain("MODEL SWITCHED by the harness to claude-opus-4-8");
   });
 
   it("is undefined without a result event and tolerates junk lines", () => {

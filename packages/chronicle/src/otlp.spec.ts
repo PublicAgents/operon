@@ -120,7 +120,7 @@ describe("parseTraces", () => {
 });
 
 describe("parseLogs", () => {
-  it("names an event from eventName, then event.name, then severity, and caps the body", () => {
+  it("names an event from event.name, then eventName, then severity, and caps the body", () => {
     const rows = parseLogs(
       {
         resourceLogs: [
@@ -134,6 +134,12 @@ describe("parseLogs", () => {
                     body: { stringValue: "x".repeat(MAX_BODY_CHARS + 10) },
                     attributes: [kv("event.name", { stringValue: "claude_code.tool_result" }), kv("tool_name", { stringValue: "Bash" })]
                   },
+                  {
+                    observedTimeUnixNano: "1725350401000000000",
+                    eventName: "event otel/src/events/session_telemetry.rs:1012",
+                    attributes: [kv("event.name", { stringValue: "codex.sse_event" })],
+                    body: { kvlistValue: { values: [kv("a", { intValue: 1 })] } }
+                  },
                   { observedTimeUnixNano: "1725350401000000000", eventName: "codex.turn", body: { kvlistValue: { values: [kv("a", { intValue: 1 })] } } },
                   { severityText: "WARN" }
                 ]
@@ -146,8 +152,9 @@ describe("parseLogs", () => {
     );
     expect(rows[0]).toMatchObject({ atMs: 1725350400000, name: "claude_code.tool_result", severity: "INFO", attributes: { tool_name: "Bash" } });
     expect(rows[0].body?.length).toBe(MAX_BODY_CHARS);
-    expect(rows[1]).toMatchObject({ atMs: 1725350401000, name: "codex.turn", severity: null, body: '{"a":1}' });
-    expect(rows[2]).toMatchObject({ atMs: 0, name: "WARN", body: null });
+    expect(rows[1]).toMatchObject({ atMs: 1725350401000, name: "codex.sse_event", severity: null, body: '{"a":1}' });
+    expect(rows[2]).toMatchObject({ atMs: 1725350401000, name: "codex.turn", severity: null, body: '{"a":1}' });
+    expect(rows[3]).toMatchObject({ atMs: 0, name: "WARN", body: null });
   });
 });
 

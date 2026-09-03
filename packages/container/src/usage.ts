@@ -14,8 +14,14 @@ export interface WakeUsage {
   costUsd?: number;
   turns?: number;
   durationMs?: number;
-  /** The model the harness reports having used, when it says. */
+  /** The model that did most of the work (by token share), when the harness says. */
   model?: string;
+  /**
+   * Models the harness switched to mid-session on its own (Claude
+   * Code's refusal fallback): the pinned model is what the probe
+   * verified, and a switch is what the summary must name.
+   */
+  switchedTo?: string[];
 }
 
 function num(value: unknown): number {
@@ -50,13 +56,26 @@ export interface UsageAccumulator {
 }
 
 export function claudeUsageAccumulator(): UsageAccumulator {
-  let last: string | undefined;
+  let last: Record<string, unknown> | undefined;
+  const switchedTo: string[] = [];
   return {
     add(line) {
-      if (isUsageLine(line) && line.includes('"result"')) last = line;
+      // Parsed once and classified by its type and subtype, never by a
+      // substring: the stream is JSON, and a payload value must not
+      // decide the dispatch.
+      const event = parseLine(line);
+      if (!event) return;
+      const model = claudeModelSwitch(event);
+      if (model) {
+        if (!switchedTo.includes(model)) switchedTo.push(model);
+        return;
+      }
+      // A result event without a usage table (an errored session) still
+      // ends the wake: it is kept, and its counts read as zero.
+      if (event.type === "result") last = event;
     },
     finish() {
-      return last === undefined ? undefined : claudeUsageFrom([last]);
+      return last === undefined ? undefined : claudeResultUsage(last, switchedTo);
     }
   };
 }
@@ -66,7 +85,6 @@ export function codexUsageAccumulator(): UsageAccumulator {
   const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   return {
     add(line) {
-      if (!isUsageLine(line)) return;
       const event = parseLine(line);
       if (!event || event.type !== "turn.completed") return;
       const usage = (event.usage ?? {}) as Record<string, unknown>;
@@ -81,29 +99,52 @@ export function codexUsageAccumulator(): UsageAccumulator {
   };
 }
 
+/** The model with the largest token share in a result's modelUsage breakdown. */
+function dominantModel(modelUsage: unknown): string | undefined {
+  if (typeof modelUsage !== "object" || modelUsage === null) return undefined;
+  let best: { model: string; tokens: number } | undefined;
+  for (const [model, raw] of Object.entries(modelUsage as Record<string, unknown>)) {
+    const share = (raw ?? {}) as Record<string, unknown>;
+    const tokens =
+      num(share.inputTokens) + num(share.outputTokens) + num(share.cacheReadInputTokens) + num(share.cacheCreationInputTokens);
+    if (!best || tokens > best.tokens) best = { model, tokens };
+  }
+  return best?.model;
+}
+
+/** A Claude Code system event announcing a model switch the harness made on its own. */
+function claudeModelSwitch(event: Record<string, unknown>): string | undefined {
+  if (event.type !== "system" || event.subtype !== "model_refusal_fallback") return undefined;
+  return typeof event.fallback_model === "string" ? event.fallback_model : "(unnamed)";
+}
+
 /**
  * Claude Code stream-json: the LAST `result` event carries the session's
  * totals (`usage`, `total_cost_usd`, `num_turns`, `duration_ms`) and a
- * per-model breakdown (`modelUsage`), whose first key is the model.
+ * per-model breakdown (`modelUsage`); the model reported is the one
+ * that did most of the work, and any mid-session switch the harness
+ * announced is listed beside it.
  */
 export function claudeUsageFrom(lines: string[]): WakeUsage | undefined {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const event = parseLine(lines[i]);
-    if (!event || event.type !== "result") continue;
-    const usage = (event.usage ?? {}) as Record<string, unknown>;
-    const models = Object.keys((event.modelUsage as Record<string, unknown> | undefined) ?? {});
-    return {
-      inputTokens: num(usage.input_tokens),
-      outputTokens: num(usage.output_tokens),
-      cacheReadTokens: num(usage.cache_read_input_tokens),
-      cacheWriteTokens: num(usage.cache_creation_input_tokens),
-      ...(typeof event.total_cost_usd === "number" ? { costUsd: event.total_cost_usd } : {}),
-      ...(typeof event.num_turns === "number" ? { turns: event.num_turns } : {}),
-      ...(typeof event.duration_ms === "number" ? { durationMs: event.duration_ms } : {}),
-      ...(models.length > 0 ? { model: models[0] } : {})
-    };
-  }
-  return undefined;
+  const acc = claudeUsageAccumulator();
+  for (const line of lines) acc.add(line);
+  return acc.finish();
+}
+
+function claudeResultUsage(event: Record<string, unknown>, switchedTo: string[]): WakeUsage {
+  const usage = (event.usage ?? {}) as Record<string, unknown>;
+  const model = dominantModel(event.modelUsage);
+  return {
+    inputTokens: num(usage.input_tokens),
+    outputTokens: num(usage.output_tokens),
+    cacheReadTokens: num(usage.cache_read_input_tokens),
+    cacheWriteTokens: num(usage.cache_creation_input_tokens),
+    ...(typeof event.total_cost_usd === "number" ? { costUsd: event.total_cost_usd } : {}),
+    ...(typeof event.num_turns === "number" ? { turns: event.num_turns } : {}),
+    ...(typeof event.duration_ms === "number" ? { durationMs: event.duration_ms } : {}),
+    ...(model ? { model } : {}),
+    ...(switchedTo.length > 0 ? { switchedTo } : {})
+  };
 }
 
 /**
@@ -126,5 +167,8 @@ export function describeUsage(usage: WakeUsage | undefined): string {
   if (usage.cacheReadTokens > 0) parts.push(`${k(usage.cacheReadTokens)} cached`);
   if (usage.costUsd !== undefined) parts.push(`$${usage.costUsd.toFixed(2)}`);
   if (usage.turns !== undefined) parts.push(`${usage.turns} turns`);
+  if (usage.switchedTo && usage.switchedTo.length > 0) {
+    parts.push(`MODEL SWITCHED by the harness to ${usage.switchedTo.join(", ")} (a refusal fallback; most tokens ran on ${usage.model ?? "?"})`);
+  }
   return parts.join(", ");
 }

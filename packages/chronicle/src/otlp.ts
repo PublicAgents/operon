@@ -181,8 +181,10 @@ interface ScopeLogs {
 
 /**
  * ExportLogsServiceRequest → event rows. The event's name is the
- * record's eventName, else its `event.name` attribute (how the
- * harnesses name their events), else the severity.
+ * `event.name` attribute when the record carries one (how both
+ * harnesses name their events; Codex fills the record's own eventName
+ * with a source location instead), else the record's eventName, else
+ * the severity.
  */
 export function parseLogs(payload: unknown, identity: OtlpIdentity): EventRow[] {
   const rows: EventRow[] = [];
@@ -193,10 +195,10 @@ export function parseLogs(payload: unknown, identity: OtlpIdentity): EventRow[] 
         if (!record || typeof record !== "object") continue;
         const attrs = attributes(record.attributes);
         const eventName =
-          typeof record.eventName === "string" && record.eventName
-            ? record.eventName
-            : typeof attrs["event.name"] === "string"
-              ? (attrs["event.name"] as string)
+          typeof attrs["event.name"] === "string" && attrs["event.name"]
+            ? (attrs["event.name"] as string)
+            : typeof record.eventName === "string" && record.eventName
+              ? record.eventName
               : (record.severityText ?? "log");
         const body = anyValue(record.body);
         const bodyText = body === null || body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body);
