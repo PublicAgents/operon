@@ -46,8 +46,29 @@ describe("requiredSecrets", () => {
     const byKey = Object.fromEntries(requiredSecrets(validateManifest(BASE)).map(r => [`${r.worker}/${r.name}`, r]));
     expect(byKey["gatekeeper-telegram/TELEGRAM_BOT_TOKEN"].optional).toBe(true);
     expect(byKey["gatekeeper-x/X_ACCESS_TOKEN_PROMOTER"].optional).toBe(true);
-    expect(byKey["scheduler/EGRESS_PROXY"].optional).toBe(true);
     expect(byKey["scheduler/WAKE_TRIGGER_TOKEN"].optional).toBeUndefined();
+  });
+
+  it("derives the outbound proxy credentials from the table's placeholders", () => {
+    const withProxy = validateManifest({
+      ...BASE,
+      policy: {
+        scheduler: {
+          EGRESS_PROXY: JSON.stringify({
+            "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+            "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
+            "*.registry.example": "direct"
+          })
+        }
+      }
+    });
+    const names = requiredSecrets(withProxy).map(r => `${r.worker}/${r.name}`);
+    expect(names).toContain("scheduler/EGRESS_CREDENTIAL_PROXY_GENERAL");
+    expect(names).toContain("scheduler/EGRESS_CREDENTIAL_PROXY_DOCS");
+    expect(names.filter(n => n.startsWith("scheduler/EGRESS_CREDENTIAL_"))).toHaveLength(2);
+    // No table, no proxy secrets.
+    const without = requiredSecrets(validateManifest(BASE)).map(r => `${r.worker}/${r.name}`);
+    expect(without.some(n => n.startsWith("scheduler/EGRESS_CREDENTIAL_"))).toBe(false);
   });
 
   it("requires what the manifest's grants declare", () => {

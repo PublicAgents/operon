@@ -48,6 +48,23 @@ describe("validateManifest", () => {
     );
   });
 
+  it("accepts an outbound proxy table with placeholders and refuses one with a credential in it", () => {
+    const table = JSON.stringify({
+      "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+      "*.registry.example": "direct"
+    });
+    expect(validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: table } } }).policy.scheduler.EGRESS_PROXY).toBe(
+      table
+    );
+    const literal = JSON.stringify({ "*": "http://user:secret@general.proxy.example:7777" });
+    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: literal } } })).toThrow(
+      /policy\.scheduler\.EGRESS_PROXY egress_table_literal_credential/
+    );
+    expect(() => validateManifest({ ...BASE, policy: { scheduler: { EGRESS_PROXY: "not json" } } })).toThrow(
+      /policy\.scheduler\.EGRESS_PROXY egress_table_invalid/
+    );
+  });
+
   it("delegates roster validation to the chassis parser", () => {
     expect(() =>
       validateManifest({ ...BASE, agents: [{ ...BASE.agents[0] }, { ...BASE.agents[0] }] })

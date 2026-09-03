@@ -97,11 +97,13 @@ export interface WakeOptions {
   /**
    * Upstream HTTP proxies for the mind session's outbound HTTP: a JSON
    * object of host pattern ("*", "host.example", "*.example") to proxy
-   * address (http(s)://[user:pass@]host[:port]) or "direct"; unset means
-   * {"*": "direct"}. The entrypoint runs a loopback forwarder that holds
-   * the credentials and routes per host; the session is handed only the
-   * loopback address, through the standard proxy variables. The
-   * chassis's own hosts (loopback, the umbilical) are always direct.
+   * address or "direct"; unset means {"*": "direct"}. The scheduler's
+   * var carries credential PLACEHOLDERS (egress.ts) and prepareLaunch
+   * substitutes the secrets they name, so the value that reaches the
+   * container is the resolved table. The entrypoint runs a loopback
+   * forwarder that holds the credentials and routes per host; the
+   * session is handed only the loopback address, through the standard
+   * proxy variables. The chassis's own hosts are always direct.
    */
   egressProxy?: string;
 }

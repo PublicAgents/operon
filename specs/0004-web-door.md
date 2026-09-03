@@ -526,17 +526,16 @@ interception machinery closes that gap:
 ### Outbound proxy (optional)
 
 A deployment may route the mind session's plain HTTP egress through
-upstream HTTP proxies (`EGRESS_PROXY` in the scheduler env, delivered
-to the container as `OPERON_EGRESS_PROXY`). The value is always a JSON
-object routing by destination host to a proxy address
-(`http(s)://[user:pass@]host[:port]`) or `direct`; unset, it is
-`{"*": "direct"}`, under which no forwarder runs and egress is exactly
-as before:
+upstream HTTP proxies. The table is the scheduler's `EGRESS_PROXY`
+var, set in the manifest's `policy.scheduler` block (spec 0006 §2): a
+JSON object routing by destination host to a proxy address or
+`direct`. **A proxy address names its credential by placeholder,
+never by value**, because the table is committed configuration:
 
 ```json
 {
-  "*": "http://user:pass@general.proxy.example:7777",
-  "docs.example": "http://user:pass@other.proxy.example:8888",
+  "*": "http://${PROXY_GENERAL}@general.proxy.example:7777",
+  "docs.example": "http://${PROXY_DOCS}@other.proxy.example:8888",
   "*.registry.example": "direct"
 }
 ```
@@ -544,9 +543,29 @@ as before:
 A key is `*` (the catch-all), an exact hostname, or `*.domain` (the
 domain and its subdomains); the most specific match wins (exact, then
 the longest domain, then `*`), a value of `direct` means no proxy, and
-a host no key matches goes direct. Every entry is validated at wake
-start: a malformed address or pattern, or a bare address in place of
-the table, fails the wake by name.
+a host no key matches goes direct. Unset, the table is
+`{"*": "direct"}`, under which no forwarder runs and egress is exactly
+as before.
+
+A placeholder `${NAME}` names the scheduler secret
+`EGRESS_CREDENTIAL_<NAME>`, holding `user:pass` (the first colon
+splits; any character is allowed, each half is percent-encoded into
+the URL). One grammar (`@operon/core` `egress.ts`) serves three
+readers:
+
+- The fleet validates the table at manifest validation: a malformed
+  pattern or address fails by name, and a LITERAL credential in an
+  address fails as `egress_table_literal_credential`, pointing at the
+  placeholder form, so a pasted secret never reaches a commit. The
+  secret checklist (spec 0006 §2) derives `EGRESS_CREDENTIAL_<NAME>`
+  for every placeholder, so bootstrap and `deploy --check` name
+  exactly the secrets the table needs.
+- The scheduler substitutes at launch: the resolved table rides the
+  wake env as `OPERON_EGRESS_PROXY`, and a placeholder whose secret is
+  not configured fails the launch as `egress_credential_missing`, like
+  a missing mind credential.
+- The container receives the resolved table only, validates it again
+  at wake start, and never sees a placeholder.
 
 No credential enters the session: the ROOT entrypoint runs a loopback
 forwarder beside the porch for exactly the session's lifetime, decides

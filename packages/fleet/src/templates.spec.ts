@@ -219,6 +219,9 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe(
       JSON.stringify(["--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose"])
     );
+    // The outbound proxy table is a policy var: absent by default, rendered
+    // verbatim (placeholders and all, never a credential) when set.
+    expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();
     expect(scheduler.containers[0]).toMatchObject({
       class_name: "WakeContainer",
       image: `${CHASSIS}/packages/container/Dockerfile`,

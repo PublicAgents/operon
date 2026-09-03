@@ -1,6 +1,8 @@
 import { doorHost } from "./umbilical-routes.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
+  EgressTableError,
+  resolveEgressTable,
   wakeEnv,
   type RosterAgent,
   type WakeTrigger,
@@ -186,6 +188,21 @@ export async function prepareLaunch(
       }
     : {};
 
+  // The outbound proxy table (spec 0004 §8) names its credentials by
+  // placeholder; the values are scheduler secrets, substituted here so
+  // the committed var never holds one and the container receives the
+  // table it can use. A placeholder without its secret fails the launch
+  // by name, like a missing mind credential.
+  let egressProxy: { egressProxy: string } | Record<string, never> = {};
+  if (context.options.egressProxy !== undefined) {
+    try {
+      egressProxy = { egressProxy: resolveEgressTable(context.options.egressProxy, name => context.getSecret(name)) };
+    } catch (error) {
+      if (error instanceof EgressTableError) throw new LaunchPreconditionError(error.code, error.message);
+      throw error;
+    }
+  }
+
   const secrets: WakeSecrets = { githubToken, mindCredential };
   // A per-agent door (spec 0002 §3) is open only when its REAL bearer is
   // configured in the scheduler env; the container then carries the nonce
@@ -205,7 +222,7 @@ export async function prepareLaunch(
     env: wakeEnv(
       { wakeId, trigger, agent },
       secrets,
-      { ...context.options, ...doorOptions, ...perAgent, ...githubGrants, ...mcpEnv }
+      { ...context.options, ...doorOptions, ...perAgent, ...githubGrants, ...mcpEnv, ...egressProxy }
     ),
     umbilicalNonce,
     mcpHosts: mcpServers.map(server => server.virtual),

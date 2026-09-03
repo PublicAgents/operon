@@ -56,18 +56,21 @@
   //   MIND_CREDENTIAL_CLAUDE_CODE  subscription OAuth token for claude-code minds
   //   GITHUB_TOKEN_SERVICE_TOKEN   bearer presented to the github Gatekeeper
   //   NOTIFY_TOKEN              bearer the container uses against the telegram Gatekeeper
-  //   EGRESS_PROXY              optional upstream proxies for the mind session's outbound
-  //                             HTTP (spec 0004 §8): a JSON object of host pattern ("*",
-  //                             "host.example", "*.example") to http(s)://[user:pass@]host
-  //                             [:port] or "direct"; unset means {"*": "direct"}. The
-  //                             container's root-run forwarder holds the credentials and
-  //                             routes per host; the session gets a loopback address. The
-  //                             chassis's own hosts are always direct.
+  //   EGRESS_CREDENTIAL_<NAME>  user:pass for the outbound proxy the EGRESS_PROXY table
+  //                             names as ${NAME} (spec 0004 §8); substituted at launch
   // Vars, set per deployment:
   //   NOTIFY_URL                telegram Gatekeeper /notify endpoint
   //   SECRET_DENYLIST           comma-separated literals for the presleep sweep
   //   HARNESS_EXTRA_ARGS        JSON array of extra harness CLI args; operator-owned
   //                             session policy (e.g. permission settings)
+  //   EGRESS_PROXY              optional upstream proxies for the mind session's outbound
+  //                             HTTP (spec 0004 §8): a JSON object of host pattern ("*",
+  //                             "host.example", "*.example") to a proxy address or
+  //                             "direct". An address names its credential by placeholder,
+  //                             http://${NAME}@host:port, never by value; unset means
+  //                             {"*": "direct"}. The container's root-run forwarder holds
+  //                             the credentials and routes per host; the session gets a
+  //                             loopback address. The chassis's own hosts are always direct.
   // Service bindings, set per deployment:
   //   GITHUB_GATEKEEPER         the github Gatekeeper Worker (mints state-repo tokens)
 }

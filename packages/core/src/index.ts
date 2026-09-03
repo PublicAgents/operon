@@ -9,6 +9,16 @@ export {
 } from "./roster.js";
 export { normalizeCadence, dueAgents, distinctCadences } from "./cadence.js";
 export {
+  EgressTableError,
+  EGRESS_CREDENTIAL_PREFIX,
+  egressCredentialSecret,
+  egressTableCredentials,
+  parseEgressTable,
+  resolveEgressTable,
+  type EgressTableEntry,
+  type EgressProxyTarget
+} from "./egress.js";
+export {
   wakeEnv,
   WAKE_ENV,
   INTERNAL_SUFFIX,

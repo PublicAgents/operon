@@ -1,5 +1,5 @@
 import { parse as parseYaml } from "yaml";
-import { parseRoster, type Roster } from "@operon/core";
+import { EgressTableError, parseEgressTable, parseRoster, type Roster } from "@operon/core";
 
 /**
  * The operon.yaml manifest (spec 0006 §1 and §2): everything
@@ -45,7 +45,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   "google-analytics": ["GA_PROPERTY_ID"],
   mcp: ["MCP_PORTAL_URL"],
   browser: ["WEB_MAX_CONCURRENT", "WEB_ORIGIN_DENYLIST"],
-  scheduler: ["HARNESS_EXTRA_ARGS"],
+  scheduler: ["HARNESS_EXTRA_ARGS", "EGRESS_PROXY"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
@@ -112,6 +112,18 @@ function validatePolicy(raw: unknown): Record<string, Record<string, string>> {
       }
       if (typeof value !== "string") {
         fail(`policy.${worker}.${key}`, "must be a string (wrangler vars are strings; quote numbers)");
+      }
+      // The proxy table is committed configuration: its grammar (spec
+      // 0004 §8) admits credential placeholders and refuses credential
+      // values, checked here so a pasted secret fails validation rather
+      // than landing in a commit.
+      if (worker === "scheduler" && key === "EGRESS_PROXY") {
+        try {
+          parseEgressTable(value);
+        } catch (error) {
+          if (error instanceof EgressTableError) fail(`policy.${worker}.${key}`, error.message);
+          throw error;
+        }
       }
       out[key] = value;
     }
