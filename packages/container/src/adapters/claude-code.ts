@@ -39,10 +39,21 @@ export const CLAUDE_LOCKDOWN_ENV: Record<string, string> = {
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 };
 
-/** The settings keys that say the same in the file the harness reads. */
+/**
+ * The settings keys that say the same in the file the harness reads.
+ *
+ * switchModelsOnFlag is the one that is TRUE on purpose: when a safety
+ * classifier flags a request, the harness either switches to its fixed
+ * fallback and carries on, or, with this false, PAUSES the session and
+ * asks a human which to do. A wake has no human at the keyboard, so a
+ * pause is a wake that hangs until its wall clock kills it. The switch
+ * is announced in the wake's usage line (spec 0011) either way, so the
+ * operator learns of it without the session stopping.
+ */
 export const CLAUDE_LOCKDOWN_SETTINGS = {
   autoMemoryEnabled: false,
-  disableClaudeAiConnectors: true
+  disableClaudeAiConnectors: true,
+  switchModelsOnFlag: true
 } as const;
 
 /**
