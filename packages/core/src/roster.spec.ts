@@ -261,3 +261,37 @@ describe("harnesses (spec 0010 §4)", () => {
     expect(() => withHarnesses("claude-code", ["codex"])).toThrow(/mapping/);
   });
 });
+
+describe("the local browser flag (spec 0004 §9)", () => {
+  it("is on by default, boolean, and recorded only when an agent opts out", () => {
+    const parse = (localBrowser?: unknown) =>
+      parseRoster(
+        JSON.stringify({
+          zone: "demo.example",
+          agents: [
+            { id: "a", stateRepo: "o/r", cadence: "0 6 * * *", harness: "claude-code", model: "m", enabled: true, hosts: ["@"], ...(localBrowser !== undefined ? { localBrowser } : {}) }
+          ]
+        })
+      ).agents[0];
+    expect(parse().localBrowser).toBeUndefined();
+    expect(parse(true).localBrowser).toBeUndefined();
+    expect(parse(false).localBrowser).toBe(false);
+    expect(() => parse("yes")).toThrow(/localBrowser.*boolean/);
+  });
+});
+
+describe("chassis MCP server names (spec 0004 §3, §9)", () => {
+  it("refuses a colony server named after a chassis-staged one, by name, at check time", () => {
+    const withMcp = (name: string) =>
+      parseRoster(
+        JSON.stringify({
+          zone: "demo.example",
+          mcp: { [name]: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" } },
+          agents: [{ id: "a", stateRepo: "o/r", cadence: "0 6 * * *", harness: "claude-code", model: "m", enabled: true, hosts: ["@"] }]
+        })
+      );
+    expect(() => withMcp("playwright")).toThrow(/mcp\.playwright.*chassis server name/);
+    expect(() => withMcp("browser")).toThrow(/mcp\.browser.*reserved/);
+    expect(Object.keys(withMcp("docs").mcp ?? {})).toEqual(["docs"]);
+  });
+});

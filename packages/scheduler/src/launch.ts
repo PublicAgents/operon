@@ -264,7 +264,11 @@ export async function prepareLaunch(
     ...(open("web")
       ? { webUrl: "http://" + doorHost("web"), webToken: umbilicalNonce }
       : {}),
-    ...(disabled.length > 0 ? { disabledDoors: JSON.stringify(disabled) } : {})
+    ...(disabled.length > 0 ? { disabledDoors: JSON.stringify(disabled) } : {}),
+    // The local browser (spec 0004 §9) is an in-container capability,
+    // not a door: no bearer, no binding, staged by the entrypoint. On
+    // unless the roster says false.
+    ...(agent.localBrowser !== false ? { localBrowser: "1" } : {})
   };
   // The agent's own GitHub grants ride into the wake so the porch can
   // pre-check them and the living help can state them (spec 0008 §6).

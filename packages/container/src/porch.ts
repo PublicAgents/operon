@@ -153,6 +153,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     ask: Boolean(config.asksUrl && config.asksToken),
     x: Boolean(config.xUrl && config.xToken),
     web: Boolean(config.webUrl && config.webToken),
+    localBrowser: config.localBrowser,
     hosts: config.hosts,
     prRepos: prRepos(config),
     githubWrite: config.githubGrants?.write ?? [],

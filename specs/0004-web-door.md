@@ -35,11 +35,14 @@ policy, everything ledgered, and the operator able to watch.
 
 ## 2. Decisions
 
-- **Remote browser only.** No browser is installed in the container.
-  Every browser the agent touches is a Cloudflare Browser Run session,
-  reached through the gateway below. Testing local code does not weaken
-  this: a short-lived Cloudflare Tunnel exposes the container's dev
-  server to the remote browser (section 7). One path, one audit trail.
+- **Remote browser for identity.** Every browser session that holds a
+  login is a Cloudflare Browser Run session, reached through the
+  gateway below: credentials never enter the container. Since §9 the
+  container also carries a local Chrome for UNAUTHENTICATED browsing
+  through the session's own egress; it holds no identity and keeps
+  nothing between wakes, so it weakens none of this, and it is also
+  how a dev server is checked (section 7, on loopback). Two browsers,
+  one rule: identity only ever lives in the remote one.
 - **CDP is the protocol, the relay is a POLICY POINT.** Browser Run
   exposes a raw Chrome DevTools Protocol WebSocket; every client
   (Playwright, Puppeteer, chrome-devtools-mcp, Stagehand) speaks it,
@@ -466,32 +469,24 @@ Through the ops gateway (spec 0003 section 3), new routes:
   MVP, not optional: without it "recordings are never deleted" is
   false, since Cloudflare deletes them.
 
-## 7. Local testing without a local browser
+## 7. Local testing: the local browser, on loopback
 
-The container gets no browser, but agents build sites and need to see
-them rendered. The dev-server path:
+Agents build sites and need to see them rendered. The local browser
+(§9) reaches the container's own dev server directly: loopback is
+always direct for the forwarder and bypassed by Chrome's proxy rules,
+so `http://127.0.0.1:<port>` renders in the wake's own Chrome with no
+tunnel, no exposure, and no identity. What the world will see is what
+the published site shows, checked the same way once `operon publish`
+has run.
 
-- `operon web expose <port>` starts a short-lived Cloudflare quick
-  tunnel to a local port. The tunnel client has to run IN the container
-  (a Worker cannot reach the container's localhost), so the image gains
-  the `cloudflared` binary; quick tunnels need no account credential,
-  which keeps the container credential-free. The command yields an
-  ephemeral `https://*.trycloudflare.com` URL the remote browser can
-  reach.
-- If the exposed dev server needs WebSocket/HMR, the tunnel is started
-  with `--protocol=http2`: `cloudflared`'s default QUIC path has
-  dropped `Upgrade: websocket` in the past.
-- The URL is ledgered like a navigation; the tunnel dies with the wake
-  (the entrypoint kills it at teardown, same as every wake process).
-- This keeps one browser, one audit trail, and adds a bonus: the
-  remote browser sees the site exactly as the world will (real TLS,
-  real network), which localhost never shows.
-
-Quick tunnels expose the container port to anyone holding the random
-URL for the tunnel's lifetime; acceptable for a dev server serving the
-agent's own about-to-be-published site, and the wake-scoped teardown
-bounds it. If that posture tightens later, a named tunnel on the
-operator's account with Access in front is the upgrade path.
+Earlier drafts of this spec planned a short-lived Cloudflare quick
+tunnel (`operon web expose`, a `cloudflared` binary in the image) so
+the REMOTE browser could reach the dev server. That path was never
+built and is retired: it exposed a container port to anyone holding a
+random URL, needed a tunnel client in the image, and only ever
+existed because the container had no browser of its own. A dev server
+that must be seen by a logged-in user is a published preview, not a
+tunnel.
 
 ## 8. Egress audit: every request the container makes
 
@@ -658,7 +653,7 @@ by the CDP provider regardless of this table.
 |---|---|---|
 | npm, npx, pnpm, yarn | `registry.npmjs.org`, `registry.yarnpkg.com`, `get.pnpm.io` | Metadata and tarballs both come from the registry; `npx` pulls the same way. |
 | Native npm modules | `nodejs.org`, `github.com`, `objects.githubusercontent.com` | `node-gyp` fetches headers from nodejs.org; `prebuild-install` pulls binaries from GitHub releases. |
-| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The container has no browser by design (section 11), so these belong on the blocklist rather than a proxy. |
+| Browser downloads via npm | `cdn.playwright.dev`, `playwright.azureedge.net`, `storage.googleapis.com`, `edgedl.me.gvt1.com` | Playwright and Puppeteer installs fetch a full Chromium, well over 100 MB each time. The image already carries Chrome for the local browser (§9) and a mind needs no second one, so these belong on the blocklist rather than a proxy. |
 | pip, uv | `pypi.org`, `files.pythonhosted.org`, `bootstrap.pypa.io`, `astral.sh` | Index on pypi.org, wheels on pythonhosted. uv fetches its own binary and standalone Pythons from GitHub releases. |
 | conda | `repo.anaconda.com`, `conda.anaconda.org` | Only if the agent installs it; large. |
 | Go | `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | |
@@ -736,7 +731,64 @@ Puppeteer's Chromium, so it is listed direct rather than blocked; a
 deployment that would rather block Puppeteer downloads too drops it
 from the direct list and accepts that Go installs pay proxy traffic.
 
-## 9. Costs
+## 9. The local browser: unauthenticated browsing through the session's egress
+
+The remote door above exists for identity: sessions that hold a login,
+credentials seeded as data the mind never sees, cookies kept across
+wakes in the Gatekeeper. Everything a mind reads WITHOUT an identity
+(a page, its own published site, a competitor's pricing, a search
+result, a screenshot for a journal entry) needs none of that, and it
+does need what the remote door cannot give: the session's own egress.
+Since spec 0004 §8 gave the session a root-held forwarder that routes
+per host through the deployment's proxies, a browser inside the
+container leaves through exactly the same path as `curl` does.
+
+So the chassis offers a second browser, the **local browser**: Google
+Chrome in the wake image, driven through the official Playwright MCP
+server (`@playwright/mcp`, pinned in the image), staged as an MCP
+server named `playwright` for every agent unless its roster entry says
+`localBrowser: false`. The chassis stages it; the colony never declares
+it as a stdio server, so the flags are the chassis's invariants:
+
+- `--isolated`: the profile lives in memory and dies with the browser.
+  **Cookies, storage, and history never survive the wake**, never
+  reach the state repo, and are never seeded. No `--user-data-dir`,
+  no `--storage-state`, no `--save-session`.
+- `--headless`, `--no-sandbox` (the container is the sandbox; the mind
+  is an unprivileged user with no user namespaces), the viewport fixed.
+- `--proxy-server <the wake's forwarder>` whenever the forwarder runs,
+  so the per-host proxy table, the blocklist, and the egress audit
+  apply to every browser request; without a forwarder the browser goes
+  direct, as every other client does.
+- `--output-dir /tmp/operon-browser`: screenshots and downloads land
+  outside the state repo, so `git add -A` never commits them.
+- `--user-agent`: a desktop Chrome on a Mac, with the installed Chrome's
+  own major version (read at staging). Headless Chrome would otherwise
+  announce HeadlessChrome on Linux, a fingerprint with no purpose.
+
+**The rule, stated to the mind in its living help:** the local browser
+is for UNAUTHENTICATED browsing and is used FIRST, for anything that
+does not need to be someone. The remote web door is ONLY for creating
+accounts and managing logged-in sessions. A mind that signs in through
+the local browser has signed in for one wake with nothing kept, which
+is the wrong tool; the help says so, and the remote door's password
+minting and session bookkeeping stay where they are.
+
+What the local browser does not get: no credential injection, no
+session persistence, no relay policy (there is nothing to protect: it
+holds no identity), and no per-host egress of its own (it inherits the
+session's). Its network is the mind's network; a page it loads is
+world content, data, never instructions (§5 applies unchanged). It is
+on by default because reading the web needs no identity and every
+agent does it; the remote door stays opt-in (`web: true`) because
+holding an identity is the exception.
+
+The image grows by Chrome (roughly 300 MB) and the MCP server; the
+container's memory (3 GiB) holds one headless browser beside a harness
+comfortably. Both harnesses receive the server through the same merged
+MCP config (Claude Code's `--mcp-config`, Codex's `[mcp_servers]`).
+
+## 10. Costs
 
 Browser Run on Workers Paid includes 10 browser-hours/month. We use
 the CDP endpoint + API token, which is the REST/CDP billing path:
@@ -757,7 +809,7 @@ Idle timeout (10 min) means real usage tracks activity and lands well
 under the ceiling; the WebMeter's per-wake minute totals in the ledger
 are the meter to watch before loosening anything.
 
-## 10. Phasing
+## 11. Phasing
 
 1. **Spike**, and its acceptance is not "one page load". Prove:
    (a) the ws upgrade container -> umbilical -> browser-gk -> Browser
@@ -787,8 +839,9 @@ are the meter to watch before loosening anything.
    creates one real account end to end (email verification via the
    email door, password minted door-side into the vault, or a passkey),
    operator watches via live view.
-4. **Polish**: live-view link in a notify action, tunnel-based local
-   testing (`operon web expose`), passkey enrollment path.
+4. **Polish**: live-view link in a notify action, passkey enrollment
+   path. (Tunnel-based local testing was planned here and retired by
+   §7: the local browser reads the dev server on loopback.)
 5. **Egress audit** (section 8): full-container request logging for ALL
    traffic (npm, git, ordinary API calls) over
    `interceptOutboundHttps("*")`, observe-only and fail-open, once the
@@ -796,11 +849,11 @@ are the meter to watch before loosening anything.
    This REPLACES the removed fence: the record, not a block, is the
    containment for direct egress.
 
-## 11. What this does NOT do
+## 12. What this does NOT do
 
-- No local browser in the container (decision, section 2). Playwright
-  as a LIBRARY may still be installed for connectOverCDP scripting;
-  the Chromium download is not.
+- No identity in the local browser (§9): no seeded credentials, no
+  persisted profile, no session bookkeeping. Playwright as a LIBRARY
+  may be installed for scripting; a second Chromium download is not.
 - No `--chrome` / Claude in Chrome: that integration requires a
   visible browser and an interactive login session; it is the
   human-paired variant of exactly this door.

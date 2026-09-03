@@ -48,6 +48,13 @@ export interface RosterAgent {
    * before.
    */
   web?: boolean;
+  /**
+   * The local browser (spec 0004 §9): Chrome inside the container,
+   * driven through the Playwright MCP server, for UNAUTHENTICATED
+   * browsing through the session's own egress. Nothing persists
+   * between wakes. ON by default; `false` opts an agent out.
+   */
+  localBrowser?: boolean;
   enabled: boolean;
   /** Names of colony-level mcp servers granted to this agent (spec 0008). */
   mcp?: string[];
@@ -141,6 +148,7 @@ const AGENT_KEYS = new Set([
   "maxWakeMinutes",
   "hosts",
   "web",
+  "localBrowser",
   "enabled",
   "mcp",
   "github",
@@ -278,12 +286,24 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
   }
 }
 
+/**
+ * MCP server names the chassis stages itself: the web door's browser
+ * (spec 0004 §3) and the local browser (spec 0004 §9). A colony server
+ * under one of these would be refused at wake start, after the
+ * container was already up; refusing it here keeps the failure at
+ * check time, by name.
+ */
+export const RESERVED_MCP_NAMES = ["browser", "playwright"] as const;
+
 function parseMcpDefs(value: unknown): Record<string, McpServerDef> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail("mcp", "must be an object of server definitions");
   }
   const defs: Record<string, McpServerDef> = {};
   for (const [name, def] of Object.entries(value as Record<string, unknown>)) {
+    if ((RESERVED_MCP_NAMES as readonly string[]).includes(name)) {
+      fail(`mcp.${name}`, `is a chassis server name (reserved: ${RESERVED_MCP_NAMES.join(", ")})`);
+    }
     defs[name] = parseMcpDef(name, def);
   }
   // Portal prefix grammars are ambiguous when one server id prefixes
@@ -391,6 +411,9 @@ function parseAgent(value: unknown, index: number): RosterAgent {
   if (raw.web !== undefined && typeof raw.web !== "boolean") {
     fail(`${path}.web`, "must be a boolean when present");
   }
+  if (raw.localBrowser !== undefined && typeof raw.localBrowser !== "boolean") {
+    fail(`${path}.localBrowser`, "must be a boolean when present");
+  }
 
   let mcp: string[] | undefined;
   if (raw.mcp !== undefined) {
@@ -432,6 +455,7 @@ function parseAgent(value: unknown, index: number): RosterAgent {
     maxWakeMinutes,
     hosts,
     ...(raw.web === true ? { web: true } : {}),
+    ...(raw.localBrowser === false ? { localBrowser: false } : {}),
     enabled: raw.enabled,
     ...(mcp ? { mcp } : {}),
     ...(github ? { github } : {}),

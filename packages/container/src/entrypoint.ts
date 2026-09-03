@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile, copyFile, readFile, chmod } from "node:fs/promises";
-import { mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
+import { chromeMajorFrom, LOCAL_BROWSER_EXECUTABLE, LOCAL_BROWSER_OUTPUT_DIR, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
 import { dirname, join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter, type StagedHarness } from "./adapters/index.js";
@@ -178,15 +178,34 @@ function mindHome(): string {
 async function stageHarness(
   adapter: HarnessAdapter,
   config: WakeConfig,
-  porchUrl: string
+  porchUrl: string,
+  proxyUrl?: string
 ): Promise<StagedHarness> {
   const hasBrowser = Boolean(config.webUrl && config.webToken);
-  for (const line of mcpStagingLines(config.mcpServers, hasBrowser)) log(line);
+  for (const line of mcpStagingLines(config.mcpServers, hasBrowser, config.localBrowser)) log(line);
+  let chromeMajor: number | undefined;
+  if (config.localBrowser) {
+    // Screenshots and downloads land here, outside the state repo,
+    // owned by the mind (the browser runs as the mind).
+    await mkdir(LOCAL_BROWSER_OUTPUT_DIR, { recursive: true });
+    await chownToMind(LOCAL_BROWSER_OUTPUT_DIR);
+    // The installed Chrome's major, so the user agent the browser sends
+    // (a desktop Chrome on a Mac) carries a version that exists.
+    try {
+      const { stdout } = await runCapture(LOCAL_BROWSER_EXECUTABLE, ["--version"], { timeoutMs: 15_000 });
+      chromeMajor = chromeMajorFrom(stdout);
+    } catch (error) {
+      log(`local browser: could not read Chrome's version (${String(error).slice(0, 120)}); its own user agent stands`);
+    }
+  }
   const mcp =
-    hasBrowser || config.mcpServers.length > 0
+    hasBrowser || config.localBrowser || config.mcpServers.length > 0
       ? mergedMcpConfig(config.mcpServers, {
           ...(hasBrowser ? { porchUrl } : {}),
-          ...(config.mcpToken ? { nonce: config.mcpToken } : {})
+          ...(config.mcpToken ? { nonce: config.mcpToken } : {}),
+          ...(config.localBrowser
+            ? { localBrowser: { ...(proxyUrl ? { proxyUrl } : {}), ...(chromeMajor !== undefined ? { chromeMajor } : {}) } }
+            : {})
         })
       : undefined;
   const staged = adapter.stage({
@@ -1078,7 +1097,7 @@ async function main(): Promise<number> {
   let sessionExit: number;
   let usage: WakeUsage | undefined;
   try {
-    const staged = await stageHarness(adapter, config, porchUrl);
+    const staged = await stageHarness(adapter, config, porchUrl, proxy?.url);
     const verified = await verifyModel(adapter, config, staged);
     probedModel = verified.degraded
       ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`

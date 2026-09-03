@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { McpConfigError, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
+import { chromeMajorFrom, LOCAL_BROWSER_OUTPUT_DIR, macChromeUserAgent, McpConfigError, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
 import type { StagedMcpServer } from "./config.js";
 
 const PORCH = "http://127.0.0.1:41414";
@@ -63,6 +63,49 @@ describe("mergedMcpConfig", () => {
       virtual: "mcp-browser.operon.internal"
     };
     expect(() => mergedMcpConfig([collision], { porchUrl: PORCH })).toThrow(McpConfigError);
+  });
+});
+
+describe("the local browser (spec 0004 §9)", () => {
+  it("stages Chrome through the Playwright server, isolated, headless, outside the repo, through the forwarder", () => {
+    const config = mergedMcpConfig([], { porchUrl: PORCH, localBrowser: { proxyUrl: "http://127.0.0.1:41415", chromeMajor: 151 } });
+    const entry = config.mcpServers.playwright;
+    expect(entry.command).toBe("playwright-mcp");
+    expect(entry.args).toEqual([
+      "--browser",
+      "chrome",
+      "--executable-path",
+      "/usr/bin/google-chrome-stable",
+      "--headless",
+      "--isolated",
+      "--no-sandbox",
+      "--viewport-size",
+      "1280x800",
+      "--output-dir",
+      LOCAL_BROWSER_OUTPUT_DIR,
+      "--user-agent",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+      "--proxy-server",
+      "http://127.0.0.1:41415"
+    ]);
+    expect(entry.args.join(" ")).not.toMatch(/user-data-dir|storage-state|save-session/);
+    expect(config.mcpServers.browser).toBeDefined();
+  });
+
+  it("goes direct without a forwarder, keeps Chrome's own agent without a version, is absent unless asked, and reserves its name", () => {
+    const bare = mergedMcpConfig([], { localBrowser: {} }).mcpServers.playwright.args;
+    expect(bare).not.toContain("--proxy-server");
+    expect(bare).not.toContain("--user-agent");
+    expect(chromeMajorFrom("Google Chrome 151.0.7922.173 ")).toBe(151);
+    expect(chromeMajorFrom("nope")).toBeUndefined();
+    expect(macChromeUserAgent(150)).toContain("Chrome/150.0.0.0");
+    expect(macChromeUserAgent(150)).not.toMatch(/Headless|Linux/);
+    expect(mergedMcpConfig([], { porchUrl: PORCH }).mcpServers.playwright).toBeUndefined();
+    const clash: StagedMcpServer = { name: "playwright", type: "stdio", command: "npx", args: ["-y", "x@1.0.0"] };
+    expect(() => mergedMcpConfig([clash], { localBrowser: {} })).toThrowError(McpConfigError);
+    expect(mcpStagingLines([], false, true)).toEqual([
+      "mcp: playwright staged (the local browser: Chrome, unauthenticated, nothing kept between wakes)"
+    ]);
   });
 });
 
