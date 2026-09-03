@@ -117,10 +117,12 @@ and a **harness adapter** in the container implements a small contract:
 Everything else in the wake lifecycle (clone, presleep verification, push,
 notify) is harness-independent, and the charter is delivered through the
 wake prompt rather than any harness's instruction-file convention, so
-`CHARTER.md` works identically everywhere. Each harness gets its own
-container image; the roster picks the image. Agents on different harnesses
-can share one colony, which is a feature: mind diversity is an experimental
-variable like any other.
+`CHARTER.md` works identically everywhere. One container image carries
+every adapter's CLI, so a wake can pick its harness (spec 0010 amended
+the original one-image-per-harness plan: the same agent may wake on an
+alternate harness, and that needs both CLIs in the image it runs in).
+Agents on different harnesses can share one colony, which is a feature:
+mind diversity is an experimental variable like any other.
 
 Mind auth comes in two modes, chosen per harness:
 

@@ -168,13 +168,17 @@ const REGISTRY: readonly ToolDefinition[] = [
     name: "wake",
     title: "Wake an agent now",
     description:
-      "Trigger a manual wake for one agent. Answers started, locked (a wake is already running), disabled (kill switch), or error.",
-    input: z.object({ agentId }),
+      "Trigger a manual wake for one agent. Answers started, locked (a wake is already running), disabled (kill switch), or error. Pass harness to wake the same agent on one of its alternate harnesses (spec 0010); omitted means its primary.",
+    input: z.object({
+      agentId,
+      harness: z.string().regex(/^[a-z0-9-]+$/).max(40).optional()
+        .describe("A harness the roster pins for this agent (e.g. codex); default: the primary")
+    }),
     readOnly: false,
     decision: true,
     handler: async (input, context) => {
-      const { agentId: id } = input as { agentId: string };
-      return context.scheduler("POST", `/wake/${id}`);
+      const { agentId: id, harness } = input as { agentId: string; harness?: string };
+      return context.scheduler("POST", `/wake/${id}`, harness ? { body: { harness } } : undefined);
     }
   },
   {

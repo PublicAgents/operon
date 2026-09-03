@@ -1,7 +1,11 @@
-import { doorHost } from "./umbilical-routes.js";
+import { doorHost, MIND_DOOR } from "./umbilical-routes.js";
+import { chooseCredential, credentialAccount, credentialFingerprint } from "./mind-credential.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
+  isHarness,
   wakeEnv,
+  KNOWN_HARNESSES,
+  type MindPin,
   type RosterAgent,
   type WakeTrigger,
   type WakeSecrets,
@@ -18,6 +22,47 @@ import {
 /** "claude-code" -> "MIND_CREDENTIAL_CLAUDE_CODE" */
 export function mindCredentialVar(harness: string): string {
   return `MIND_CREDENTIAL_${harness.toUpperCase().replace(/-/g, "_")}`;
+}
+
+/**
+ * The operator's extra session arguments are per harness (spec 0010 §5):
+ * "claude-code" keeps the historical HARNESS_EXTRA_ARGS name, every other
+ * harness reads HARNESS_EXTRA_ARGS_<HARNESS>.
+ */
+export function harnessExtraArgsVar(harness: string): string {
+  return harness === "claude-code"
+    ? "HARNESS_EXTRA_ARGS"
+    : `HARNESS_EXTRA_ARGS_${harness.toUpperCase().replace(/-/g, "_")}`;
+}
+
+/**
+ * Which mind a wake runs on (spec 0010 §4): the agent's primary unless
+ * the caller named one of its alternates. Anything else is refused by
+ * name before a container is touched: an unknown harness, and a known
+ * one the roster gave this agent no model for.
+ */
+export function resolveMind(agent: RosterAgent, harness?: string): MindPin {
+  if (harness === undefined || harness === agent.harness) {
+    return {
+      harness: agent.harness,
+      model: agent.model,
+      ...(agent.fallbackModel ? { fallbackModel: agent.fallbackModel } : {})
+    };
+  }
+  if (!isHarness(harness)) {
+    throw new LaunchPreconditionError(
+      "unknown_harness",
+      `"${harness}" is not a harness (known: ${KNOWN_HARNESSES.join(", ")})`
+    );
+  }
+  const pin = agent.harnesses?.[harness];
+  if (!pin) {
+    throw new LaunchPreconditionError(
+      "harness_not_configured",
+      `agent ${agent.id} has no model pinned for harness "${harness}" (roster agents[].harnesses)`
+    );
+  }
+  return { harness, ...pin };
 }
 
 /** "promoter" -> "TILL_TOKEN_PROMOTER" (money bearers are per-agent). */
@@ -60,6 +105,8 @@ export interface LaunchContext {
   getSecret(name: string): string | undefined;
   /** The operator's runtime door overrides for the agent (spec 0006 §7); none when absent. */
   getDoorOverrides?(agentId: string): Promise<DoorOverrides>;
+  /** A credential the harness refreshed in an earlier wake (spec 0010 §5), with the seed it descends from. */
+  getRefreshedCredential?(harness: string): Promise<{ seed: string; value: string } | undefined>;
   /** Mints a short-lived token scoped to the agent's state repo. */
   getGithubToken(agent: RosterAgent): Promise<string>;
   options: WakeOptions;
@@ -69,6 +116,15 @@ export interface PreparedLaunch {
   wakeId: string;
   agentId: string;
   trigger: WakeTrigger;
+  /** The harness this wake runs on (spec 0010 §4). */
+  harness: string;
+  /**
+   * The seed of the mind credential (spec 0010 §5): the fingerprint of
+   * the operator's secret and the account it names, so the router can
+   * store a relayed refresh under the right seed and refuse one for a
+   * different account. Neither is the secret.
+   */
+  mindSeed: { fingerprint: string; account?: string };
   env: Record<string, string>;
   /**
    * The umbilical (spec 0003 step 4): the container's door URLs point at
@@ -92,16 +148,35 @@ export async function prepareLaunch(
   agent: RosterAgent,
   trigger: WakeTrigger,
   wakeId: string,
-  context: LaunchContext
+  context: LaunchContext,
+  harness?: string
 ): Promise<PreparedLaunch> {
-  const credentialVar = mindCredentialVar(agent.harness);
-  const mindCredential = context.getSecret(credentialVar);
-  if (!mindCredential) {
+  const mind = resolveMind(agent, harness);
+  const credentialVar = mindCredentialVar(mind.harness);
+  const seededCredential = context.getSecret(credentialVar);
+  if (!seededCredential) {
     throw new LaunchPreconditionError(
       "mind_credential_missing",
-      `secret ${credentialVar} is not configured for harness "${agent.harness}"`
+      `secret ${credentialVar} is not configured for harness "${mind.harness}"`
     );
   }
+  // The refresh relay (spec 0010 §5): a file credential the harness
+  // rotated in an earlier wake replaces the seed while it descends from
+  // the CURRENT secret; a re-seed by the operator wins by construction.
+  const seedFingerprint = await credentialFingerprint(seededCredential);
+  const chosen = chooseCredential(
+    seededCredential,
+    seedFingerprint,
+    await context.getRefreshedCredential?.(mind.harness)
+  );
+  const mindCredential = chosen.value;
+  const mindSeed = {
+    fingerprint: seedFingerprint,
+    ...(credentialAccount(seededCredential) ? { account: credentialAccount(seededCredential) } : {})
+  };
+  // The operator's session policy for THIS harness (spec 0010 §5); a
+  // harness with none configured runs on the adapter's own defaults.
+  const harnessExtraArgs = context.getSecret(harnessExtraArgsVar(mind.harness));
 
   const githubToken = await context.getGithubToken(agent);
   // The umbilical rewrites every door to a virtual host with the per-wake
@@ -136,6 +211,11 @@ export async function prepareLaunch(
     ...(open("email") ? { emailUrl: "http://" + doorHost("email"), emailToken: umbilicalNonce } : {}),
     chronicleUrl: "http://" + doorHost("chronicle"),
     chronicleToken: umbilicalNonce,
+    // The mind door (spec 0010 §5) exists only for a credential that can
+    // rotate: a file credential names an account, an API key does not.
+    ...(mindSeed.account
+      ? { mindUrl: "http://" + doorHost(MIND_DOOR) + "/credential", mindToken: umbilicalNonce }
+      : {}),
     ...(open("till") ? { tillUrl: "http://" + doorHost("till") } : {}),
     ...(open("pay") ? { spendUrl: "http://" + doorHost("spend") } : {}),
     ...(open("vault") ? { vaultUrl: "http://" + doorHost("vault") } : {}),
@@ -202,10 +282,19 @@ export async function prepareLaunch(
     wakeId,
     agentId: agent.id,
     trigger,
+    harness: mind.harness,
+    mindSeed,
     env: wakeEnv(
-      { wakeId, trigger, agent },
+      { wakeId, trigger, agent, mind },
       secrets,
-      { ...context.options, ...doorOptions, ...perAgent, ...githubGrants, ...mcpEnv }
+      {
+        ...context.options,
+        ...(harnessExtraArgs ? { harnessExtraArgs } : {}),
+        ...doorOptions,
+        ...perAgent,
+        ...githubGrants,
+        ...mcpEnv
+      }
     ),
     umbilicalNonce,
     mcpHosts: mcpServers.map(server => server.virtual),

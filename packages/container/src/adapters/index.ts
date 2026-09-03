@@ -26,8 +26,12 @@ export {
   assertEnvClean,
   EnvNotCleanError,
   AdapterNotImplementedError,
+  CredentialShapeError,
   type HarnessAdapter,
-  type CommandSpec
+  type CommandSpec,
+  type StageInput,
+  type StagedHarness,
+  type StagedFile
 } from "./types.js";
 export { claudeCode } from "./claude-code.js";
 export { codex } from "./codex.js";

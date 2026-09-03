@@ -3,6 +3,17 @@ import type { Door } from "@operon/core";
 import { sanitizeOverrides, type DoorOverrides } from "./doors.js";
 
 /**
+ * A mind credential a harness refreshed in place (spec 0010 §5),
+ * descended from the operator's secret with fingerprint `seed`. Only
+ * that seed's launches use it; a re-seeded secret orphans it.
+ */
+export interface RefreshedCredential {
+  seed: string;
+  value: string;
+  at: string;
+}
+
+/**
  * Colony-wide wake pause (spec 0006 §5): the drain primitive. Pausing
  * DEFERS new wake starts and touches nothing in flight, which is the
  * whole point: the kill switch (per-agent disable) destroys a running
@@ -46,6 +57,24 @@ export class FleetControl extends DurableObject {
   // per agent, read at every launch and editable from the plane
   // without a deploy. Effective at the next wake; a running wake keeps
   // the doors it was wired with.
+
+  // ---- the refresh relay (spec 0010 §5) ----------------------------
+  // A file credential (Codex's login) rotates itself inside a wake; the
+  // relayed copy lives here, per harness, tagged with the fingerprint of
+  // the secret it descends from, so the operator's own re-seed always
+  // wins over a stored refresh of an older secret.
+
+  async refreshedCredential(harness: string): Promise<RefreshedCredential | undefined> {
+    return this.ctx.storage.get<RefreshedCredential>(`mind:${harness}`);
+  }
+
+  async setRefreshedCredential(harness: string, seed: string, value: string): Promise<void> {
+    await this.ctx.storage.put(`mind:${harness}`, {
+      seed,
+      value,
+      at: new Date().toISOString()
+    } satisfies RefreshedCredential);
+  }
 
   async doorOverrides(agentId: string): Promise<DoorOverrides> {
     return sanitizeOverrides(await this.ctx.storage.get(`doors:${agentId}`));

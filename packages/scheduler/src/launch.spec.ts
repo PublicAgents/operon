@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { RosterAgent } from "@operon/core";
 import { WAKE_ENV } from "@operon/core";
 import {
+  harnessExtraArgsVar,
   LaunchPreconditionError,
   mindCredentialVar,
   prepareLaunch,
+  resolveMind,
   type LaunchContext
 } from "./launch.js";
+import { credentialFingerprint } from "./mind-credential.js";
 
 const agent: RosterAgent = {
   id: "growth",
@@ -32,6 +35,85 @@ describe("mindCredentialVar", () => {
   it("maps harness ids to secret names", () => {
     expect(mindCredentialVar("claude-code")).toBe("MIND_CREDENTIAL_CLAUDE_CODE");
     expect(mindCredentialVar("codex")).toBe("MIND_CREDENTIAL_CODEX");
+  });
+});
+
+describe("resolveMind (spec 0010 §4)", () => {
+  const withAlternate: RosterAgent = { ...agent, harnesses: { codex: { model: "gpt-5.5" } } };
+
+  it("runs the primary when no harness is named, or when the primary is named", () => {
+    expect(resolveMind(withAlternate)).toEqual({
+      harness: "claude-code",
+      model: "claude-sonnet-5",
+      fallbackModel: "claude-haiku-4-5"
+    });
+    expect(resolveMind(withAlternate, "claude-code").model).toBe("claude-sonnet-5");
+  });
+
+  it("runs a pinned alternate with its own model and no borrowed fallback", () => {
+    expect(resolveMind(withAlternate, "codex")).toEqual({ harness: "codex", model: "gpt-5.5" });
+  });
+
+  it("refuses an unknown harness and an unpinned known one by name", () => {
+    expect(() => resolveMind(withAlternate, "gemini")).toThrowError(/unknown_harness/);
+    expect(() => resolveMind(agent, "codex")).toThrowError(/harness_not_configured/);
+  });
+
+  it("names the per-harness extra-args variable", () => {
+    expect(harnessExtraArgsVar("claude-code")).toBe("HARNESS_EXTRA_ARGS");
+    expect(harnessExtraArgsVar("codex")).toBe("HARNESS_EXTRA_ARGS_CODEX");
+  });
+});
+
+describe("prepareLaunch on an alternate harness (spec 0010)", () => {
+  const withAlternate: RosterAgent = { ...agent, harnesses: { codex: { model: "gpt-5.5" } } };
+  const login = JSON.stringify({ tokens: { account_id: "acct-1", refresh_token: "r1" } });
+  const secrets: Record<string, string> = {
+    MIND_CREDENTIAL_CLAUDE_CODE: "mind-token",
+    MIND_CREDENTIAL_CODEX: login,
+    HARNESS_EXTRA_ARGS: '["--claude"]',
+    HARNESS_EXTRA_ARGS_CODEX: '["--codex"]'
+  };
+  const codexContext = (overrides: Partial<LaunchContext> = {}) =>
+    context({ getSecret: name => secrets[name], ...overrides });
+
+  it("carries the alternate's mind, credential, and extra args, and opens the mind door for a file credential", async () => {
+    const prepared = await prepareLaunch(withAlternate, "manual", "wake-c", codexContext(), "codex");
+    expect(prepared.harness).toBe("codex");
+    expect(prepared.env[WAKE_ENV.harness]).toBe("codex");
+    expect(prepared.env[WAKE_ENV.model]).toBe("gpt-5.5");
+    expect(prepared.env[WAKE_ENV.fallbackModel]).toBeUndefined();
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe(login);
+    expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--codex"]');
+    expect(prepared.env[WAKE_ENV.mindUrl]).toBe("http://mind.operon.internal/credential");
+    expect(prepared.env[WAKE_ENV.mindToken]).toBe(prepared.umbilicalNonce);
+    expect(prepared.mindSeed).toEqual({ fingerprint: await credentialFingerprint(login), account: "acct-1" });
+  });
+
+  it("keeps the primary's extra args and opens no mind door for a token credential", async () => {
+    const prepared = await prepareLaunch(withAlternate, "cron", "wake-p", codexContext());
+    expect(prepared.harness).toBe("claude-code");
+    expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--claude"]');
+    expect(prepared.env[WAKE_ENV.mindUrl]).toBeUndefined();
+    expect(prepared.mindSeed.account).toBeUndefined();
+  });
+
+  it("prefers a relayed credential only while it descends from the current secret", async () => {
+    const fingerprint = await credentialFingerprint(login);
+    const fresh = await prepareLaunch(withAlternate, "manual", "w1", codexContext({
+      getRefreshedCredential: async () => ({ seed: fingerprint, value: "refreshed-login" })
+    }), "codex");
+    expect(fresh.env[WAKE_ENV.mindCredential]).toBe("refreshed-login");
+    const orphaned = await prepareLaunch(withAlternate, "manual", "w2", codexContext({
+      getRefreshedCredential: async () => ({ seed: "older-seed", value: "refreshed-login" })
+    }), "codex");
+    expect(orphaned.env[WAKE_ENV.mindCredential]).toBe(login);
+  });
+
+  it("refuses an alternate the roster did not pin, before any secret is read", async () => {
+    await expect(prepareLaunch(agent, "manual", "w3", codexContext(), "codex")).rejects.toThrowError(
+      /harness_not_configured/
+    );
   });
 });
 

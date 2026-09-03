@@ -28,6 +28,8 @@ export interface LaunchArgs {
   wakeId: string;
   agentId: string;
   trigger: WakeTrigger;
+  /** The harness this wake runs on (spec 0010 §4), for the record. */
+  harness?: string;
   /** Full environment for the container process; assembled by the scheduler. */
   env: Record<string, string>;
   /** A running wake older than this is reported stale to callers. */
@@ -48,6 +50,8 @@ export interface LaunchArgs {
   mcpHosts?: string[];
   /** The doors closed for this wake (spec 0006 §7); the router refuses them by name. */
   closedDoors?: string[];
+  /** The mind credential's seed (spec 0010 §5), for the router's refresh relay. */
+  mindSeed?: { fingerprint: string; account?: string };
 }
 
 export type LaunchResult =
@@ -131,6 +135,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
       wakeId: args.wakeId,
       agentId: args.agentId,
       trigger: args.trigger,
+      ...(args.harness ? { harness: args.harness } : {}),
       startedAt: new Date().toISOString(),
       status: "running"
     };
@@ -182,7 +187,13 @@ export class WakeContainer extends DurableObject<WakeEnv> {
         // identity delivered as ctx.props.
         const exportsBag = (this.ctx as unknown as { exports: Record<string, (opts: { props: unknown }) => Fetcher> }).exports;
         const router = exportsBag.UmbilicalRouter({
-          props: { nonce: args.umbilicalNonce, agentId: args.agentId, closedDoors: args.closedDoors ?? [] }
+          props: {
+            nonce: args.umbilicalNonce,
+            agentId: args.agentId,
+            closedDoors: args.closedDoors ?? [],
+            ...(args.harness ? { harness: args.harness } : {}),
+            ...(args.mindSeed ? { mindSeed: args.mindSeed } : {})
+          }
         });
         const intercept = this.ctx.container as unknown as {
           interceptOutboundHttp(host: string, worker: Fetcher): Promise<void>;
@@ -375,7 +386,7 @@ export class WakeContainer extends DurableObject<WakeEnv> {
 
   /** Ledger a wake that failed before the container could start (e.g. no credential). */
   async recordFailure(
-    args: Pick<LaunchArgs, "wakeId" | "agentId" | "trigger">,
+    args: Pick<LaunchArgs, "wakeId" | "agentId" | "trigger" | "harness">,
     reason: string
   ): Promise<void> {
     const now = new Date().toISOString();

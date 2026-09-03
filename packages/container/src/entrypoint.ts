@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, copyFile } from "node:fs/promises";
-import { mcpStagingLines, mergedMcpConfigJson } from "./mcp-config.js";
-import { join } from "node:path";
+import { mkdir, writeFile, copyFile, readFile, chmod } from "node:fs/promises";
+import { mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
+import { dirname, join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
-import { assertEnvClean, getAdapter, type HarnessAdapter } from "./adapters/index.js";
+import { assertEnvClean, getAdapter, type HarnessAdapter, type StagedHarness } from "./adapters/index.js";
 import { CommandError, runCapture, runStreaming } from "./exec.js";
 import { runGitleaksOnFiles } from "./gitleaks.js";
 import { sanitizeInboxFiles, sanitizeTranscript, type InboundMessage } from "./inbox.js";
@@ -164,12 +164,85 @@ function mindHome(): string {
 }
 
 /**
- * The wake's MCP config (spec 0008 §4). Under the mind's home, NOT in
- * the state repo: `git add -A` stages everything in the worktree, so a
- * config file there is committed into the agent's memory every wake.
+ * Stage the harness's home for this wake (spec 0010 §2): the adapter
+ * says which files, flags, and environment make the session see exactly
+ * what the chassis hands it (settings, hooks, the MCP config, a file
+ * credential); this writes them under the mind's home, NOT in the state
+ * repo (`git add -A` stages everything in the worktree, so a config
+ * file there is committed into the agent's memory every wake). Every
+ * file is the mind's, mode 0600, in a 0700 directory.
  */
-function mcpConfigPath(): string {
-  return join(mindHome(), ".operon", "mcp.json");
+async function stageHarness(
+  adapter: HarnessAdapter,
+  config: WakeConfig,
+  porchUrl: string
+): Promise<StagedHarness> {
+  const hasBrowser = Boolean(config.webUrl && config.webToken);
+  for (const line of mcpStagingLines(config.mcpServers, hasBrowser)) log(line);
+  const mcp =
+    hasBrowser || config.mcpServers.length > 0
+      ? mergedMcpConfig(config.mcpServers, {
+          ...(hasBrowser ? { porchUrl } : {}),
+          ...(config.mcpToken ? { nonce: config.mcpToken } : {})
+        })
+      : undefined;
+  const staged = adapter.stage({
+    home: mindHome(),
+    credential: config.mindCredential,
+    ...(mcp ? { mcp } : {}),
+    hooks: {
+      pullHook: "node /opt/operon/pull-hook.js",
+      journalGuard: "node /opt/operon/journal-guard.js"
+    }
+  });
+  for (const file of staged.files) {
+    const dir = dirname(file.path);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await writeFile(file.path, file.content, { encoding: "utf8", mode: file.mode });
+    await chmod(file.path, file.mode);
+    await chownToMind(dir);
+  }
+  for (const line of staged.lines) log(line);
+  return staged;
+}
+
+/**
+ * The refresh relay (spec 0010 §5): a file credential the harness
+ * refreshed in place during the session is handed back through the
+ * umbilical's mind door, so the next wake starts from it instead of
+ * the stale seed. Root reads the file; the mind owns it, so the router
+ * judges what it gets (same account or refused). Best-effort: a failed
+ * relay is logged, never a failed wake.
+ */
+async function relayRefreshedCredential(adapter: HarnessAdapter, config: WakeConfig): Promise<void> {
+  const relative = adapter.credentialFile?.(config.mindCredential);
+  if (!relative) return;
+  if (!config.mindUrl || !config.mindToken) {
+    log("mind credential: refresh relay not wired; an in-container refresh does not carry over");
+    return;
+  }
+  let current: string;
+  try {
+    current = await readFile(join(mindHome(), relative), "utf8");
+  } catch (error) {
+    log(`mind credential: could not read the staged file back: ${String(error).slice(0, 160)}`);
+    return;
+  }
+  if (current === config.mindCredential) {
+    log("mind credential: unchanged this wake");
+    return;
+  }
+  try {
+    const response = await fetch(config.mindUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.mindToken}` },
+      body: JSON.stringify({ credential: current })
+    });
+    if (response.ok) log("mind credential: refreshed in-container and relayed for the next wake");
+    else log(`mind credential: relay refused: ${response.status} ${(await response.text()).slice(0, 120)}`);
+  } catch (error) {
+    log(`mind credential: relay failed: ${String(error).slice(0, 160)}`);
+  }
 }
 
 /**
@@ -552,13 +625,21 @@ interface VerifiedModel {
 async function probe(
   adapter: HarnessAdapter,
   model: string,
-  credential: string
+  credential: string,
+  staged: StagedHarness
 ): Promise<string> {
   const spec = adapter.probe(model, credential);
+  const ids = mindSpawnIds();
   const { stdout } = await runCapture(spec.command, spec.args, {
     cwd: STATE_DIR,
-    env: { ...sessionBaseEnv(), ...spec.env },
-    timeoutMs: 5 * 60 * 1000
+    env: {
+      ...sessionBaseEnv(),
+      ...staged.env,
+      ...spec.env,
+      ...("uid" in ids ? { HOME: "/home/mind" } : {})
+    },
+    timeoutMs: 5 * 60 * 1000,
+    ...ids
   });
   return stdout.trim().slice(0, 200);
 }
@@ -571,10 +652,11 @@ async function probe(
  */
 async function verifyModel(
   adapter: HarnessAdapter,
-  config: WakeConfig
+  config: WakeConfig,
+  staged: StagedHarness
 ): Promise<VerifiedModel> {
   try {
-    const answer = await probe(adapter, config.model, config.mindCredential);
+    const answer = await probe(adapter, config.model, config.mindCredential, staged);
     log(`model probe answered: ${answer}`);
     return { model: config.model, answer, degraded: false };
   } catch (primaryError) {
@@ -587,7 +669,7 @@ async function verifyModel(
       `pinned model ${config.model} failed to answer (${String(primaryError).slice(0, 300)}); probing fallback ${config.fallbackModel}`
     );
     try {
-      const answer = await probe(adapter, config.fallbackModel, config.mindCredential);
+      const answer = await probe(adapter, config.fallbackModel, config.mindCredential, staged);
       log(`fallback model probe answered: ${answer} (wake runs DEGRADED)`);
       return { model: config.fallbackModel, answer, degraded: true };
     } catch (fallbackError) {
@@ -604,10 +686,12 @@ async function verifyModel(
  * operator's list covers what the operator knows about, this covers what
  * the wake was given. Neither should ever appear in state or a publish.
  */
-function autoDenylist(config: WakeConfig): string[] {
+function autoDenylist(adapter: HarnessAdapter, config: WakeConfig): string[] {
   return [
     ...config.secretDenylist,
-    config.mindCredential,
+    // The credential and, for a file credential, every token inside it
+    // (spec 0010 §5): a JWT must never ride a transcript or a commit.
+    ...adapter.secretsIn(config.mindCredential),
     config.githubToken,
     ...(config.notifyToken ? [config.notifyToken] : []),
     ...(config.publishToken ? [config.publishToken] : []),
@@ -654,7 +738,8 @@ async function runSession(
   config: WakeConfig,
   model: string,
   degraded: boolean,
-  porchUrl: string
+  porchUrl: string,
+  staged: StagedHarness
 ): Promise<number> {
   const budgetMinutes = sessionBudgetMinutes(config.maxWakeMinutes);
   const spec = adapter.session(
@@ -671,108 +756,35 @@ async function runSession(
   // when the mind ran long. OPERON_PORCH is a loopback address, not a
   // credential: the session's env still contains only its own mind
   // credential; every other token stays behind the porch.
-  // Every MCP server this wake gets, in ONE file outside the state repo
-  // (spec 0008 §4): the browser door of spec 0004, and whatever the
-  // operator granted this agent. Not `.mcp.json` in the worktree, which
-  // committed chassis config into the agent's memory every wake.
   //
-  // No credential is written. The browser endpoint is loopback, and a
-  // granted server is a virtual host plus the wake nonce, which the
-  // umbilical trades for the real upstream outside the container.
-  const mcpArgs: string[] = [];
-  {
-    const hasBrowser = Boolean(config.webUrl && config.webToken);
-    for (const line of mcpStagingLines(config.mcpServers, hasBrowser)) log(line);
-    if (hasBrowser || config.mcpServers.length > 0) {
-      const configArgs = adapter.mcpConfigArgs?.(mcpConfigPath());
-      if (!configArgs) {
-        log(`mcp: skipped for harness ${adapter.id} (no mcp-config support)`);
-      } else {
-        try {
-          const dir = join(mindHome(), ".operon");
-          await mkdir(dir, { recursive: true, mode: 0o700 });
-          await writeFile(
-            mcpConfigPath(),
-            mergedMcpConfigJson(config.mcpServers, {
-              ...(hasBrowser ? { porchUrl } : {}),
-              ...(config.mcpToken ? { nonce: config.mcpToken } : {})
-            }),
-            { encoding: "utf8", mode: 0o600 }
-          );
-          await chownToMind(dir);
-          mcpArgs.push(...configArgs);
-        } catch (error) {
-          log(`mcp: could not stage the config: ${String(error).slice(0, 200)}`);
-        }
-      }
-    }
-  }
-
-  // Mid-wake input awareness for claude-code minds: a PostToolUse hook
-  // (pull-hook.ts) whose stdout the harness injects into the running
-  // session, so new mail, DMs, and operator messages reach the mind
-  // WHILE it works instead of only when it thinks to pull. Written to
-  // the mind's user settings; a state repo's own project settings are a
-  // different scope and still load. Best-effort: a wake without the
-  // hook is the old behavior, not a failure.
-  if (adapter.id === "claude-code") {
+  // The home was staged before the probe (stageHarness, spec 0010): the
+  // settings, the hooks, the MCP config, a file credential. The
+  // journal guard's baseline is laid here, as the session begins:
+  // JOURNAL.md as it is now, so the Stop hook can tell an appended
+  // entry (wake-start content preserved, new bytes around it) from an
+  // untouched journal or a rewrite masquerading as one (wake 23 stopped
+  // cleanly with its journal unwritten).
+  try {
+    await writeFile("/tmp/operon-journal-stamp", wakeStamp(config.wakeId), "utf8");
     try {
-      // The journal guard's baseline: JOURNAL.md as the session begins,
-      // so the Stop hook can tell an appended entry (wake-start content
-      // preserved, new bytes around it) from an untouched journal or a
-      // rewrite masquerading as one (wake 23 stopped cleanly with its
-      // journal unwritten).
-      await writeFile("/tmp/operon-journal-stamp", wakeStamp(config.wakeId), "utf8");
-      try {
-        await copyFile(join(STATE_DIR, "JOURNAL.md"), "/tmp/operon-journal-baseline.md");
-      } catch {
-        // No journal file yet (a brand-new agent): the guard yields on
-        // a missing baseline, and presleep still judges the wake.
-      }
-      const settingsDir = join(mindHome(), ".claude");
-      await mkdir(settingsDir, { recursive: true });
-      await writeFile(
-        join(settingsDir, "settings.json"),
-        JSON.stringify(
-          {
-            hooks: {
-              PostToolUse: [
-                {
-                  matcher: "*",
-                  hooks: [
-                    { type: "command", command: "node /opt/operon/pull-hook.js", timeout: 15 }
-                  ]
-                }
-              ],
-              Stop: [
-                {
-                  hooks: [
-                    { type: "command", command: "node /opt/operon/journal-guard.js", timeout: 10 }
-                  ]
-                }
-              ]
-            }
-          },
-          null,
-          2
-        ),
-        "utf8"
-      );
-      await chownToMind(settingsDir);
-      log("mid-wake input notifier staged (PostToolUse hook); journal guard staged (Stop hook)");
-    } catch (error) {
-      log(`could not stage the input notifier hook: ${String(error).slice(0, 200)}`);
+      await copyFile(join(STATE_DIR, "JOURNAL.md"), "/tmp/operon-journal-baseline.md");
+    } catch {
+      // No journal file yet (a brand-new agent): the guard yields on
+      // a missing baseline, and presleep still judges the wake.
     }
+  } catch (error) {
+    log(`could not stage the journal guard's baseline: ${String(error).slice(0, 200)}`);
   }
 
   const ids = mindSpawnIds();
   if (!("uid" in ids)) {
     log("WARNING: not running as root; the session shares the supervisor's uid (dev mode only)");
   }
-  return runStreaming(spec.command, [...spec.args, ...mcpArgs, ...config.harnessExtraArgs], {
+  return runStreaming(spec.command, [...spec.args, ...staged.args, ...config.harnessExtraArgs], {
     cwd: STATE_DIR,
     env: {
       ...sessionBaseEnv(),
+      ...staged.env,
       ...spec.env,
       OPERON_PORCH: porchUrl,
       // The pull hook tells the mind how much of its budget remains and
@@ -867,7 +879,7 @@ async function main(): Promise<number> {
     config.vaultUrl = undefined;
     config.vaultToken = undefined;
   }
-  const denylist = [...autoDenylist(config), ...vault.values];
+  const denylist = [...autoDenylist(adapter, config), ...vault.values];
 
   // The wake transcript: everything said from here on (entrypoint lines
   // and the session's own output) ships to the chronicle in redacted
@@ -912,11 +924,6 @@ async function main(): Promise<number> {
   // you worked".
   const shownAsks = new Map<string, number>();
   newAsks(asksAtStart.delivered, shownAsks);
-
-  const verified = await verifyModel(adapter, config);
-  const probedModel = verified.degraded
-    ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
-    : verified.answer;
 
   // The porch opens before the session and closes after it: the wake's
   // doors exist exactly while a mind is awake to use them.
@@ -993,14 +1000,23 @@ async function main(): Promise<number> {
   const porchUrl = await porch.start();
   log(`${label}: porch open at ${porchUrl}`);
 
-  log(`${label}: session starting (model ${verified.model})`);
+  // The harness home is staged before the probe: a file credential
+  // (Codex's login) is what the probe signs in with (spec 0010 §4).
+  let probedModel: string;
   let sessionExit: number;
   try {
-    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl);
+    const staged = await stageHarness(adapter, config, porchUrl);
+    const verified = await verifyModel(adapter, config, staged);
+    probedModel = verified.degraded
+      ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`
+      : verified.answer;
+    log(`${label}: session starting (harness ${adapter.id}, model ${verified.model})`);
+    sessionExit = await runSession(adapter, config, verified.model, verified.degraded, porchUrl, staged);
   } finally {
     await porch.close();
   }
   log(`${label}: session exited ${sessionExit}`);
+  await relayRefreshedCredential(adapter, config);
 
   // Change detection runs as the mind uid: a filter it triggers executes
   // unprivileged, so this needs no root and no clean mirror.
@@ -1045,7 +1061,7 @@ async function main(): Promise<number> {
       config,
       `${label}: PERSIST WITHHELD, presleep blocked it (${verification.failures
         .map(f => f.code)
-        .join(", ")}). Model ${probedModel}. Investigate the container log; nothing was persisted.`
+        .join(", ")}). Harness ${adapter.id}, model ${probedModel}. Investigate the container log; nothing was persisted.`
     );
     return 2;
   }
@@ -1062,8 +1078,8 @@ async function main(): Promise<number> {
   const summary = failed
     ? `${label}: finished with problems (session exit ${sessionExit}${
         verification.ok ? "" : `; ${verification.failures.map(f => f.code).join(", ")}`
-      }). Model ${probedModel}.`
-    : `${label}: completed. Model ${probedModel}.`;
+      }). Harness ${adapter.id}, model ${probedModel}.`
+    : `${label}: completed. Harness ${adapter.id}, model ${probedModel}.`;
   await notify(config, summary);
   return failed ? 1 : 0;
 }

@@ -51,15 +51,23 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
   }
 
   // The mind and the fences. One credential per HARNESS in the roster,
-  // under the name the scheduler's launch reads (MIND_CREDENTIAL_<HARNESS>).
-  for (const harness of new Set(manifest.roster.agents.map(agent => agent.harness))) {
+  // primaries and alternates alike (spec 0010 §4), under the name the
+  // scheduler's launch reads (MIND_CREDENTIAL_<HARNESS>).
+  const harnesses = new Set<string>();
+  for (const agent of manifest.roster.agents) {
+    harnesses.add(agent.harness);
+    for (const alternate of Object.keys(agent.harnesses ?? {})) harnesses.add(alternate);
+  }
+  for (const harness of harnesses) {
     add({
       worker: "scheduler",
       name: `MIND_CREDENTIAL_${agentVar(harness)}`,
       purpose:
         harness === "claude-code"
           ? "the dedicated Claude account's setup-token"
-          : `the credential the "${harness}" harness signs in with`
+          : harness === "codex"
+            ? "the dedicated ChatGPT account's codex login (node operon/tools/codex-authorize.mjs) or an API key"
+            : `the credential the "${harness}" harness signs in with`
     });
   }
   add({ worker: "scheduler", name: "SECRET_DENYLIST", purpose: "literals kept off published surfaces (itself secret)" });

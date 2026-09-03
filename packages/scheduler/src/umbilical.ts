@@ -1,5 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { policyDoorFor, resolveDoor } from "./umbilical-routes.js";
+import { doorHost, MIND_DOOR, policyDoorFor, resolveDoor } from "./umbilical-routes.js";
+import { judgeRelay } from "./mind-credential.js";
+import type { FleetControl } from "./fleet-control.js";
 
 /**
  * The umbilical router (spec 0003 step 4): container door egress goes
@@ -23,9 +25,31 @@ interface RouterProps {
   agentId?: string;
   /** The doors closed for this wake (spec 0006 §7): refused here, whatever the container asks. */
   closedDoors?: string[];
+  /** The harness this wake runs on and its credential's seed (spec 0010 §5). */
+  harness?: string;
+  mindSeed?: { fingerprint: string; account?: string };
 }
 
 export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
+  private async relayCredential(request: Request, url: URL, props: RouterProps): Promise<Response> {
+    if (url.pathname !== "/credential" || request.method !== "POST") {
+      return new Response("mind_door_unknown_route", { status: 404 });
+    }
+    if (!props.harness || !props.mindSeed) return new Response("mind_door_unseeded", { status: 503 });
+    const body = (await request.json().catch(() => ({}))) as { credential?: unknown };
+    const verdict = judgeRelay(props.mindSeed.account, body.credential);
+    if (!verdict.ok) return new Response(verdict.error, { status: 400 });
+    const fleet = this.env.FLEET_CONTROL as DurableObjectNamespace<FleetControl> | undefined;
+    if (!fleet) return new Response("binding_unwired:FLEET_CONTROL", { status: 502 });
+    await fleet.get(fleet.idFromName("fleet")).setRefreshedCredential(
+      props.harness,
+      props.mindSeed.fingerprint,
+      verdict.value
+    );
+    console.log(`[${props.agentId}] mind credential relayed for ${props.harness} (refreshed in-container)`);
+    return Response.json({ ok: true });
+  }
+
   override async fetch(request: Request): Promise<Response> {
     const props = (this.ctx.props ?? {}) as RouterProps;
     const nonce = props.nonce;
@@ -35,6 +59,10 @@ export class UmbilicalRouter extends WorkerEntrypoint<RouterEnv> {
       return new Response("umbilical_denied", { status: 403 });
     }
     const url = new URL(request.url);
+    // The mind door (spec 0010 §5): handled here, never forwarded. The
+    // container relays a credential its harness refreshed; it is stored
+    // for later launches only under this wake's seed and account.
+    if (url.hostname === doorHost(MIND_DOOR)) return this.relayCredential(request, url, props);
     const door = policyDoorFor(url.hostname, url.pathname);
     if (door && (props.closedDoors ?? []).includes(door)) {
       return new Response(`door_closed:${door}`, { status: 403 });
