@@ -62,17 +62,11 @@ export const DEPLOY_ORDER = [
   "gatekeeper-ops"
 ] as const;
 
-const HARNESS_EXTRA_ARGS_DEFAULT = JSON.stringify([
-  "--permission-mode",
-  "bypassPermissions",
-  "--output-format",
-  "stream-json",
-  "--verbose"
-]);
-// The codex policy (spec 0010 §5): the container is the sandbox, as
-// bypassPermissions says for Claude Code; the JSONL stream is the
-// transcript.
-const HARNESS_EXTRA_ARGS_CODEX_DEFAULT = JSON.stringify(["--dangerously-bypass-approvals-and-sandbox", "--json"]);
+// The autonomy and output flags are the adapters' own (spec 0010 §2);
+// these hold genuine extras only (an effort level, a new flag), so the
+// defaults are empty.
+const HARNESS_EXTRA_ARGS_DEFAULT = "[]";
+const HARNESS_EXTRA_ARGS_CODEX_DEFAULT = "[]";
 
 /** Chassis defaults for every policy var the manifest may override. */
 const POLICY_DEFAULTS: Record<string, Record<string, string>> = {

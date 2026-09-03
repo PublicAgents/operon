@@ -1,7 +1,8 @@
 /**
  * Pure transcript rendering (ported from tools/tail-wake.mjs, unit
- * tested): harness stream-json lines become readable entries, chassis
- * [operon] lines pass through. Everything returned here is TEXT and is
+ * tested): harness stream lines become readable entries (Claude Code's
+ * stream-json and Codex's exec JSONL, spec 0010), chassis [operon]
+ * lines pass through. Everything returned here is TEXT and is
  * rendered as text nodes only; ANSI/terminal escapes are stripped
  * before anything reaches the DOM (spec 0005 §8).
  */
@@ -53,6 +54,58 @@ interface StreamEvent {
   model?: string;
   num_turns?: number;
   message?: { content?: StreamBlock[] };
+  // Codex exec JSONL (spec 0010 §4): thread/turn events and items.
+  thread_id?: string;
+  item?: CodexItem;
+  usage?: { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number };
+  error?: { message?: string } | string;
+}
+
+interface CodexItem {
+  type?: string;
+  text?: string;
+  command?: string;
+  status?: string;
+  exit_code?: number;
+  aggregated_output?: string;
+  server?: string;
+  tool?: string;
+  query?: string;
+  changes?: { path?: string; kind?: string }[];
+  items?: { text?: string; completed?: boolean }[];
+}
+
+/** One Codex item, started or completed, as a transcript entry. */
+function renderCodexItem(item: CodexItem, completed: boolean): RenderedLine[] | null {
+  switch (item.type) {
+    case "agent_message":
+      return completed && item.text?.trim() ? [{ kind: "assistant", text: stripAnsi(item.text) }] : null;
+    case "reasoning":
+      return completed && item.text?.trim() ? [{ kind: "assistant", text: stripAnsi(trim(item.text, 300)) }] : null;
+    case "command_execution": {
+      if (!completed) return [{ kind: "tool", text: stripAnsi(`shell(${trim(item.command ?? "", 160)})`) }];
+      const exit = item.exit_code === undefined ? item.status ?? "" : `exit ${item.exit_code}`;
+      const output = item.aggregated_output ? `: ${trim(item.aggregated_output, 200)}` : "";
+      return [{ kind: "tool-result", text: stripAnsi(`${exit}${output}`) }];
+    }
+    case "file_change": {
+      if (!completed) return null;
+      const files = (item.changes ?? []).map(change => `${change.kind ?? "edit"} ${change.path ?? "?"}`).join(", ");
+      return [{ kind: "tool", text: stripAnsi(`files: ${trim(files, 200)}`) }];
+    }
+    case "mcp_tool_call":
+      return completed
+        ? [{ kind: "tool-result", text: stripAnsi(`${item.server ?? "?"}.${item.tool ?? "?"}: ${item.status ?? "done"}`) }]
+        : [{ kind: "tool", text: stripAnsi(`${item.server ?? "?"}.${item.tool ?? "?"}()`) }];
+    case "web_search":
+      return completed ? [{ kind: "tool", text: stripAnsi(`web_search(${trim(item.query ?? "", 160)})`) }] : null;
+    case "todo_list":
+      return completed
+        ? [{ kind: "plain", text: stripAnsi(`plan: ${trim((item.items ?? []).map(entry => `${entry.completed ? "x" : " "} ${entry.text ?? ""}`).join("; "), 300)}`) }]
+        : null;
+    default:
+      return completed ? [{ kind: "plain", text: trim(JSON.stringify(item), 300) }] : null;
+  }
 }
 
 interface StreamBlock {
@@ -113,6 +166,31 @@ export function renderLine(line: string): RenderedLine[] | null {
           text: `session result: ${event.subtype ?? "?"}${event.num_turns ? ` (${event.num_turns} turns)` : ""}`
         }
       ];
+    // Codex exec JSONL (spec 0010 §4).
+    case "thread.started":
+      return [{ kind: "session", text: "session ready (codex)" }];
+    case "turn.started":
+      return null;
+    case "turn.completed": {
+      const usage = event.usage;
+      return usage
+        ? [
+            {
+              kind: "result",
+              text: `turn done: ${usage.input_tokens ?? 0} in (${usage.cached_input_tokens ?? 0} cached), ${usage.output_tokens ?? 0} out`
+            }
+          ]
+        : null;
+    }
+    case "turn.failed":
+    case "error": {
+      const detail = typeof event.error === "string" ? event.error : event.error?.message;
+      return [{ kind: "result", text: stripAnsi(`${event.type}: ${trim(detail ?? "", 300)}`) }];
+    }
+    case "item.started":
+      return event.item ? renderCodexItem(event.item, false) : null;
+    case "item.completed":
+      return event.item ? renderCodexItem(event.item, true) : null;
     default:
       return [{ kind: "plain", text: trim(clean, 300) }];
   }

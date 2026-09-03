@@ -55,11 +55,16 @@ opposite of "the same agent".
   `.codex/config.toml`, hooks, and rules stay disabled by Codex's own
   trust rule. The mind's memory is its repository, read through the wake
   prompt and its own file reads, the same on every harness.
-- **A harness's capabilities come from the adapter, not the operator's
-  extra args.** The lockdown flags are chassis invariants the adapter
-  emits on every session and probe. `HARNESS_EXTRA_ARGS` stays what it
-  was: the operator's autonomy policy (permission mode, output format),
-  now per harness.
+- **A harness's capabilities and its autonomy come from the adapter,
+  not the operator's extra args.** The lockdown flags are chassis
+  invariants the adapter emits on every session and probe, and so are
+  the unattended-run flags: Claude Code's `--permission-mode
+  bypassPermissions --output-format stream-json --verbose`, Codex's
+  `--dangerously-bypass-approvals-and-sandbox --json`. A headless wake
+  that may stop to ask is not a wake, and the container is the sandbox
+  either way. This amends spec 0001, which made autonomy an operator
+  setting. `HARNESS_EXTRA_ARGS` (and `HARNESS_EXTRA_ARGS_CODEX`) remain
+  for genuine extras, an effort level say, and default to empty.
 - **One agent, many harnesses.** A roster entry keeps its primary
   `harness`/`model` and may name alternates under `harnesses:` with a
   model pin each. A manual wake may name one of them; the wake runs the
@@ -136,8 +141,9 @@ home in `CODEX_HOME=/home/mind/.codex`, created per wake and staged with:
 - `auth.json`: the mind credential (§5).
 
 The session is `codex exec <prompt> -m <model> --skip-git-repo-check
---ephemeral --color never` in the state directory, plus the staged
-`--dangerously-bypass-hook-trust` and the operator's extra args; the probe runs the same with `--sandbox read-only`. Codex
+--ephemeral --color never --dangerously-bypass-approvals-and-sandbox
+--json` in the state directory, plus the staged
+`--dangerously-bypass-hook-trust` and the operator's extras; the probe runs the same with `--sandbox read-only`. Codex
 has no fallback-model flag: the entrypoint's probe-then-fallback covers
 an unavailable pinned model before the session; mid-session fallback is
 a Claude Code feature only.
@@ -190,11 +196,9 @@ runs, so a rotated token can no longer leave the container than the
 seeded one could. The rewrite is noted in the log and does not carry
 over.
 
-`HARNESS_EXTRA_ARGS` (the scheduler policy var) is the claude-code
-policy; `HARNESS_EXTRA_ARGS_CODEX` is the codex policy, defaulting to
-`["--dangerously-bypass-approvals-and-sandbox", "--json"]`: the
-container is the sandbox, as `bypassPermissions` says for Claude Code,
-and the JSONL event stream is the transcript.
+`HARNESS_EXTRA_ARGS` (the scheduler policy var) carries claude-code
+extras; `HARNESS_EXTRA_ARGS_CODEX` carries codex extras. Both default
+to `[]`: the unattended-run and output flags are the adapters' own (§2).
 
 ## 6. The wake, the plane, the console
 

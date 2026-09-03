@@ -8,14 +8,24 @@ import { chassisHooks, type HarnessAdapter } from "./types.js";
  * harness authenticates or where it connects; the entrypoint refuses to
  * run if any of them are present (chassis spec 4.1, assertEnvClean).
  *
- * The adapter deliberately hardcodes no permission or autonomy settings:
- * how much the session may do unattended is an operator decision, supplied
- * per deployment through the harness extra-args mechanism (see config.ts),
- * the same way every other policy in this system is operator-owned. What
- * it does hardcode is the lockdown (spec 0010 §3): nothing attached to
- * the Claude account reaches the session, and nothing in the working
- * tree configures it.
+ * The session runs unattended by construction (spec 0010 §2): the
+ * permission bypass and the streamed output format are part of the
+ * command, not an operator setting, because a headless wake that may
+ * stop to ask is not a wake. HARNESS_EXTRA_ARGS remains for genuine
+ * extras (an effort level, a flag a new version grows), empty by
+ * default. The lockdown (spec 0010 §3) is hardcoded too: nothing
+ * attached to the Claude account reaches the session, and nothing in
+ * the working tree configures it.
  */
+
+/** Unattended, streamed: the container is the sandbox; the JSONL stream is the transcript. */
+export const CLAUDE_SESSION_ARGS = [
+  "--permission-mode",
+  "bypassPermissions",
+  "--output-format",
+  "stream-json",
+  "--verbose"
+];
 
 /** Everything account-attached, off (spec 0010 §3); repeated in the image's managed settings. */
 export const CLAUDE_LOCKDOWN_ENV: Record<string, string> = {
@@ -103,7 +113,8 @@ export const claudeCode: HarnessAdapter = {
         prompt,
         "--model",
         model,
-        ...(fallbackModel ? ["--fallback-model", fallbackModel] : [])
+        ...(fallbackModel ? ["--fallback-model", fallbackModel] : []),
+        ...CLAUDE_SESSION_ARGS
       ],
       env: { ...CLAUDE_LOCKDOWN_ENV, CLAUDE_CODE_OAUTH_TOKEN: credential }
     };

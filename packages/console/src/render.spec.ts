@@ -54,6 +54,38 @@ describe("renderLine", () => {
     expect(renderLine(line)).toEqual([{ kind: "assistant", text: "safewiped" }]);
   });
 
+  it("renders Codex exec JSONL: messages, commands, files, MCP calls, and turn usage (spec 0010)", () => {
+    expect(renderLine(JSON.stringify({ type: "thread.started", thread_id: "t1" }))).toEqual([
+      { kind: "session", text: "session ready (codex)" }
+    ]);
+    expect(renderLine(JSON.stringify({ type: "turn.started" }))).toBeNull();
+    expect(
+      renderLine(
+        JSON.stringify({ type: "item.started", item: { id: "i1", type: "command_execution", command: "bash -lc ls", status: "in_progress" } })
+      )
+    ).toEqual([{ kind: "tool", text: "shell(bash -lc ls)" }]);
+    expect(
+      renderLine(
+        JSON.stringify({ type: "item.completed", item: { id: "i1", type: "command_execution", command: "ls", exit_code: 0, aggregated_output: "a\nb" } })
+      )
+    ).toEqual([{ kind: "tool-result", text: "exit 0: a\nb" }]);
+    expect(renderLine(JSON.stringify({ type: "item.completed", item: { id: "i3", type: "agent_message", text: "done" } }))).toEqual([
+      { kind: "assistant", text: "done" }
+    ]);
+    expect(
+      renderLine(JSON.stringify({ type: "item.completed", item: { type: "file_change", changes: [{ path: "JOURNAL.md", kind: "update" }] } }))
+    ).toEqual([{ kind: "tool", text: "files: update JOURNAL.md" }]);
+    expect(renderLine(JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", server: "livevariant", tool: "list_tests" } }))).toEqual([
+      { kind: "tool", text: "livevariant.list_tests()" }
+    ]);
+    expect(
+      renderLine(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 24763, cached_input_tokens: 24448, output_tokens: 122 } }))
+    ).toEqual([{ kind: "result", text: "turn done: 24763 in (24448 cached), 122 out" }]);
+    expect(renderLine(JSON.stringify({ type: "turn.failed", error: { message: "rate limited" } }))).toEqual([
+      { kind: "result", text: "turn.failed: rate limited" }
+    ]);
+  });
+
   it("renders a malformed JSON-looking line as plain text", () => {
     expect(renderLine("{not json")).toEqual([{ kind: "plain", text: "{not json" }]);
   });

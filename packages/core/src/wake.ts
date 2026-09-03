@@ -98,8 +98,8 @@ export interface WakeOptions {
   secretDenylist?: string;
   /**
    * JSON array of extra CLI arguments appended to the harness session
-   * invocation. Operator-owned deployment policy (e.g. the harness's
-   * permission/autonomy settings); the chassis hardcodes none of it.
+   * invocation: operator extras such as an effort level. The autonomy
+   * and output flags are the adapter's own (spec 0010 §2), not policy.
    */
   harnessExtraArgs?: string;
   /**
