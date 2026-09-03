@@ -13,8 +13,13 @@ COPY src ./src
 RUN npm install typescript@6.0.3 @types/node@24.13.3 && npx tsc
 
 FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+# The shell tools a mind reaches for (spec 0010 §4): ripgrep, jq and fd
+# beside git, curl and python. Claude Code bundles its own search;
+# Codex works through the shell and its first wake found rg and jq
+# missing. Debian names fd's binary fdfind; the link gives it its name.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates curl python3 \
+  && apt-get install -y --no-install-recommends git ca-certificates curl python3 ripgrep jq fd-find \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 # gitleaks: pinned version + checksum. Its config is baked into the image
 # (never read from the scanned repo, which is agent-writable).
