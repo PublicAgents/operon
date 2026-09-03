@@ -405,12 +405,16 @@ export class TelegramGateway extends WorkerEntrypoint<Env> {
   }
 }
 
-export default {
-  async fetch(request, env) {
+/**
+ * The doors (spec 0009): the container's notify and channel paths,
+ * reachable only over the umbilical's TELEGRAM_DOOR binding. The bearer
+ * checks stay (the umbilical attaches the real NOTIFY_TOKEN); what is
+ * gone is any way to address these paths from the public hostname.
+ */
+export class Door extends WorkerEntrypoint<Env> {
+  override async fetch(request: Request): Promise<Response> {
+    const env = this.env;
     const url = new URL(request.url);
-    if (url.pathname === "/webhook" && request.method === "POST") {
-      return handleWebhook(request, env);
-    }
     if (url.pathname === "/notify" && request.method === "POST") {
       return handleNotify(request, env);
     }
@@ -460,6 +464,17 @@ export default {
         return errorResponse(404, "entry_not_found", String(body.value.id));
       }
       return json({ ok: true, entry });
+    }
+    return errorResponse(404, "not_found");
+  }
+}
+
+export default {
+  async fetch(request, env) {
+    // The public surface: Telegram's webhook, and nothing else (spec 0009).
+    const url = new URL(request.url);
+    if (url.pathname === "/webhook" && request.method === "POST") {
+      return handleWebhook(request, env);
     }
     return errorResponse(404, "not_found");
   }

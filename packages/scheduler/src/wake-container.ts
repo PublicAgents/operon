@@ -1,3 +1,4 @@
+import { notifyOperator, type TelegramGatewayBinding } from "@operon/worker-kit";
 import { DurableObject } from "cloudflare:workers";
 import { recordEvent } from "@operon/chronicle";
 import { allDoorHosts } from "./umbilical-routes.js";
@@ -57,8 +58,8 @@ export type LaunchResult =
   | { status: "error"; error: string };
 
 interface WakeEnv {
-  NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
+  TELEGRAM?: TelegramGatewayBinding;
   /** Wake outcomes mirror here (kind wake_finished) so history and exit
    * codes are queryable beyond this DO's own storage. CHRONICLE_DB, not
    * CHRONICLE: that name is already the chronicle GATEKEEPER's service
@@ -485,25 +486,9 @@ export class WakeContainer extends DurableObject<WakeEnv> {
     }
   }
 
-  /** Best-effort operator alert through the telegram Gatekeeper; never throws. */
+  /** Best-effort operator alert over the TELEGRAM binding (spec 0009); never throws. */
   private async notify(text: string): Promise<void> {
-    if (!this.env.NOTIFY_URL || !this.env.NOTIFY_TOKEN) return;
-    try {
-      const response = await fetch(this.env.NOTIFY_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.env.NOTIFY_TOKEN}`
-        },
-        body: JSON.stringify({ text })
-      });
-      if (!response.ok) {
-        console.error(
-          `wake-container notify rejected: ${response.status} ${(await response.text()).slice(0, 200)}`
-        );
-      }
-    } catch (error) {
-      console.error("wake-container notify failed", error);
-    }
+    await notifyOperator(this.env, text);
   }
+
 }

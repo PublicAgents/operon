@@ -141,7 +141,6 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
   const zone = manifest.roster.zone;
   const name = (worker: string) => `${prefix}-${worker}`;
   const gkHost = (sub: string) => `${sub}.${zone}`;
-  const notifyUrl = `https://${gkHost("tg")}/notify`;
 
   const common = (worker: string) => ({
     $schema: `${chassisDir}/../node_modules/wrangler/config-schema.json`,
@@ -186,7 +185,6 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-github"),
         ...chronicleD1,
-        routes: [route(gkHost("gh-gk"))],
         durable_objects: { bindings: [ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }]
       }
@@ -196,7 +194,6 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-pr"),
         ...chronicleD1,
-        routes: [route(gkHost("pr-gk"))],
         durable_objects: { bindings: [ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
         vars: policyVars(manifest, "pr")
@@ -220,16 +217,14 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-email"),
         ...chronicleD1,
-        routes: [route(gkHost("email-gk"))],
         send_email: [{ name: "EMAIL" }],
-        services: [service("TELEGRAM", "gatekeeper-telegram")],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         durable_objects: { bindings: [{ name: "MAILBOX", class_name: "Mailbox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["Mailbox", "Ledger"] }],
         vars: {
           EMAIL_DOMAIN: zone,
           ...policyVars(manifest, "email"),
-          ...(manifest.operatorEmail !== undefined ? { OPERATOR_EMAIL: manifest.operatorEmail } : {}),
-          NOTIFY_URL: notifyUrl
+          ...(manifest.operatorEmail !== undefined ? { OPERATOR_EMAIL: manifest.operatorEmail } : {})
         }
       }
     },
@@ -239,11 +234,10 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ...common("gatekeeper-spend"),
         compatibility_flags: ["nodejs_compat"],
         ...chronicleD1,
-        routes: [route(gkHost("spend-gk"))],
-        services: [service("TELEGRAM", "gatekeeper-telegram")],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         durable_objects: { bindings: [{ name: "SPEND", class_name: "SpendLedger" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }],
-        vars: { ...policyVars(manifest, "spend"), NOTIFY_URL: notifyUrl }
+        vars: policyVars(manifest, "spend")
       }
     },
     {
@@ -251,10 +245,9 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-vault"),
         ...chronicleD1,
-        routes: [route(gkHost("vault-gk"))],
         durable_objects: { bindings: [{ name: "VAULT", class_name: "VaultBox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["VaultBox", "Ledger"] }],
-        vars: { NOTIFY_URL: notifyUrl }
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")]
       }
     },
     {
@@ -262,7 +255,6 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-chronicle"),
         ...chronicleD1,
-        routes: [route(gkHost("chronicle-gk"))],
         durable_objects: { bindings: [{ name: "WAKE_LOG", class_name: "WakeLog" }] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["WakeLog"] }]
       }
@@ -272,10 +264,10 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-x"),
         ...chronicleD1,
-        routes: [route(gkHost("x-gk"))],
         durable_objects: { bindings: [{ name: "POSTER", class_name: "PosterBox" }, ledger] },
         migrations: [{ tag: "v1", new_sqlite_classes: ["PosterBox", "Ledger"] }],
-        vars: { ...policyVars(manifest, "x"), NOTIFY_URL: notifyUrl }
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
+        vars: policyVars(manifest, "x")
       }
     },
     {
@@ -320,11 +312,10 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-asks"),
         ...chronicleD1,
-        routes: [route(gkHost("asks-gk"))],
         // The decision queue reaches the operator by mail through the
         // email Gatekeeper's binding-only operator path, so asks never
         // hold a send credential of their own.
-        services: [
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway"), 
           service("EMAIL_OPERATOR", "gatekeeper-email", "OperatorMail"),
           // The quota's honest source: the scheduler owns the wake lock.
           service("SCHEDULER_WAKE", "scheduler", "WakeQuery")
@@ -333,7 +324,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           bindings: [{ name: "ASKS", class_name: "AskBox" }, ledger]
         },
         migrations: [{ tag: "v1", new_sqlite_classes: ["AskBox", "Ledger"] }],
-        vars: { ...policyVars(manifest, "asks"), NOTIFY_URL: notifyUrl }
+        vars: policyVars(manifest, "asks")
       }
     },
     {
@@ -405,13 +396,17 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         ],
         services: [
           service("GITHUB_GATEKEEPER", "gatekeeper-github"),
-          service("TELEGRAM", "gatekeeper-telegram"),
+          // The scheduler's own alerts ride TELEGRAM (the notify entrypoint);
+          // the container's doors on the three public Workers ride their
+          // Door entrypoints (spec 0009), never the public default export.
+          service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway"),
+          service("TELEGRAM_DOOR", "gatekeeper-telegram", "Door"),
           service("EMAIL", "gatekeeper-email"),
-          service("DEPLOY", "gatekeeper-deploy"),
+          service("DEPLOY_DOOR", "gatekeeper-deploy", "Door"),
           service("GITHUB", "gatekeeper-github"),
           service("PR", "gatekeeper-pr"),
           service("CHRONICLE", "gatekeeper-chronicle"),
-          service("TILL", "gatekeeper-till"),
+          service("TILL_DOOR", "gatekeeper-till", "Door"),
           service("SPEND", "gatekeeper-spend"),
           service("VAULT", "gatekeeper-vault"),
           service("X", "gatekeeper-x"),
@@ -422,19 +417,10 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           service("ASKS_GK", "gatekeeper-asks"),
           ...mcpBindings(manifest).map(([binding, worker]) => service(binding, worker))
         ],
+        // No door URLs (spec 0009): every door is a virtual host through
+        // the umbilical, and the Gatekeepers behind them have no hostname.
         vars: {
           ...policyVars(manifest, "scheduler"),
-          NOTIFY_URL: notifyUrl,
-          PUBLISH_URL: `https://${zone}/gatekeeper/publish`,
-          PERSIST_URL: `https://${gkHost("gh-gk")}/commit`,
-          PR_URL: `https://${gkHost("pr-gk")}/gatekeeper/pr`,
-          EMAIL_URL: `https://${gkHost("email-gk")}`,
-          TILL_URL: `https://${zone}`,
-          SPEND_URL: `https://${gkHost("spend-gk")}`,
-          VAULT_URL: `https://${gkHost("vault-gk")}`,
-          CHRONICLE_URL: `https://${gkHost("chronicle-gk")}`,
-          X_URL: `https://${gkHost("x-gk")}`,
-          ASKS_URL: `https://${gkHost("asks-gk")}`,
           ...(manifest.policy.pr?.PR_REPOS !== undefined ? { PR_REPOS: manifest.policy.pr.PR_REPOS } : {})
         }
       }
@@ -493,8 +479,9 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
           )
         ],
         vars: {
-          ACCESS_TEAM_DOMAIN: manifest.access.teamDomain,
-          ACCESS_AUD: manifest.access.aud,
+          // Absent until bootstrap makes the Access application (spec 0009
+          // §3); the plane fails closed (access_unconfigured) meanwhile.
+          ...(manifest.access ? { ACCESS_TEAM_DOMAIN: manifest.access.teamDomain, ACCESS_AUD: manifest.access.aud } : {}),
           CF_ACCOUNT_ID: manifest.accountId,
           WORKER_NAME_PREFIX: `${prefix}-`,
           HOST_PROJECT: manifest.project,

@@ -18,13 +18,16 @@ interface DoorRoute {
 
 /** virtual host label -> Gatekeeper binding + which bearer to attach. */
 export const DOOR_ROUTES: Record<string, DoorRoute> = {
-  notify: { binding: "TELEGRAM", bearerEnv: "NOTIFY_TOKEN" },
+  // The three Gatekeepers that keep a public hostname (spec 0009) serve
+  // their doors on a `Door` entrypoint, reachable only over these
+  // bindings; their default exports answer the public alone.
+  notify: { binding: "TELEGRAM_DOOR", bearerEnv: "NOTIFY_TOKEN" },
   email: { binding: "EMAIL", bearerEnv: "EMAIL_TOKEN" },
-  publish: { binding: "DEPLOY", bearerEnv: "PUBLISH_TOKEN" },
+  publish: { binding: "DEPLOY_DOOR", bearerEnv: "PUBLISH_TOKEN" },
   persist: { binding: "GITHUB", bearerEnv: "PERSIST_TOKEN" },
   pr: { binding: "PR", bearerEnv: "PR_TOKEN" },
   chronicle: { binding: "CHRONICLE", bearerEnv: "CHRONICLE_TOKEN" },
-  till: { binding: "TILL", perAgentPrefix: "TILL_TOKEN" },
+  till: { binding: "TILL_DOOR", perAgentPrefix: "TILL_TOKEN" },
   spend: { binding: "SPEND", perAgentPrefix: "SPEND_TOKEN" },
   vault: { binding: "VAULT", perAgentPrefix: "VAULT_TOKEN" },
   x: { binding: "X", perAgentPrefix: "X_TOKEN" },

@@ -23,10 +23,11 @@
  * line without it; `gh auth login` for the state repos.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "./colony.mjs";
+import { ensureOpsAccess, githubRepoOf } from "./access.mjs";
 
 const CHASSIS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = process.cwd();
@@ -210,6 +211,49 @@ function putFile(repo, path, content, message) {
     { encoding: "utf8" }
   );
   if (result.status !== 0) throw new Error(`could not write ${repo}/${path}: ${result.stderr.trim().slice(0, 200)}`);
+}
+
+// ---- 4b. the plane's Access application (spec 0009 §3) ----------------
+console.log("\nAccess (the operator plane)");
+if (!apiToken) {
+  needYou("CLOUDFLARE_API_TOKEN is not set: the Access application for ops." + manifest.roster.zone + " cannot be made");
+} else {
+  try {
+    const access = await ensureOpsAccess(manifest, {
+      apiToken,
+      accountId: manifest.accountId,
+      createServiceToken: true,
+      ghRepo: githubRepoOf(ROOT)
+    });
+    for (const line of access.lines) console.log(`  ${line}`);
+    for (const need of access.needs) needYou(need);
+    if (access.aud && access.teamDomain) {
+      if (manifest.access?.aud !== access.aud || manifest.access?.teamDomain !== access.teamDomain) {
+        writeAccessBlock(access.teamDomain, access.aud);
+        created(`manifest access block written (teamDomain, aud); commit .operon/operon.yaml`);
+        manifest.access = { teamDomain: access.teamDomain, aud: access.aud };
+      } else {
+        present("manifest access block matches the application");
+      }
+    }
+  } catch (error) {
+    needYou(`Access could not be reconciled: ${String(error.message ?? error).slice(0, 200)}`);
+  }
+}
+
+/** Write access.teamDomain / access.aud into the project's manifest, replacing an existing block. */
+function writeAccessBlock(teamDomain, aud) {
+  const path = existsSync(join(ROOT, ".operon/operon.yaml"))
+    ? join(ROOT, ".operon/operon.yaml")
+    : join(ROOT, ".operon/projects", manifest.project, "operon.yaml");
+  let text = readFileSync(path, "utf8");
+  const block = `access:\n  teamDomain: ${teamDomain}\n  aud: "${aud}"\n`;
+  if (/^access:\n(?:[ \t]+.*\n?)*/m.test(text)) {
+    text = text.replace(/^access:\n(?:[ \t]+.*\n?)*/m, block);
+  } else {
+    text = text.replace(/^(project:.*\n)/m, `$1${block}`);
+  }
+  writeFileSync(path, text);
 }
 
 // ---- 5. the deploy ----------------------------------------------------

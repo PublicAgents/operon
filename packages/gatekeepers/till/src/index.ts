@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
@@ -143,10 +144,12 @@ function agentFromBearer(request: Request, env: Env): RosterAgent | null {
 type Vars = { env: Env };
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+/** The agents' doors (spec 0009): served by the Door entrypoint, never by the storefront. */
+const doors = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 // ---- doors -----------------------------------------------------------
 
-app.post("/gatekeeper/till/offer", async c => {
+doors.post("/gatekeeper/till/offer", async c => {
   const env = c.env;
   const agent = agentFromBearer(c.req.raw, env);
   if (!agent) return errorResponse(401, "invalid_token");
@@ -190,7 +193,7 @@ app.post("/gatekeeper/till/offer", async c => {
   return json({ ok: true, offer });
 });
 
-app.post("/gatekeeper/till/retire", async c => {
+doors.post("/gatekeeper/till/retire", async c => {
   const env = c.env;
   const agent = agentFromBearer(c.req.raw, env);
   if (!agent) return errorResponse(401, "invalid_token");
@@ -205,7 +208,7 @@ app.post("/gatekeeper/till/retire", async c => {
   return json({ ok: true });
 });
 
-app.post("/gatekeeper/till/sales", async c => {
+doors.post("/gatekeeper/till/sales", async c => {
   const env = c.env;
   const agent = agentFromBearer(c.req.raw, env);
   if (!agent) return errorResponse(401, "invalid_token");
@@ -219,6 +222,13 @@ app.post("/gatekeeper/till/sales", async c => {
 
 app.all("*", async c => {
   const env = c.env;
+  // The overlay serves pages: only a read can be a page. Anything else
+  // is refused here rather than forwarded body-first to a Worker that
+  // answers 405 without reading it (the runtime then logs a stream
+  // error for every such POST; spec 0009's probes showed two).
+  if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+    return errorResponse(405, "method_not_allowed");
+  }
   const url = new URL(c.req.url);
   const offer = await catalog(env).get(url.hostname, url.pathname);
   if (!offer) {
@@ -318,7 +328,15 @@ app.all("*", async c => {
   return out;
 });
 
+/** The doors, over the umbilical's TILL_DOOR binding only (spec 0009). */
+export class Door extends WorkerEntrypoint<Env> {
+  override fetch(request: Request): Promise<Response> {
+    return Promise.resolve(doors.fetch(request, this.env, this.ctx));
+  }
+}
+
 export default {
+  // The public surface: the storefront overlay, and nothing else.
   fetch: app.fetch
 } satisfies ExportedHandler<Env>;
 

@@ -27,13 +27,12 @@ function agentVar(agentId: string): string {
 export function rotationGroups(agentIds: readonly string[]): Record<string, RotationPair[]> {
   const groups: Record<string, RotationPair[]> = {
     // telegram accepts; scheduler and the notifying gatekeepers present.
+    // The umbilical's notify door: the telegram Door accepts it, the
+    // scheduler presents it. Every other worker notifies over the
+    // TELEGRAM binding and holds no bearer at all (spec 0009).
     notify: [
       ["gatekeeper-telegram", "NOTIFY_TOKEN"],
-      ["scheduler", "NOTIFY_TOKEN"],
-      ["gatekeeper-email", "NOTIFY_TOKEN"],
-      ["gatekeeper-spend", "NOTIFY_TOKEN"],
-      ["gatekeeper-vault", "NOTIFY_TOKEN"],
-      ["gatekeeper-x", "NOTIFY_TOKEN"]
+      ["scheduler", "NOTIFY_TOKEN"]
     ],
     publish: [
       ["gatekeeper-deploy", "PUBLISH_TOKEN"],

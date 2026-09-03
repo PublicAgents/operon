@@ -1,6 +1,9 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+  notifyOperator as sendOperatorNotify,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import { authorizationHeader } from "./oauth1.js";
 import { PosterBox } from "./poster-do.js";
 import {
@@ -52,7 +55,8 @@ interface Env {
   X_DM_DAILY_CAP?: string;
   /** Central audit mirror; optional. */
   CHRONICLE?: D1Database;
-  NOTIFY_URL?: string;
+  /** The telegram Gatekeeper over a service binding (spec 0009). */
+  TELEGRAM?: TelegramGatewayBinding;
   /** Secrets. */
   X_API_KEY?: string;
   X_API_SECRET?: string;
@@ -142,18 +146,9 @@ function agentFromBearer(request: Request, env: Env): RosterAgent | null {
   return null;
 }
 
+/** Operator alerts ride the TELEGRAM binding (spec 0009); the public path is gone. */
 async function notifyOperator(env: Env, text: string): Promise<void> {
-  if (!env.NOTIFY_URL || !env.NOTIFY_TOKEN) return;
-  try {
-    const response = await fetch(env.NOTIFY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${env.NOTIFY_TOKEN}` },
-      body: JSON.stringify({ text })
-    });
-    if (!response.ok) console.error(`x notify rejected: ${response.status}`);
-  } catch (error) {
-    console.error("x notify failed", error);
-  }
+  await sendOperatorNotify(env, text);
 }
 
 async function record(env: Env, kind: string, detail: Record<string, unknown>): Promise<void> {
