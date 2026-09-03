@@ -39,7 +39,7 @@ describe("anyValue and attributes", () => {
 
   it("converts nanosecond strings without floating point", () => {
     expect(nanosToMs("1725350400123456789")).toBe(1725350400123);
-    expect(nanosToMs(1_000_000_000_000)).toBe(1000);
+    expect(nanosToMs(1_000_000_000_000)).toBe(1_000_000);
     expect(nanosToMs("12")).toBe(0);
     expect(nanosToMs("nope")).toBe(0);
   });
