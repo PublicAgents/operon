@@ -40,10 +40,9 @@ policy, everything ledgered, and the operator able to watch.
   gateway below: credentials never enter the container. Since §9 the
   container also carries a local Chrome for UNAUTHENTICATED browsing
   through the session's own egress; it holds no identity and keeps
-  nothing between wakes, so it weakens none of this. Testing local
-  code does not either: a short-lived Cloudflare Tunnel exposes the
-  container's dev server to the remote browser (section 7). Two
-  browsers, one rule: identity only ever lives in the remote one.
+  nothing between wakes, so it weakens none of this, and it is also
+  how a dev server is checked (section 7, on loopback). Two browsers,
+  one rule: identity only ever lives in the remote one.
 - **CDP is the protocol, the relay is a POLICY POINT.** Browser Run
   exposes a raw Chrome DevTools Protocol WebSocket; every client
   (Playwright, Puppeteer, chrome-devtools-mcp, Stagehand) speaks it,
@@ -470,33 +469,24 @@ Through the ops gateway (spec 0003 section 3), new routes:
   MVP, not optional: without it "recordings are never deleted" is
   false, since Cloudflare deletes them.
 
-## 7. Local testing through the remote browser
+## 7. Local testing: the local browser, on loopback
 
-Agents build sites and need to see them rendered as a logged-in user
-would, in the identity-bearing remote browser (the local browser of §9
-covers the anonymous view directly). The dev-server path:
+Agents build sites and need to see them rendered. The local browser
+(§9) reaches the container's own dev server directly: loopback is
+always direct for the forwarder and bypassed by Chrome's proxy rules,
+so `http://127.0.0.1:<port>` renders in the wake's own Chrome with no
+tunnel, no exposure, and no identity. What the world will see is what
+the published site shows, checked the same way once `operon publish`
+has run.
 
-- `operon web expose <port>` starts a short-lived Cloudflare quick
-  tunnel to a local port. The tunnel client has to run IN the container
-  (a Worker cannot reach the container's localhost), so the image gains
-  the `cloudflared` binary; quick tunnels need no account credential,
-  which keeps the container credential-free. The command yields an
-  ephemeral `https://*.trycloudflare.com` URL the remote browser can
-  reach.
-- If the exposed dev server needs WebSocket/HMR, the tunnel is started
-  with `--protocol=http2`: `cloudflared`'s default QUIC path has
-  dropped `Upgrade: websocket` in the past.
-- The URL is ledgered like a navigation; the tunnel dies with the wake
-  (the entrypoint kills it at teardown, same as every wake process).
-- This keeps one browser, one audit trail, and adds a bonus: the
-  remote browser sees the site exactly as the world will (real TLS,
-  real network), which localhost never shows.
-
-Quick tunnels expose the container port to anyone holding the random
-URL for the tunnel's lifetime; acceptable for a dev server serving the
-agent's own about-to-be-published site, and the wake-scoped teardown
-bounds it. If that posture tightens later, a named tunnel on the
-operator's account with Access in front is the upgrade path.
+Earlier drafts of this spec planned a short-lived Cloudflare quick
+tunnel (`operon web expose`, a `cloudflared` binary in the image) so
+the REMOTE browser could reach the dev server. That path was never
+built and is retired: it exposed a container port to anyone holding a
+random URL, needed a tunnel client in the image, and only ever
+existed because the container had no browser of its own. A dev server
+that must be seen by a logged-in user is a published preview, not a
+tunnel.
 
 ## 8. Egress audit: every request the container makes
 
@@ -849,8 +839,9 @@ are the meter to watch before loosening anything.
    creates one real account end to end (email verification via the
    email door, password minted door-side into the vault, or a passkey),
    operator watches via live view.
-4. **Polish**: live-view link in a notify action, tunnel-based local
-   testing (`operon web expose`), passkey enrollment path.
+4. **Polish**: live-view link in a notify action, passkey enrollment
+   path. (Tunnel-based local testing was planned here and retired by
+   §7: the local browser reads the dev server on loopback.)
 5. **Egress audit** (section 8): full-container request logging for ALL
    traffic (npm, git, ordinary API calls) over
    `interceptOutboundHttps("*")`, observe-only and fail-open, once the
