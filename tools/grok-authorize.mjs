@@ -47,7 +47,7 @@ if (version.status !== 0) {
 }
 
 const home = mkdtempSync(join(tmpdir(), "operon-grok-"));
-try {
+function authorize() {
   console.log(`signing in with a temporary Grok home (${version.stdout.trim()}); use the DEDICATED Grok account, not your own`);
   const login = spawnSync("grok", ["login", ...(deviceAuth ? ["--device-auth"] : [])], {
     stdio: "inherit",
@@ -55,7 +55,7 @@ try {
   });
   if (login.status !== 0) {
     console.error(`grok login exited ${login.status}`);
-    process.exit(1);
+    return 1;
   }
   const authPath = join(home, "auth.json");
   let auth;
@@ -63,14 +63,14 @@ try {
     auth = readFileSync(authPath, "utf8");
   } catch {
     console.error("grok login left no auth.json");
-    process.exit(1);
+    return 1;
   }
   let parsed;
   try {
     parsed = JSON.parse(auth);
   } catch {
     console.error("auth.json is not JSON");
-    process.exit(1);
+    return 1;
   }
   const hasAccess = typeof parsed?.access_token === "string" && parsed.access_token.length > 0;
   const hasIssuerKey =
@@ -85,12 +85,12 @@ try {
     );
   if (!hasAccess && !hasIssuerKey) {
     console.error("auth.json carries no grok login (no access_token, no issuer entry with a key)");
-    process.exit(1);
+    return 1;
   }
   const bytes = statSync(authPath).size;
   if (bytes > 5 * 1024) {
     console.error(`auth.json is ${bytes} bytes; a Cloudflare secret holds at most 5 KB`);
-    process.exit(1);
+    return 1;
   }
   console.log(`login ok (${bytes} bytes); storing MIND_CREDENTIAL_GROK on ${project.workerName("scheduler")} (value never shown)…`);
   execFileSync(
@@ -104,6 +104,13 @@ try {
       "\n  after a sign-out, a revoked session, or a wake that can no longer authenticate. Wake an" +
       "\n  agent on grok with the console's harness picker or the wake tool's harness field."
   );
+  return 0;
+}
+
+let code = 1;
+try {
+  code = authorize();
 } finally {
   rmSync(home, { recursive: true, force: true });
 }
+if (code !== 0) process.exit(code);
