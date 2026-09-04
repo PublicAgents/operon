@@ -232,6 +232,7 @@ describe("renderWorkers reproduces the example colony", () => {
     // policy vars exist for extras and start empty.
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe("[]");
     expect(scheduler.vars.HARNESS_EXTRA_ARGS_CODEX).toBe("[]");
+    expect(scheduler.vars.HARNESS_EXTRA_ARGS_GROK).toBe("[]");
     // The outbound proxy table renders from the manifest's egress block:
     // absent by default, placeholders and all (never a credential) when set.
     expect(scheduler.vars.EGRESS_PROXY).toBeUndefined();

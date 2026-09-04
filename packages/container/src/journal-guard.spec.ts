@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { journalGuardDecision } from "./journal-guard.js";
+import { journalGuardDecision, stopHookActiveFrom } from "./journal-guard.js";
 
 const START = "# Journal\n\n## Wake 22\nDid things.\n";
 const STAMP = "wake fc9dcf85";
@@ -93,5 +93,17 @@ describe("journalGuardDecision", () => {
   it("an empty wake-start journal accepts a first stamped entry", () => {
     expect(journalGuardDecision("", ENTRY, STAMP, false).block).toBe(false);
     expect(journalGuardDecision("", "", STAMP, false).block).toBe(true);
+  });
+});
+
+describe("stopHookActiveFrom", () => {
+  it("reads Claude/Codex snake_case and Grok camelCase, and nothing else", () => {
+    expect(stopHookActiveFrom({ stop_hook_active: true })).toBe(true);
+    expect(stopHookActiveFrom({ stopHookActive: true })).toBe(true);
+    expect(stopHookActiveFrom({ stop_hook_active: false, stopHookActive: true })).toBe(true);
+    expect(stopHookActiveFrom({ stop_hook_active: false })).toBe(false);
+    expect(stopHookActiveFrom({ stopHookActive: "true" })).toBe(false);
+    expect(stopHookActiveFrom({})).toBe(false);
+    expect(stopHookActiveFrom(null)).toBe(false);
   });
 });

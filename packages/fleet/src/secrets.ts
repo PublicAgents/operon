@@ -68,7 +68,9 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
           ? "the dedicated Claude account's setup-token"
           : harness === "codex"
             ? "the dedicated ChatGPT account's codex login (node operon/tools/codex-authorize.mjs) or an API key"
-            : `the credential the "${harness}" harness signs in with`
+            : harness === "grok"
+              ? "the dedicated Grok account's login file (node operon/tools/grok-authorize.mjs) or an API key"
+              : `the credential the "${harness}" harness signs in with`
     });
   }
   add({ worker: "scheduler", name: "SECRET_DENYLIST", purpose: "literals kept off published surfaces (itself secret)" });

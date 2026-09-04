@@ -67,6 +67,7 @@ export const DEPLOY_ORDER = [
 // defaults are empty.
 const HARNESS_EXTRA_ARGS_DEFAULT = "[]";
 const HARNESS_EXTRA_ARGS_CODEX_DEFAULT = "[]";
+const HARNESS_EXTRA_ARGS_GROK_DEFAULT = "[]";
 
 /** Chassis defaults for every policy var the manifest may override. */
 const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
@@ -84,7 +85,8 @@ const POLICY_DEFAULTS: Record<string, Record<string, string>> = {
   browser: { WEB_MAX_CONCURRENT: "3" },
   scheduler: {
     HARNESS_EXTRA_ARGS: HARNESS_EXTRA_ARGS_DEFAULT,
-    HARNESS_EXTRA_ARGS_CODEX: HARNESS_EXTRA_ARGS_CODEX_DEFAULT
+    HARNESS_EXTRA_ARGS_CODEX: HARNESS_EXTRA_ARGS_CODEX_DEFAULT,
+    HARNESS_EXTRA_ARGS_GROK: HARNESS_EXTRA_ARGS_GROK_DEFAULT
   }
 };
 

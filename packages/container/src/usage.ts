@@ -1,8 +1,9 @@
 /**
  * What a wake spent, read from the harness's own stream (spec 0011 §2):
- * Claude Code's final `result` event, Codex's `turn.completed` events
- * summed. Pure parsers over the lines the entrypoint retained; a line
- * that is not the shape expected is skipped, never guessed at.
+ * Claude Code's final `result` event (Grok's streaming-messages-json
+ * uses the same shape), Codex's `turn.completed` events summed. Pure
+ * parsers over the lines the entrypoint retained; a line that is not
+ * the shape expected is skipped, never guessed at.
  */
 
 export interface WakeUsage {

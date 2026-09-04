@@ -109,10 +109,11 @@ and a **harness adapter** in the container implements a small contract:
   the wake prompt additionally instructs the agent to stamp the model into
   its journal. Model identity is checked, never assumed.
 - `runSession(promptFile, logPath)`: one headless invocation (`claude -p`
-  for Claude Code, `codex exec` for Codex CLI, and so on), model pinned,
-  with the adapter responsible for fallback behavior (native flags where
-  the harness has them, retry-with-fallback-model where it does not). A
-  degraded wake beats a missed wake.
+  for Claude Code, `codex exec` for Codex CLI, `grok -p` for Grok Build
+  CLI, and so on), model pinned, with the adapter responsible for
+  fallback behavior (native flags where the harness has them,
+  retry-with-fallback-model where it does not). A degraded wake beats a
+  missed wake.
 
 Everything else in the wake lifecycle (clone, presleep verification, push,
 notify) is harness-independent, and the charter is delivered through the
@@ -127,8 +128,9 @@ mind diversity is an experimental variable like any other.
 Mind auth comes in two modes, chosen per harness:
 
 - **Subscription-direct** (Claude Code with a Claude subscription token,
-  Codex CLI with a ChatGPT subscription login): the dedicated account's
-  token is injected as a secret; calls go straight to the provider.
+  Codex CLI with a ChatGPT subscription login, Grok Build CLI with a
+  Grok subscription login): the dedicated account's token is injected
+  as a secret; calls go straight to the provider.
   **The subscription is the spend cap**: a runaway or compromised agent at
   worst exhausts the plan's usage windows; the bill is flat by
   construction. Subscription auth does not compose with AI Gateway (the
@@ -136,10 +138,10 @@ Mind auth comes in two modes, chosen per harness:
   subscription tokens), so observability for these minds comes from the
   wake log, the scheduler ledger, and the harness's own telemetry.
 - **API-key via AI Gateway**: harnesses that take a base-URL override
-  (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and equivalents) point at the
-  gateway, which injects the stored provider key. These minds get gateway
-  budgets, attribution, and logs; the budget cap replaces the subscription
-  cap.
+  (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GROK_XAI_API_BASE_URL`, and
+  equivalents) point at the gateway, which injects the stored provider
+  key. These minds get gateway budgets, attribution, and logs; the
+  budget cap replaces the subscription cap.
 
 In both modes, the mind credential is the one credential inside the
 container blast radius. It grants inference only: no money, no
@@ -198,9 +200,9 @@ becomes attractive; revisit then (decision 8.1).
 
 ### 5.2 Wake container (Cloudflare Container)
 
-One image per harness: Node 24 + git + that harness's CLI, nothing else.
-The entrypoint is shared; harness-specific steps go through the adapter
-contract (section 4.1). Entrypoint sequence:
+One image carries every adapter's CLI (spec 0010): Node 24 + git + the
+harness CLIs, nothing else. The entrypoint is shared; harness-specific
+steps go through the adapter contract (section 4.1). Entrypoint sequence:
 
 1. Clone the agent's state repo (shallow) using a short-lived credential from
    the GitHub Gatekeeper.
@@ -413,9 +415,9 @@ the primary approval channel.
    documented. For the gateway itself: Unified Billing vs BYOK, pick at
    setup, either satisfies the design.
 1a. **Harness adapter order**: `claude-code` is the reference adapter and
-   ships first; `codex` second; further adapters (Gemini CLI, opencode,
-   others) as demand appears. The adapter contract in 4.1 is the
-   compatibility bar.
+   ships first; `codex` second; `grok` third; further adapters (Gemini
+   CLI, opencode, others) as demand appears. The adapter contract in 4.1
+   is the compatibility bar.
 2. Wake log retention period in R2.
 3. Whether the console ships in milestone 1 or after the first tenant.
 4. Container sizing and hard wall-clock limit per wake.

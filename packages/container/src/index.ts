@@ -5,6 +5,7 @@ export {
   assertEnvClean,
   claudeCode,
   codex,
+  grok,
   EnvNotCleanError,
   AdapterNotImplementedError,
   UnknownHarnessError,

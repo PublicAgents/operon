@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeUsageAccumulator, claudeUsageFrom, codexUsageAccumulator, codexUsageFrom, describeUsage, isUsageLine } from "./usage.js";
 
-describe("claudeUsageFrom (spec 0011)", () => {
+describe("claudeUsageFrom (spec 0011, also Grok streaming-messages-json)", () => {
   it("reads the last result event's totals, cost, turns, duration and model", () => {
     const lines = [
       JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 1 } } }),

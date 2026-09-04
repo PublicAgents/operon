@@ -132,14 +132,17 @@ misspelled grant must fail the check, not silently grant nothing.
 
 ## 4. Reaching an MCP server from a wake
 
-The wake's merged MCP config is written to
-`/home/mind/.operon/mcp.json` (0600, chowned to the mind) and handed
-to the harness with `--mcp-config`. It is NOT written into the state
+The wake's merged MCP config is staged outside the state repo (0600,
+chowned to the mind) and handed to the harness the way that harness
+loads servers: Claude Code as `/home/mind/.operon/mcp.json` with
+`--mcp-config` and `--strict-mcp-config`; Codex as `[mcp_servers]` in
+`$CODEX_HOME/config.toml`; Grok as `[mcp_servers]` in
+`$GROK_HOME/config.toml` (spec 0010). It is NOT written into the state
 repo: the previous `.mcp.json`-in-worktree arrangement committed
 chassis config into the agent's memory every wake, and a config file
 that may one day carry per-server settings must live where `git add
 -A` cannot reach it. The browser server of spec 0004 moves into the
-same merged file.
+same merge.
 
 Entries by type:
 
@@ -346,8 +349,9 @@ read-only PAT it remains a phase-2 option.
   operator decision with a slower loop but the same authority.
 - OAuth done by gatekeeper-mcp itself for `type: http` upstreams; the
   portal covers OAuth upstreams today.
-- Codex MCP staging (its config form differs); declared servers are
-  skipped for that harness with a named log line.
+- Codex and Grok MCP staging shipped with spec 0010 (their config
+  forms differ from Claude Code's `--mcp-config`; each adapter stages
+  the same merge).
 - Runtime (console-editable) grants; grants stay manifest-only until
   spec 0006's doors matrix lands.
 
@@ -381,5 +385,5 @@ read-only PAT it remains a phase-2 option.
 5. gatekeeper-google-analytics.
 6. gatekeeper-mcp with the mock-upstream test matrix (both protocol
    revisions plus hostile upstreams).
-7. Container staging (`--mcp-config`, merged file, wake-start lines),
-   then the hand-run wake AGENTS.md requires.
+7. Container staging (the merged MCP config, per-harness hand-off,
+   wake-start lines), then the hand-run wake AGENTS.md requires.

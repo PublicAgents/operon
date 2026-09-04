@@ -128,8 +128,9 @@ export function assertEnvClean(
 }
 
 /**
- * The chassis hooks in the shape both harnesses read (Claude Code's,
- * which Codex adopted: the same stdin fields, the same stdout envelopes).
+ * The chassis hooks in the shape the harnesses read (Claude Code's,
+ * which Codex and Grok adopted: the same stdout envelopes; stdin
+ * field names differ on Grok, see journal-guard stopHookActiveFrom).
  * matchAll is the "every tool" matcher where the harness wants one
  * spelled out, or undefined where an absent matcher means every tool.
  */

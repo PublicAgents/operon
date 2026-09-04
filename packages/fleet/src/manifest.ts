@@ -52,7 +52,7 @@ export const POLICY_VARS: Record<string, readonly string[]> = {
   "google-analytics": ["GA_PROPERTY_ID"],
   mcp: ["MCP_PORTAL_URL"],
   browser: ["WEB_MAX_CONCURRENT"],
-  scheduler: ["HARNESS_EXTRA_ARGS", "HARNESS_EXTRA_ARGS_CODEX"],
+  scheduler: ["HARNESS_EXTRA_ARGS", "HARNESS_EXTRA_ARGS_CODEX", "HARNESS_EXTRA_ARGS_GROK"],
   asks: ["ASKS_MAX_PER_WAKE", "ASKS_MAX_PER_DAY"]
 };
 
