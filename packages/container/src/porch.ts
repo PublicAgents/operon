@@ -773,7 +773,14 @@ export class Porch {
       return fail(403, "review_not_granted", `granted: ${reviewable.join(", ") || "nothing"}`);
     }
     const payload: Record<string, unknown> = { repo, number, verdict };
-    if (body.bodyFile !== undefined || typeof body.body === "string") {
+    const hasBody = body.bodyFile !== undefined || typeof body.body === "string";
+    if (body.bodyFile !== undefined && typeof body.body === "string") {
+      return fail(400, "ambiguous_body", "one of body or bodyFile, not both");
+    }
+    // The Gatekeeper's rule (spec 0012 §5): request_changes and comment
+    // carry a body. Refused here by the same name, before any round trip.
+    if (verdict !== "approve" && !hasBody) return fail(400, "missing_body", `${verdict} needs a body`);
+    if (hasBody) {
       const { text, error } = await this.sweptText(body.body, body.bodyFile, "body");
       if (error) return error;
       payload.body = text;

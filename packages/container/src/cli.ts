@@ -611,12 +611,16 @@ function parseGithub(args: string[]): CliCall {
       const verdicts = (["--approve", "--request-changes", "--comment"] as const).filter(flag => rest.includes(flag));
       const body = flagValue(rest, "--body");
       const bodyFile = flagValue(rest, "--body-file");
-      if (!repo || !repo.includes("/") || !num || verdicts.length !== 1) {
-        throw new CliUsageError(
-          "usage: operon github review <owner/repo> <number> --approve | --request-changes | --comment [--body <t> | --body-file <f>]"
-        );
-      }
+      const usage = "usage: operon github review <owner/repo> <number> --approve | --request-changes | --comment [--body <t> | --body-file <f>]";
+      if (!repo || !repo.includes("/") || !num || verdicts.length !== 1) throw new CliUsageError(usage);
+      // One body source: with both given, neither can be the one meant.
+      if (body !== undefined && bodyFile !== undefined) throw new CliUsageError(`${usage} (one of --body or --body-file, not both)`);
       const verdict = verdicts[0] === "--approve" ? "approve" : verdicts[0] === "--request-changes" ? "request_changes" : "comment";
+      // A request for changes or a comment says something; the Gatekeeper
+      // refuses missing_body and the round trip is spared here.
+      if (verdict !== "approve" && body === undefined && bodyFile === undefined) {
+        throw new CliUsageError(`${usage} (--request-changes and --comment need a --body or --body-file)`);
+      }
       return {
         path: "/github/review",
         payload: {

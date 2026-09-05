@@ -404,6 +404,10 @@ describe("porch doors", () => {
     expect(((await notMergeable.json()) as { error: string }).error).toBe("merge_not_granted");
     const noReason = await post("close", { repo: "org/registry", number: 3, reason: " " });
     expect(((await noReason.json()) as { error: string }).error).toBe("missing_reason");
+    const noBody = await post("review", { repo: "org/registry", number: 3, verdict: "request_changes" });
+    expect(((await noBody.json()) as { error: string }).error).toBe("missing_body");
+    const twoBodies = await post("review", { repo: "org/registry", number: 3, verdict: "comment", body: "a", bodyFile: "b.md" });
+    expect(((await twoBodies.json()) as { error: string }).error).toBe("ambiguous_body");
     expect(stub.requests).toHaveLength(0);
 
     const approved = await post("review", { repo: "org/registry", number: 3, verdict: "approve" });
