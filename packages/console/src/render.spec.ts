@@ -75,8 +75,8 @@ describe("renderLine", () => {
     expect(
       renderLine(JSON.stringify({ type: "item.completed", item: { type: "file_change", changes: [{ path: "JOURNAL.md", kind: "update" }] } }))
     ).toEqual([{ kind: "tool", text: "files: update JOURNAL.md" }]);
-    expect(renderLine(JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", server: "livevariant", tool: "list_tests" } }))).toEqual([
-      { kind: "tool", text: "livevariant.list_tests()" }
+    expect(renderLine(JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", server: "example", tool: "list_tests" } }))).toEqual([
+      { kind: "tool", text: "example.list_tests()" }
     ]);
     expect(
       renderLine(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 24763, cached_input_tokens: 24448, output_tokens: 122 } }))

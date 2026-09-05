@@ -4,11 +4,11 @@ import { identityForAgent, identityForRecipient } from "./identity.js";
 
 const roster = parseRoster(
   JSON.stringify({
-    zone: "livevariant.ai",
+    zone: "example-colony.com",
     agents: [
       {
         id: "promoter",
-        stateRepo: "livevariant/promoter-state",
+        stateRepo: "example-org/promoter-state",
         cadence: "0 6 * * *",
         harness: "claude-code",
         model: "m",
@@ -19,7 +19,7 @@ const roster = parseRoster(
   })
 );
 
-const DOMAIN = "agents.livevariant.ai";
+const DOMAIN = "agents.example-colony.com";
 
 describe("identityForAgent", () => {
   it("derives the address, name, and site from the subdomain host", () => {
@@ -27,25 +27,25 @@ describe("identityForAgent", () => {
     expect(id).toEqual({
       agentId: "promoter",
       localPart: "prior",
-      address: "prior@agents.livevariant.ai",
+      address: "prior@agents.example-colony.com",
       name: "Prior",
-      siteUrl: "https://prior.livevariant.ai"
+      siteUrl: "https://prior.example-colony.com"
     });
   });
 });
 
 describe("identityForRecipient", () => {
   it("maps a recipient local part back to its agent", () => {
-    expect(identityForRecipient(roster, DOMAIN, "prior@agents.livevariant.ai")?.agentId).toBe(
+    expect(identityForRecipient(roster, DOMAIN, "prior@agents.example-colony.com")?.agentId).toBe(
       "promoter"
     );
-    expect(identityForRecipient(roster, DOMAIN, "Prior@Agents.LiveVariant.ai")?.agentId).toBe(
+    expect(identityForRecipient(roster, DOMAIN, "Prior@Agents.Example-Colony.com")?.agentId).toBe(
       "promoter"
     );
   });
 
   it("rejects unknown local parts and foreign domains", () => {
-    expect(identityForRecipient(roster, DOMAIN, "nobody@agents.livevariant.ai")).toBeNull();
+    expect(identityForRecipient(roster, DOMAIN, "nobody@agents.example-colony.com")).toBeNull();
     expect(identityForRecipient(roster, DOMAIN, "prior@example.com")).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ describe("vaultTokenVar", () => {
 
 describe("validLabel", () => {
   it("accepts identifier-shaped labels", () => {
-    expect(validLabel("livevariant-stats.lv-001")).toBe(true);
+    expect(validLabel("example-stats.lv-001")).toBe(true);
     expect(validLabel("A")).toBe(true);
   });
 

@@ -130,7 +130,7 @@ describe("getThread", () => {
           title: "t",
           state: "open",
           body: "the body",
-          user: { login: "prior-livevariant-bot" },
+          user: { login: "prior-example-bot" },
           pull_request: { merged_at: null }
         });
       if (path === "/repos/org/repo/issues/7/comments?per_page=100")
@@ -152,7 +152,7 @@ describe("getThread", () => {
     const { getThread } = await import("./github.js");
     const thread = await getThread({ token: "pat", userAgent: "test", fetch: fetchImpl }, "org/repo", 7);
     expect(thread.kind).toBe("pr");
-    expect(thread.author).toBe("prior-livevariant-bot");
+    expect(thread.author).toBe("prior-example-bot");
     // Chronological: review (09:00), review-comment (09:10), comment (10:00).
     // The empty COMMENTED container review is dropped.
     expect(thread.items.map(i => i.kind)).toEqual(["review", "review-comment", "comment"]);
@@ -170,9 +170,9 @@ describe("getIssueRef", () => {
       );
       const respond = (d: unknown) => new Response(JSON.stringify(d), { status: 200 });
       if (path === "/repos/org/repo/issues/9")
-        return respond({ user: { login: "prior-livevariant-bot" }, state: "open", pull_request: {} });
+        return respond({ user: { login: "prior-example-bot" }, state: "open", pull_request: {} });
       if (path === "/repos/org/repo/pulls/9")
-        return respond({ head: { ref: "operon/x", repo: { full_name: "prior-livevariant-bot/repo" } } });
+        return respond({ head: { ref: "operon/x", repo: { full_name: "prior-example-bot/repo" } } });
       return new Response("unexpected", { status: 500 });
     }) as typeof fetch;
 
@@ -180,9 +180,9 @@ describe("getIssueRef", () => {
     const ref = await getIssueRef({ token: "pat", userAgent: "test", fetch: fetchImpl }, "org/repo", 9);
     expect(ref).toEqual({
       kind: "pr",
-      author: "prior-livevariant-bot",
+      author: "prior-example-bot",
       state: "open",
-      headRepo: "prior-livevariant-bot/repo",
+      headRepo: "prior-example-bot/repo",
       headBranch: "operon/x"
     });
   });

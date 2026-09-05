@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest";
 import { bindingFor, fleetOf, resolveProject, wakeTokenVar } from "./fleet.js";
 
 const ENV = {
-  HOST_PROJECT: "livevariant",
-  HOST_ZONE: "livevariant.ai",
+  HOST_PROJECT: "example",
+  HOST_ZONE: "example-colony.com",
   WORKER_NAME_PREFIX: "operon-",
-  DEFAULT_PROJECT: "livevariant",
+  DEFAULT_PROJECT: "example",
   PROJECTS: JSON.stringify([{ project: "second-one", zone: "second.example", workerPrefix: "operon-second-one" }])
 };
 
 describe("fleetOf", () => {
   it("lists the host first, then the enrolled projects, with the default", () => {
     expect(fleetOf(ENV)).toEqual({
-      host: "livevariant",
-      defaultProject: "livevariant",
+      host: "example",
+      defaultProject: "example",
       projects: [
-        { project: "livevariant", zone: "livevariant.ai", workerPrefix: "operon" },
+        { project: "example", zone: "example-colony.com", workerPrefix: "operon" },
         { project: "second-one", zone: "second.example", workerPrefix: "operon-second-one" }
       ]
     });
@@ -36,7 +36,7 @@ describe("resolveProject", () => {
   const fleet = fleetOf(ENV);
 
   it("fills an omitted project with the default and resolves a named one", () => {
-    expect(resolveProject(fleet, undefined).project).toBe("livevariant");
+    expect(resolveProject(fleet, undefined).project).toBe("example");
     expect(resolveProject(fleet, "second-one").project).toBe("second-one");
   });
 
@@ -46,7 +46,7 @@ describe("resolveProject", () => {
       resolveProject(fleet, "third");
     } catch (error) {
       expect((error as { status: number }).status).toBe(404);
-      expect((error as { payload: { enrolled: string[] } }).payload.enrolled).toEqual(["livevariant", "second-one"]);
+      expect((error as { payload: { enrolled: string[] } }).payload.enrolled).toEqual(["example", "second-one"]);
     }
   });
 });

@@ -4,10 +4,10 @@ import { requiredSecrets, secretsByWorker } from "./secrets.js";
 
 const BASE = {
   project: "demo",
-  accountId: "85c7962b4a17a841ef0689e0e7c2a050",
+  accountId: "0123456789abcdef0123456789abcdef",
   access: {
     teamDomain: "https://demo.cloudflareaccess.com",
-    aud: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025"
+    aud: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
   zone: "demo.example",
   agents: [

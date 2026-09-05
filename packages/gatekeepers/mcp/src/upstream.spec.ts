@@ -190,7 +190,7 @@ describe("catalogRevision", () => {
  * structuredContent of every call. The validator must be one that
  * INTERPRETS schemas: the SDK's default compiles them with
  * new Function, which the Workers runtime refuses, and the first live
- * upstream with output schemas (livevariant.com) failed every call
+ * upstream with output schemas (example.com) failed every call
  * that way. Node allows codegen, so these tests cannot catch a
  * regression to the default validator by themselves; they prove the
  * interpreting validator validates, and the wrangler probe in the PR

@@ -21,7 +21,7 @@ function fakeContext(overrides: Partial<ToolContext> = {}): { context: ToolConte
   const calls: Call[] = [];
   const context: ToolContext = {
     operator: "op@example.test",
-    project: "livevariant",
+    project: "example",
     async ops(binding, method, path, options) {
       calls.push({ kind: "ops", binding, method, path, body: options?.body, query: options?.query });
       return { ok: true };

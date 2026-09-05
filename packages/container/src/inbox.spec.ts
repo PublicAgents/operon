@@ -81,13 +81,13 @@ describe.skipIf(!hasGitleaks)("sanitizeInboxFiles (integration, local gitleaks)"
     // persistence.
     const m = message({
       text:
-        "The build failed on livevariant#72.\n" +
+        "The build failed on example#72.\n" +
         `Manage notifications: https://github.com/settings/?token=${FAKE_PAT}\n` +
         "GitHub"
     });
     const { files, sanitized } = await sanitizeInboxFiles([m], [], gitleaks);
     expect(sanitized).toEqual([files[0].name]);
-    expect(files[0].content).toContain("The build failed on livevariant#72.");
+    expect(files[0].content).toContain("The build failed on example#72.");
     expect(files[0].content).toContain("GitHub");
     expect(files[0].content).toContain("[line withheld at delivery");
     expect(files[0].content).not.toContain(FAKE_PAT);

@@ -331,7 +331,7 @@ agent.
 ## 13. Order of work
 
 1. Manifest schema and template rendering in the chassis; `deploy
-   --check` validation against the schema (the livevariant colony
+   --check` validation against the schema (the reference colony, livevariant,
    migrates first and its `workers/` directory is deleted).
 2. Doors matrix: manifest baseline, scheduler wiring enforcement,
    registry tools, console toggles.

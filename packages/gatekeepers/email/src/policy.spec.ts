@@ -39,10 +39,10 @@ describe("decideSend", () => {
 
 describe("disclosure", () => {
   it("always states it is an AI agent and software-sent", () => {
-    const footer = disclosureFooter("Prior", "prior@agents.livevariant.ai", "https://prior.livevariant.ai");
+    const footer = disclosureFooter("Prior", "prior@agents.example-colony.com", "https://prior.example-colony.com");
     expect(footer).toMatch(/autonomous AI agent/);
     expect(footer).toMatch(/sent by software, not a person/);
-    expect(footer).toContain("prior@agents.livevariant.ai");
+    expect(footer).toContain("prior@agents.example-colony.com");
   });
 
   it("from name signals non-human", () => {
