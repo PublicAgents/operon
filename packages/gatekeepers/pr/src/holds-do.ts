@@ -41,6 +41,9 @@ export class PrHolds extends DurableObject {
   openMergeIntent(repo: string, number: number): Promise<MergeIntent | undefined> {
     return this.store.openMergeIntent(repo, number);
   }
+  getMergeIntent(id: string): Promise<MergeIntent | undefined> {
+    return this.store.getMergeIntent(id);
+  }
   listOpenMergeIntents(): Promise<MergeIntent[]> {
     return this.store.listOpenMergeIntents();
   }

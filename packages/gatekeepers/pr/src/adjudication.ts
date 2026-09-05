@@ -193,17 +193,16 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
   // the anomaly loudly, rather than the registry showing a merged head
   // as rejected.
   const earlier = await deps.holds.terminal(intent.repo, intent.number, intent.headSha);
-  if (state.merged && earlier?.outcome === "rejected") {
-    await deps.ledger.append("merge_after_rejection", { ...base, rejectedAt: earlier.at, reason: earlier.reason, mergeCommitSha: state.mergeCommitSha });
-  }
+  const anomaly = state.merged && earlier?.outcome === "rejected" ? { rejectedAt: earlier.at, reason: earlier.reason } : undefined;
   // The intent's terminal state, the head's terminal record and the
   // hold it came from settle in ONE store turn: a hold whose approval
   // merged (or was overtaken) is deleted, one whose attempt provably
   // did not merge is given back. Nothing here is best-effort: a failed
   // settle leaves the intent open, and the next reconciliation retries.
   // settleMerge is single-winner: a concurrent reconciliation of the
-  // same intent gets nothing back and ledgers nothing.
-  const settledElsewhere = async () => (await deps.holds.openMergeIntent(intent.repo, intent.number)) ?? { ...intent, state: "failed" as const };
+  // same intent gets nothing back, ledgers nothing, and reports what
+  // the winner wrote (read back, never fabricated).
+  const settledElsewhere = async () => (await deps.holds.getMergeIntent(intent.id)) ?? intent;
   if (state.merged && state.headSha === intent.headSha) {
     const mergeSha = state.mergeCommitSha ?? "unknown";
     const resolved = await deps.holds.settleMerge(intent.id, { state: "merged", mergeSha }, at, {
@@ -211,6 +210,8 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
       hold: "delete"
     });
     if (!resolved) return settledElsewhere();
+    // Only the winner names the anomaly, once.
+    if (anomaly) await deps.ledger.append("merge_after_rejection", { ...base, ...anomaly, mergeCommitSha: state.mergeCommitSha });
     await deps.ledger.append("pr_merged", { ...base, mode: intent.mode, mergeSha, heldId: intent.heldId });
     return resolved;
   }
@@ -222,6 +223,7 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
       { terminal: { ...terminalBase(intent, at), outcome: "superseded", by: "unknown" }, hold: "delete" }
     );
     if (!resolved) return settledElsewhere();
+    if (anomaly) await deps.ledger.append("merge_after_rejection", { ...base, ...anomaly, mergeCommitSha: state.mergeCommitSha });
     await deps.ledger.append("merge_superseded", { ...base, mergedHead: state.headSha });
     return resolved;
   }

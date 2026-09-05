@@ -209,6 +209,10 @@ export class HoldStore {
     return undefined;
   }
 
+  async getMergeIntent(id: string): Promise<MergeIntent | undefined> {
+    return this.storage.get<MergeIntent>(intentKey(id));
+  }
+
   /** Every merge intent that is pending or unknown, across pull requests. */
   async listOpenMergeIntents(): Promise<MergeIntent[]> {
     const out: MergeIntent[] = [];

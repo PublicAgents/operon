@@ -6,6 +6,7 @@ import {
   closeMarker,
   listHeld,
   mergeDoor,
+  reconcileIntent,
   rejectHeld,
   resolveIdentities,
   reviewDoor,
@@ -131,10 +132,31 @@ interface GithubState {
   mergePayload?: { sha: string; merge_method: string };
 }
 
+/**
+ * A Durable Object runs one call at a time (its input gate holds other
+ * events while a call awaits storage), which is what makes the store's
+ * turns atomic. The in-memory store has no such gate, so the harness
+ * serializes every call the way the DO would.
+ */
+function serialized(store: HoldStore): HoldStore {
+  let chain: Promise<unknown> = Promise.resolve();
+  return new Proxy(store, {
+    get(target, key) {
+      const value = Reflect.get(target, key) as unknown;
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const run = chain.then(() => (value as (...a: unknown[]) => unknown).apply(target, args));
+        chain = run.catch(() => undefined);
+        return run;
+      };
+    }
+  });
+}
+
 function harness(over: Partial<GithubState> = {}) {
   const gh = github(over);
   let n = 0;
-  const holds = new HoldStore(memoryStorage(), () => `hold-${(n += 1)}`);
+  const holds = serialized(new HoldStore(memoryStorage(), () => `hold-${(n += 1)}`));
   const ledger: Array<{ kind: string; data: Record<string, unknown> }> = [];
   const notes: Array<{ text: string; actions?: OperatorAction[] }> = [];
   let clock = Date.parse("2026-09-05T10:00:00Z");
@@ -512,6 +534,21 @@ describe("the operator's surface (spec 0012 §8)", () => {
     // With one, the intent reconciles (not merged) and the rejection lands.
     const withApi = await rejectHeld(operatorDeps, { heldId: "hold-1", reason: "no", apiFor: () => h.deps.api });
     expect(withApi.body).toMatchObject({ status: "rejected" });
+  });
+
+  it("two reconciliations of one intent settle once: one ledger row, the loser reports the winner's result", async () => {
+    const h = harness();
+    h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
+    await mergeDoor(h.deps, h.mergeInput);
+    h.gh.state.merged = true;
+    h.gh.state.state = "closed";
+    h.gh.state.mergeCommitSha = "merge-sha";
+    h.advance(UNKNOWN_GRACE_MS + 1000);
+    const open = (await h.holds.openMergeIntent(REPO, 7))!;
+    const [a, b] = await Promise.all([reconcileIntent(h.deps, open), reconcileIntent(h.deps, open)]);
+    expect(a).toMatchObject({ state: "merged", mergeSha: "merge-sha" });
+    expect(b).toMatchObject({ state: "merged", mergeSha: "merge-sha" });
+    expect(h.kinds().filter(kind => kind === "pr_merged")).toHaveLength(1);
   });
 
   it("a merge that lands after a rejection corrects the record and names the anomaly", async () => {
