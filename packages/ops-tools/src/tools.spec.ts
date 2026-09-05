@@ -61,6 +61,7 @@ describe("the registry", () => {
       "ledger_recent", "audit_recent", "channel_send", "channel_transcript",
       "till_offers", "spend_outbox", "spend_held", "spend_approve", "spend_reject", "spend_reconcile",
       "email_outbox", "email_held", "email_approve", "email_reject",
+      "merge_held", "merge_approve", "merge_reject",
       "web_sessions", "web_live_view", "web_screenshot", "web_session_delete",
       "secret_list", "secret_set", "secret_rotate_group",
       "ask_list", "ask_read", "ask_decide", "ask_reply"

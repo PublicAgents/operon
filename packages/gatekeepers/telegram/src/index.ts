@@ -26,9 +26,10 @@ interface Env {
   WAKE_TRIGGER_TOKEN?: string;
   OPERATOR_CHAT_ID?: string;
   ROSTER?: string;
-  /** email + spend Gatekeepers over service bindings (their Ops entrypoints). */
+  /** email, spend and pr Gatekeepers over service bindings (their Ops entrypoints). */
   EMAIL?: Fetcher;
   SPEND?: Fetcher;
+  PR?: Fetcher;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -64,6 +65,7 @@ const OPERATOR_HELP =
   "/wake <agent-id> — wake an agent now\n" +
   "/tell <agent-id> <message> — message one agent (delivered on its next wake)\n" +
   "/approve <agent-id> <held-id> — release a held first-contact email (buttons on the hold message do this too)\n" +
+  "Held spends and merges: the buttons on the hold message decide them; a held CODE merge also needs your review on GitHub first\n" +
   "/reject <agent-id> <held-id> — discard a held email\n" +
   "/disable <agent-id> — KILL SWITCH: refuse all wakes (cron and manual) and kill a wake in flight\n" +
   "/enable <agent-id> — lift the kill switch\n" +
@@ -82,7 +84,25 @@ const ACTION_PREFIXES: Record<string, string> = {
   email_approve: "ea",
   email_reject: "er",
   spend_approve: "sa",
-  spend_reject: "sr"
+  spend_reject: "sr",
+  merge_approve: "ma",
+  merge_reject: "mr"
+};
+
+/** Which Gatekeeper a decision prefix reaches, and where its Ops doors live. */
+type HeldGate = "email" | "spend" | "merge";
+const GATES: Record<HeldGate, { binding: (env: Env) => Fetcher | undefined; base: string }> = {
+  email: { binding: env => env.EMAIL, base: "/gatekeeper/email" },
+  spend: { binding: env => env.SPEND, base: "/gatekeeper/spend" },
+  merge: { binding: env => env.PR, base: "/gatekeeper/pr" }
+};
+const GATE_BY_PREFIX: Record<string, { gate: HeldGate; approve: boolean }> = {
+  ea: { gate: "email", approve: true },
+  er: { gate: "email", approve: false },
+  sa: { gate: "spend", approve: true },
+  sr: { gate: "spend", approve: false },
+  ma: { gate: "merge", approve: true },
+  mr: { gate: "merge", approve: false }
 };
 
 function callbackData(action: NotifyAction): string | null {
@@ -128,10 +148,10 @@ async function answerCallback(env: Env, callbackId: string, text: string): Promi
   }).catch(() => undefined);
 }
 
-/** Execute an approve/reject against the email or spend Gatekeeper. */
+/** Execute an approve/reject against the email, spend or pr Gatekeeper. */
 async function heldDecision(
   env: Env,
-  gate: "email" | "spend",
+  gate: HeldGate,
   approve: boolean,
   agentId: string,
   heldId: string
@@ -140,9 +160,9 @@ async function heldDecision(
   // The decision goes over a private service binding to the Gatekeeper's
   // binding-only Ops entrypoint: no bearer on the wire, and only workers
   // with the binding (this one and the ops gateway) can execute it.
-  const binding = gate === "email" ? env.EMAIL : env.SPEND;
+  const binding = GATES[gate].binding(env);
   if (!binding) return { ok: false, detail: `${gate} gatekeeper not bound` };
-  const response = await binding.fetch(`https://internal/gatekeeper/${gate}/${verb}`, {
+  const response = await binding.fetch(`https://internal${GATES[gate].base}/${verb}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agentId, heldId })
@@ -275,18 +295,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "callback": {
-      const match = /^(ea|er|sa|sr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
+      const match = /^(ea|er|sa|sr|ma|mr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
       if (!match) {
         await answerCallback(env, action.callbackId, "unknown action");
         return json({ ok: true });
       }
-      const approve = match[1] === "ea" || match[1] === "sa";
-      const gate = match[1].startsWith("e") ? ("email" as const) : ("spend" as const);
+      const { gate, approve } = GATE_BY_PREFIX[match[1]];
       const result = await heldDecision(env, gate, approve, match[2], match[3]);
       await answerCallback(
         env,
         action.callbackId,
-        result.ok ? (approve ? "Approved, sending" : "Rejected") : `Failed: ${result.detail.slice(0, 100)}`
+        result.ok ? (approve ? "Approved, executing" : "Rejected") : `Failed: ${result.detail.slice(0, 100)}`
       );
       await sendToOperator(
         env,

@@ -465,7 +465,9 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         services: [
           service("SCHEDULER", "scheduler"),
           service("EMAIL", "gatekeeper-email", "Ops"),
-          service("SPEND", "gatekeeper-spend", "Ops")
+          service("SPEND", "gatekeeper-spend", "Ops"),
+          // Held merges (spec 0012 §8) are decided the same way.
+          service("PR", "gatekeeper-pr", "Ops")
         ]
       }
     },

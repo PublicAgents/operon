@@ -347,3 +347,22 @@ tr.decision td { background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .span-bar { position: absolute; top: 0; height: 100%; background: var(--accent); border-radius: 3px; }
 .span-row.status-error .span-bar { background: var(--danger); }
 .span-ms { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Held merges (spec 0012 §8): the paths outside the data directories, and recent decisions. */
+.held-paths {
+  margin: 0.25rem 0 0.5rem 1.25rem;
+  padding: 0;
+  font-size: 0.85em;
+}
+.held-paths li {
+  margin: 0;
+}
+.held-history {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line, #ddd);
+  opacity: 0.85;
+}
+.held-history .held-facts {
+  margin-bottom: 0.25rem;
+}

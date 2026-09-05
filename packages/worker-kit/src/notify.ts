@@ -8,7 +8,7 @@
 
 export interface OperatorAction {
   label: string;
-  /** email_approve | email_reject | spend_approve | spend_reject. */
+  /** email_approve | email_reject | spend_approve | spend_reject | merge_approve | merge_reject. */
   kind: string;
   agentId: string;
   id: string;
