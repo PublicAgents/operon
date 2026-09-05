@@ -6,9 +6,9 @@
   // The wake reaches /send, /pull, /approve over HTTPS, so a public host.
   // Inbound mail arrives via an Email Routing rule (configured in the
   // dashboard) that points the agents.<zone> catch-all at this Worker.
-  // No route here: the fleet templates render every deployment's routes
-  // from its manifest (spec 0006). Nothing deployment-specific belongs
-  // in this file.
+  // No route here: wake traffic uses the private umbilical service binding,
+  // while inbound Email Routing targets this Worker by name. Nothing
+  // deployment-specific belongs in this file.
   "workers_dev": false,
   "send_email": [{ "name": "EMAIL" }],
   "durable_objects": {
