@@ -3,22 +3,22 @@ import { validateManifest } from "./manifest.js";
 import { renderWorkers, mcpBindings, DEPLOY_ORDER, D1_PLACEHOLDER } from "./templates.js";
 
 /**
- * The golden test: fed the livevariant colony's manifest, the templates
- * must reproduce the hand-written workers/ directory this package
- * retires, fact for load-bearing fact. When this spec and the live
- * colony disagree, the MIGRATION is wrong, not the colony.
+ * The golden test: fed a colony manifest with every block in use, the
+ * templates must reproduce the worker configs fact for load-bearing
+ * fact. The values are an example colony's (no real account, zone or
+ * identifier appears here); the shape is the reference colony's.
  */
 
 const RAW = {
-  project: "livevariant",
-  accountId: "85c7962b4a17a841ef0689e0e7c2a050",
+  project: "example",
+  accountId: "0123456789abcdef0123456789abcdef",
   workerPrefix: "operon",
-  operatorEmail: "michael@krens.nl",
+  operatorEmail: "operator@example-colony.com",
   access: {
-    teamDomain: "https://floral-shape-360c.cloudflareaccess.com",
-    aud: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025"
+    teamDomain: "https://example-colony.cloudflareaccess.com",
+    aud: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
-  resources: { d1Name: "operon-chronicle", siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa" },
+  resources: { d1Name: "operon-chronicle", siteStoreKvId: "fedcba9876543210fedcba9876543210" },
   policy: {
     spend: {
       SPEND_MAX_TX: "0.10",
@@ -37,14 +37,14 @@ const RAW = {
     },
     x: { X_DISCLOSURE_ATTESTED: "true", X_DAILY_CAP: "4" },
     pr: {
-      PR_REPOS: "livevariant/livevariant,PublicAgents/operon,PublicAgents/colony,punkpeye/awesome-mcp-servers"
+      PR_REPOS: "example-org/product,example-org/operon,example-org/colony,punkpeye/awesome-mcp-servers"
     }
   },
-  zone: "livevariant.ai",
+  zone: "example-colony.com",
   agents: [
     {
       id: "promoter",
-      stateRepo: "livevariant/promoter-state",
+      stateRepo: "example-org/promoter-state",
       cadence: "0 6,12,18 * * *",
       harness: "claude-code",
       model: "claude-fable-5",
@@ -60,15 +60,15 @@ const LIVEVARIANT = validateManifest(RAW);
 const CHASSIS = "../../operon";
 const rendered = renderWorkers(LIVEVARIANT, {
   chassisDir: CHASSIS,
-  d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
-  siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+  d1DatabaseId: "00000000-0000-4000-8000-000000000000",
+  siteStoreKvId: "fedcba9876543210fedcba9876543210"
 });
 const byKey = Object.fromEntries(rendered.map(worker => [worker.key, worker.config])) as Record<
   string,
   Record<string, any>
 >;
 
-describe("renderWorkers reproduces the livevariant colony", () => {
+describe("renderWorkers reproduces the example colony", () => {
   it("renders every worker in the chassis deploy order (ops last)", () => {
     expect(rendered.map(worker => worker.key)).toEqual([...DEPLOY_ORDER]);
     // A Worker must exist before another binds it: everything the
@@ -115,13 +115,13 @@ describe("renderWorkers reproduces the livevariant colony", () => {
   it("derives routes from the zone, including the till's apex plus agent hosts", () => {
     expect(byKey["gatekeeper-email"].routes).toBeUndefined();
     expect(byKey["gatekeeper-till"].routes).toEqual([
-      { pattern: "livevariant.ai", custom_domain: true },
-      { pattern: "prior.livevariant.ai", custom_domain: true }
+      { pattern: "example-colony.com", custom_domain: true },
+      { pattern: "prior.example-colony.com", custom_domain: true }
     ]);
     expect(byKey["gatekeeper-telegram"].routes).toEqual([
-      { pattern: "tg.livevariant.ai", custom_domain: true }
+      { pattern: "tg.example-colony.com", custom_domain: true }
     ]);
-    expect(byKey["gatekeeper-ops"].routes).toEqual([{ pattern: "ops.livevariant.ai", custom_domain: true }]);
+    expect(byKey["gatekeeper-ops"].routes).toEqual([{ pattern: "ops.example-colony.com", custom_domain: true }]);
     expect(byKey["gatekeeper-browser"].routes).toBeUndefined();
     expect(byKey["gatekeeper-deploy"].routes).toBeUndefined();
   });
@@ -172,13 +172,13 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(byKey["gatekeeper-x"].routes).toBeUndefined();
     expect(byKey["gatekeeper-asks"].routes).toBeUndefined();
     expect(ops.vars).toEqual({
-      ACCESS_TEAM_DOMAIN: "https://floral-shape-360c.cloudflareaccess.com",
-      ACCESS_AUD: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025",
-      CF_ACCOUNT_ID: "85c7962b4a17a841ef0689e0e7c2a050",
+      ACCESS_TEAM_DOMAIN: "https://example-colony.cloudflareaccess.com",
+      ACCESS_AUD: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      CF_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
       WORKER_NAME_PREFIX: "operon-",
-      HOST_PROJECT: "livevariant",
-      HOST_ZONE: "livevariant.ai",
-      DEFAULT_PROJECT: "livevariant",
+      HOST_PROJECT: "example",
+      HOST_ZONE: "example-colony.com",
+      DEFAULT_PROJECT: "example",
       PROJECTS: "[]"
     });
   });
@@ -215,7 +215,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.triggers).toEqual({ crons: ["0 6,12,18 * * *"] });
     expect(scheduler.vars.NOTIFY_URL).toBeUndefined();
     expect(scheduler.vars.PERSIST_URL).toBeUndefined();
-    expect(scheduler.vars.PR_REPOS).toContain("PublicAgents/operon");
+    expect(scheduler.vars.PR_REPOS).toContain("example-org/operon");
     // The autonomy flags are the adapters' own (spec 0010 §2); the
     // policy vars exist for extras and start empty.
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe("[]");
@@ -227,8 +227,8 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     const proxy = { "*": "general", "*.registry.example": "direct" };
     const withEgress = renderWorkers(validateManifest({ ...RAW, egress: { proxies, proxy } }), {
       chassisDir: CHASSIS,
-      d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
-      siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+      d1DatabaseId: "00000000-0000-4000-8000-000000000000",
+      siteStoreKvId: "fedcba9876543210fedcba9876543210"
     }).find(worker => worker.key === "scheduler")?.config as Record<string, any>;
     expect(JSON.parse(withEgress.vars.EGRESS_PROXY as string)).toEqual({ proxies, routes: proxy });
     expect(withEgress.vars.EGRESS_BLOCKLIST).toBeUndefined();
@@ -238,8 +238,8 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     const blocklist = ["tracker.example", "*.ads.example"];
     const workers = renderWorkers(validateManifest({ ...RAW, egress: { blocklist } }), {
       chassisDir: CHASSIS,
-      d1DatabaseId: "2dade210-aa9f-463d-903c-b4e4a29ee337",
-      siteStoreKvId: "af5f7f9897c6487db5f487ccad85a7aa"
+      d1DatabaseId: "00000000-0000-4000-8000-000000000000",
+      siteStoreKvId: "fedcba9876543210fedcba9876543210"
     });
     const config = (key: string) => workers.find(worker => worker.key === key)?.config as Record<string, any>;
     expect(config("gatekeeper-browser").vars.WEB_ORIGIN_DENYLIST).toBe("tracker.example,*.ads.example");
@@ -278,11 +278,11 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     });
     expect(byKey["gatekeeper-spend"].vars.NOTIFY_URL).toBeUndefined();
     expect(byKey["gatekeeper-email"].vars).toEqual({
-      EMAIL_DOMAIN: "livevariant.ai",
-      OPERATOR_EMAIL: "michael@krens.nl"
+      EMAIL_DOMAIN: "example-colony.com",
+      OPERATOR_EMAIL: "operator@example-colony.com"
     });
     expect(byKey["gatekeeper-browser"].vars).toEqual({
-      CF_ACCOUNT_ID: "85c7962b4a17a841ef0689e0e7c2a050",
+      CF_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
       WEB_MAX_CONCURRENT: "3",
       WEB_ORIGIN_DENYLIST: ""
     });
@@ -300,7 +300,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
           {
             binding: "CHRONICLE_DB",
             database_name: "operon-chronicle",
-            database_id: "2dade210-aa9f-463d-903c-b4e4a29ee337"
+            database_id: "00000000-0000-4000-8000-000000000000"
           }
         ]);
       } else {
@@ -308,7 +308,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
           {
             binding: "CHRONICLE",
             database_name: "operon-chronicle",
-            database_id: "2dade210-aa9f-463d-903c-b4e4a29ee337",
+            database_id: "00000000-0000-4000-8000-000000000000",
             migrations_dir: `${CHASSIS}/packages/chronicle/migrations`
           }
         ]);
@@ -327,12 +327,12 @@ describe("MCP server bindings (spec 0008 §4)", () => {
   // A validated manifest plus MCP defs, assembled the way the fleet
   // does: parseRoster owns the roster half, so reuse LIVEVARIANT's.
   const withMcp = validateManifest({
-    project: "livevariant",
-    accountId: "85c7962b4a17a841ef0689e0e7c2a050",
+    project: "example",
+    accountId: "0123456789abcdef0123456789abcdef",
     workerPrefix: "operon",
     access: {
-      teamDomain: "https://floral-shape-360c.cloudflareaccess.com",
-      aud: "885307dbdffd16d85609cecf4cb88f6119ce65a041540315ae9ad26b13d69025"
+      teamDomain: "https://example-colony.cloudflareaccess.com",
+      aud: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     },
     resources: { d1Name: "operon-chronicle" },
     zone: LIVEVARIANT.roster.zone,
@@ -403,8 +403,8 @@ describe("private by construction (spec 0009)", () => {
       expect(byKey[key].routes, key).toBeUndefined();
     }
     // The three public surfaces keep theirs.
-    expect(byKey["gatekeeper-telegram"].routes).toEqual([{ pattern: "tg.livevariant.ai", custom_domain: true }]);
-    expect(byKey["gatekeeper-ops"].routes).toEqual([{ pattern: "ops.livevariant.ai", custom_domain: true }]);
+    expect(byKey["gatekeeper-telegram"].routes).toEqual([{ pattern: "tg.example-colony.com", custom_domain: true }]);
+    expect(byKey["gatekeeper-ops"].routes).toEqual([{ pattern: "ops.example-colony.com", custom_domain: true }]);
     expect(byKey["gatekeeper-till"].routes?.length).toBeGreaterThan(0);
   });
 

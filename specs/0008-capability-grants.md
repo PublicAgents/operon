@@ -93,6 +93,7 @@ agents:
   - id: promoter
     mcp: [google-analytics]
     github:
+      # the reference colony's own values, as an example
       pr: [livevariant/livevariant, PublicAgents/operon]
       write: [livevariant/livevariant]
 

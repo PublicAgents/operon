@@ -92,22 +92,22 @@ describe("operon CLI parsing", () => {
   it("parses the till doors", () => {
     expect(
       parseArgs([
-        "till", "offer", "prior.livevariant.ai", "/reports/weekly.html",
+        "till", "offer", "prior.example-colony.com", "/reports/weekly.html",
         "--price", "0.05", "--currency", "0xtoken", "--description", "Weekly report"
       ])
     ).toEqual({
       path: "/till/offer",
       payload: {
-        host: "prior.livevariant.ai",
+        host: "prior.example-colony.com",
         path: "/reports/weekly.html",
         price: "0.05",
         currency: "0xtoken",
         description: "Weekly report"
       }
     });
-    expect(parseArgs(["till", "retire", "prior.livevariant.ai", "/reports/weekly.html"])).toEqual({
+    expect(parseArgs(["till", "retire", "prior.example-colony.com", "/reports/weekly.html"])).toEqual({
       path: "/till/retire",
-      payload: { host: "prior.livevariant.ai", path: "/reports/weekly.html" }
+      payload: { host: "prior.example-colony.com", path: "/reports/weekly.html" }
     });
     expect(parseArgs(["till", "sales"])).toEqual({ path: "/till/sales", payload: {} });
     expect(() => parseArgs(["till", "offer", "h", "nopath", "--price", "1"])).toThrowError(

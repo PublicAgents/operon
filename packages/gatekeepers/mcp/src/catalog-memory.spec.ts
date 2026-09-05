@@ -15,22 +15,22 @@ describe("CatalogMemory", () => {
   it("writes a revision once per agent and server, and again only when it changes", async () => {
     const memory = new CatalogMemory();
     const { state, append } = counter();
-    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
-    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(false);
-    expect(await memory.record("promoter", "livevariant", "bbbb", append)).toBe(true);
-    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
+    expect(await memory.record("promoter", "example", "aaaa", append)).toBe(true);
+    expect(await memory.record("promoter", "example", "aaaa", append)).toBe(false);
+    expect(await memory.record("promoter", "example", "bbbb", append)).toBe(true);
+    expect(await memory.record("promoter", "example", "aaaa", append)).toBe(true);
     expect(state.writes).toBe(3);
   });
 
   it("does not remember a revision whose append failed", async () => {
     const memory = new CatalogMemory();
     await expect(
-      memory.record("promoter", "livevariant", "aaaa", async () => {
+      memory.record("promoter", "example", "aaaa", async () => {
         throw new Error("ledger down");
       })
     ).rejects.toThrow("ledger down");
     const { state, append } = counter();
-    expect(await memory.record("promoter", "livevariant", "aaaa", append)).toBe(true);
+    expect(await memory.record("promoter", "example", "aaaa", append)).toBe(true);
     expect(state.writes).toBe(1);
   });
 
@@ -43,12 +43,12 @@ describe("CatalogMemory", () => {
         writes += 1;
         release = resolve;
       });
-    const first = memory.record("promoter", "livevariant", "aaaa", slow);
-    const second = memory.record("promoter", "livevariant", "aaaa", slow);
+    const first = memory.record("promoter", "example", "aaaa", slow);
+    const second = memory.record("promoter", "example", "aaaa", slow);
     release();
     expect(await Promise.all([first, second])).toEqual([true, true]);
     expect(writes).toBe(1);
-    expect(await memory.record("promoter", "livevariant", "aaaa", slow)).toBe(false);
+    expect(await memory.record("promoter", "example", "aaaa", slow)).toBe(false);
   });
 
   it("keeps two revisions of one pair in flight apart", async () => {
@@ -60,10 +60,10 @@ describe("CatalogMemory", () => {
         writes += 1;
         releases.push(resolve);
       });
-    const a1 = memory.record("promoter", "livevariant", "aaaa", slow);
-    const b1 = memory.record("promoter", "livevariant", "bbbb", slow);
+    const a1 = memory.record("promoter", "example", "aaaa", slow);
+    const b1 = memory.record("promoter", "example", "bbbb", slow);
     // A third caller for the first revision joins ITS flight, not the second's.
-    const a2 = memory.record("promoter", "livevariant", "aaaa", slow);
+    const a2 = memory.record("promoter", "example", "aaaa", slow);
     expect(writes).toBe(2);
     for (const release of releases) release();
     expect(await Promise.all([a1, b1, a2])).toEqual([true, true, true]);
@@ -77,8 +77,8 @@ describe("CatalogMemory", () => {
       new Promise<void>(resolve => {
         releases.set(tag, resolve);
       });
-    const older = memory.record("promoter", "livevariant", "aaaa", slow("a"));
-    const newer = memory.record("promoter", "livevariant", "bbbb", slow("b"));
+    const older = memory.record("promoter", "example", "aaaa", slow("a"));
+    const newer = memory.record("promoter", "example", "bbbb", slow("b"));
     releases.get("b")?.();
     await newer;
     releases.get("a")?.();
@@ -88,8 +88,8 @@ describe("CatalogMemory", () => {
     const count = async () => {
       writes += 1;
     };
-    expect(await memory.record("promoter", "livevariant", "bbbb", count)).toBe(false);
-    expect(await memory.record("promoter", "livevariant", "aaaa", count)).toBe(true);
+    expect(await memory.record("promoter", "example", "bbbb", count)).toBe(false);
+    expect(await memory.record("promoter", "example", "aaaa", count)).toBe(true);
     expect(writes).toBe(1);
   });
 
@@ -100,8 +100,8 @@ describe("CatalogMemory", () => {
       new Promise<void>((resolve, reject) => {
         releases.set(tag, ok => (ok ? resolve() : reject(new Error("ledger down"))));
       });
-    const older = memory.record("promoter", "livevariant", "aaaa", slow("a"));
-    const newer = memory.record("promoter", "livevariant", "bbbb", slow("b"));
+    const older = memory.record("promoter", "example", "aaaa", slow("a"));
+    const newer = memory.record("promoter", "example", "bbbb", slow("b"));
     releases.get("b")?.(false);
     await expect(newer).rejects.toThrow("ledger down");
     releases.get("a")?.(true);
@@ -110,16 +110,16 @@ describe("CatalogMemory", () => {
     const count = async () => {
       writes += 1;
     };
-    expect(await memory.record("promoter", "livevariant", "aaaa", count)).toBe(false);
-    expect(await memory.record("promoter", "livevariant", "bbbb", count)).toBe(true);
+    expect(await memory.record("promoter", "example", "aaaa", count)).toBe(false);
+    expect(await memory.record("promoter", "example", "bbbb", count)).toBe(true);
     expect(writes).toBe(1);
   });
 
   it("keeps agents and servers apart", async () => {
     const memory = new CatalogMemory();
     const { state, append } = counter();
-    await memory.record("promoter", "livevariant", "aaaa", append);
-    await memory.record("other", "livevariant", "aaaa", append);
+    await memory.record("promoter", "example", "aaaa", append);
+    await memory.record("other", "example", "aaaa", append);
     await memory.record("promoter", "linear", "aaaa", append);
     expect(state.writes).toBe(3);
   });

@@ -11,10 +11,11 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }],
   "vars": {
-    // Deployments override: the "owner/repo" allowlist, re-checked here so
-    // this Worker trusts no caller. Same value the scheduler passes as
-    // PR_REPOS to the wake.
-    "PR_REPOS": "livevariant/livevariant"
+    // Deployments set the "owner/repo" allowlist (or per-agent grants,
+    // spec 0008 §3); re-checked here so this Worker trusts no caller.
+    // Empty by default: a Worker deployed from this file alone grants
+    // nothing.
+    "PR_REPOS": ""
   }
   // Secrets (wrangler secret put -c workers/gatekeeper-pr/wrangler.jsonc):
   //   MACHINE_PAT        classic PAT (repo scope) for the machine github user

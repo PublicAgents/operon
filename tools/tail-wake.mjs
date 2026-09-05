@@ -40,7 +40,7 @@ const args = process.argv.slice(2);
 const raw = args.includes("--raw");
 const forcePoll = args.includes("--poll");
 // The wake id is the only bare positional, so a flag's VALUE must not
-// be mistaken for one: `tail-wake --project livevariant` would
+// be mistaken for one: `tail-wake --project <name>` would
 // otherwise tail a wake named after the project and find nothing.
 const wakeArg = (() => {
   const takesValue = new Set(["--project"]);

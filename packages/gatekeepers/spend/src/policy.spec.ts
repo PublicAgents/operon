@@ -12,7 +12,7 @@ import {
 } from "./policy.js";
 
 describe("validatePayUrl", () => {
-  const ZONE = "livevariant.ai";
+  const ZONE = "example-colony.com";
 
   it("accepts a normal public https url", () => {
     expect(validatePayUrl("https://api.example.com/reports/1", ZONE)).toBeNull();
@@ -33,9 +33,9 @@ describe("validatePayUrl", () => {
   });
 
   it("denies the chassis' own hosts by name", () => {
-    expect(validatePayUrl("https://livevariant.ai/gatekeeper/publish", ZONE)).toBe("chassis_host");
-    expect(validatePayUrl("https://email-gk.livevariant.ai/x", ZONE)).toBe("chassis_host");
-    expect(validatePayUrl("https://livevariant.ai.evil.com/x", ZONE)).toBeNull();
+    expect(validatePayUrl("https://example-colony.com/gatekeeper/publish", ZONE)).toBe("chassis_host");
+    expect(validatePayUrl("https://email-gk.example-colony.com/x", ZONE)).toBe("chassis_host");
+    expect(validatePayUrl("https://example-colony.com.evil.com/x", ZONE)).toBeNull();
   });
 });
 

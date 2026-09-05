@@ -17,7 +17,7 @@ import {
  * The chronicle contract against REAL D1 (wrangler's local simulator),
  * applying the exact committed migrations wrangler applies in the colony
  * deploy: the schema, the migrations, and the helpers are proven against
- * each other (the livevariant accounts pattern).
+ * each other (the example accounts pattern).
  */
 
 const here = dirname(fileURLToPath(import.meta.url));

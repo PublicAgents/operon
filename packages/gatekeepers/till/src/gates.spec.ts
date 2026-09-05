@@ -4,11 +4,11 @@ import { agentHostnames, comparePrices, tokenEnvName, validateOffer, withinOffer
 
 const roster = parseRoster(
   JSON.stringify({
-    zone: "livevariant.ai",
+    zone: "example-colony.com",
     agents: [
       {
         id: "promoter",
-        stateRepo: "livevariant/promoter-state",
+        stateRepo: "example-org/promoter-state",
         cadence: "0 6 * * *",
         harness: "claude-code",
         model: "m",
@@ -23,7 +23,7 @@ const LIMITS = { maxPrice: "1.00", maxOffers: 3, currencies: ["0xtoken"] };
 
 function offer(overrides: Partial<Parameters<typeof validateOffer>[0]> = {}) {
   return {
-    host: "prior.livevariant.ai",
+    host: "prior.example-colony.com",
     path: "/reports/weekly.html",
     price: "0.05",
     currency: "0xtoken",
@@ -34,7 +34,7 @@ function offer(overrides: Partial<Parameters<typeof validateOffer>[0]> = {}) {
 
 describe("agentHostnames", () => {
   it("resolves @ to the zone and labels to subdomains", () => {
-    expect(agentHostnames(agent, roster.zone)).toEqual(["livevariant.ai", "prior.livevariant.ai"]);
+    expect(agentHostnames(agent, roster.zone)).toEqual(["example-colony.com", "prior.example-colony.com"]);
   });
 });
 
@@ -44,7 +44,7 @@ describe("validateOffer", () => {
   });
 
   it("rejects hosts the agent is not assigned", () => {
-    expect(validateOffer(offer({ host: "other.livevariant.ai" }), agent, roster, LIMITS)).toBe(
+    expect(validateOffer(offer({ host: "other.example-colony.com" }), agent, roster, LIMITS)).toBe(
       "host_not_assigned"
     );
   });
