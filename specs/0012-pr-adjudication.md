@@ -305,7 +305,12 @@ intent, whose request was aborted at the stale bound at the latest, is
 reconciled only past the stale bound plus that grace. So by the time
 a reconciliation says "not merged" and a rejection is recorded on
 that reading, no merge request of that intent can still be in
-flight. No rejection ever
+flight. Should GitHub ever finish a request past every bound anyway,
+the record corrects itself rather than lying: the next reconciliation
+of that head finds it merged, flips the terminal record from rejected
+to merged, and ledgers `merge_after_rejection` with the rejection's
+time and reason, so the operator learns of the anomaly from the
+ledger and the registry never shows a merged head as rejected. No rejection ever
 lands over an open intent: the store's one-turn reject answers
 `approval_in_flight` for a young pending one and `unresolved` for any
 other, and the door reconciles first, with the agent's credential, or

@@ -514,6 +514,29 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(withApi.body).toMatchObject({ status: "rejected" });
   });
 
+  it("a merge that lands after a rejection corrects the record and names the anomaly", async () => {
+    const { h, approve, operatorDeps } = await held();
+    h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
+    await approve();
+    h.advance(CLAIM_AGE_MS + UNKNOWN_GRACE_MS + 1000);
+    // Reconciled as not merged, then rejected.
+    expect((await rejectHeld(operatorDeps, { heldId: "hold-1", reason: "no", apiFor: () => h.deps.api })).body).toMatchObject({ status: "rejected" });
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "rejected" });
+    // The impossible: GitHub finishes the request anyway. The next
+    // reconciliation (a new attempt's intent, or the listing) records
+    // the merge and the anomaly.
+    h.gh.state.merged = true;
+    h.gh.state.state = "closed";
+    h.gh.state.mergeCommitSha = "merge-sha";
+    await h.holds.beginMerge({ repo: REPO, number: 7, headSha: HEAD, agentId: "cto", mode: "auto", at: h.deps.now() });
+    const open = await h.holds.openMergeIntent(REPO, 7);
+    await h.holds.resolveMerge(open!.id, { state: "unknown", detail: "test" }, h.deps.now());
+    h.advance(UNKNOWN_GRACE_MS + 1000);
+    await listHeld(operatorDeps, () => h.deps.api);
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "merged", mergeSha: "merge-sha" });
+    expect(h.kinds()).toContain("merge_after_rejection");
+  });
+
   it("a stale claim whose approval merged concedes", async () => {
     const { h, reject } = await held();
     await h.holds.claimHeld("hold-1", h.deps.now());

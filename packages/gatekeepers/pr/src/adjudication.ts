@@ -186,6 +186,16 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
   }
   const at = deps.now();
   const base = { agentId: intent.agentId, repo: intent.repo, number: intent.number, headSha: intent.headSha, reconciled: true };
+  // The record corrects itself. If this head was REJECTED by the
+  // operator and GitHub nevertheless says it merged (a request accepted
+  // before the rejection and finished after every bound), the truth is
+  // the merge: the terminal record flips to merged and the ledger names
+  // the anomaly loudly, rather than the registry showing a merged head
+  // as rejected.
+  const earlier = await deps.holds.terminal(intent.repo, intent.number, intent.headSha);
+  if (state.merged && earlier?.outcome === "rejected") {
+    await deps.ledger.append("merge_after_rejection", { ...base, rejectedAt: earlier.at, reason: earlier.reason, mergeCommitSha: state.mergeCommitSha });
+  }
   // The intent's terminal state, the head's terminal record and the
   // hold it came from settle in ONE store turn: a hold whose approval
   // merged (or was overtaken) is deleted, one whose attempt provably
