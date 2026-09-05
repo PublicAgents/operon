@@ -71,14 +71,14 @@ export class PrHolds extends DurableObject {
   beginClose(input: Parameters<HoldStore["beginClose"]>[0]): ReturnType<HoldStore["beginClose"]> {
     return this.store.beginClose(input);
   }
-  releaseClose(id: string): Promise<void> {
-    return this.store.releaseClose(id);
+  releaseClose(id: string, workToken?: string): Promise<void> {
+    return this.store.releaseClose(id, workToken);
   }
-  closeStep(id: string, step: "commented" | "closed"): Promise<void> {
-    return this.store.closeStep(id, step);
+  closeStep(id: string, step: "commented" | "closed", workToken?: string): Promise<boolean> {
+    return this.store.closeStep(id, step, workToken);
   }
-  resolveClose(id: string, state: "closed" | "failed", at: string, detail?: string): Promise<void> {
-    return this.store.resolveClose(id, state, at, detail);
+  resolveClose(id: string, state: "closed" | "failed", at: string, detail?: string, workToken?: string): Promise<boolean> {
+    return this.store.resolveClose(id, state, at, detail, workToken);
   }
   terminal(repo: string, number: number, headSha: string): Promise<TerminalRecord | undefined> {
     return this.store.terminal(repo, number, headSha);

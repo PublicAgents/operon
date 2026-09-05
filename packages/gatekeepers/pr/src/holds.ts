@@ -67,6 +67,8 @@ export interface CloseIntent {
   state: "pending" | "closed" | "failed";
   /** Set while a door is working the intent; a crashed door leaves it, so it ages out. */
   workingSince?: string;
+  /** Minted per begin or resume; every step and the resolve must present it, so a superseded executor's writes refuse. */
+  workToken?: string;
   detail?: string;
   resolvedAt?: string;
 }
@@ -258,7 +260,11 @@ export class HoldStore {
     held: HeldMerge,
     record: TerminalRecord,
     at: string
-  ): Promise<{ status: "rejected" } | { status: "approval_in_flight" | "unresolved"; intent: MergeIntent }> {
+  ): Promise<
+    | { status: "rejected" }
+    | { status: "approval_in_flight" | "unresolved"; intent: MergeIntent }
+    | { status: "already_merged"; terminal: TerminalRecord }
+  > {
     // No rejection ever lands over an OPEN intent: a young pending one is
     // an act in flight, and an older or unknown one must be reconciled
     // (by the caller, with a credential) before this turn runs again.
@@ -266,6 +272,13 @@ export class HoldStore {
     if (open) {
       const inFlight = open.state === "pending" && Date.parse(at) - Date.parse(open.at) < INTENT_STALE_MS;
       return { status: inFlight ? "approval_in_flight" : "unresolved", intent: open };
+    }
+    // A head that already merged (its intent settled while this
+    // rejection was being decided) is never overwritten with rejected.
+    const done = await this.terminal(held.repo, held.number, held.headSha);
+    if (done && (done.outcome === "merged" || done.outcome === "superseded")) {
+      await this.deleteHeld(held.id);
+      return { status: "already_merged", terminal: done };
     }
     await this.recordTerminal(record);
     await this.deleteHeld(held.id);
@@ -307,6 +320,10 @@ export class HoldStore {
   ): Promise<MergeIntent | undefined> {
     const intent = await this.storage.get<MergeIntent>(intentKey(id));
     if (!intent) return undefined;
+    // Single winner: an intent settles once. Two reconciliations of the
+    // same intent cannot both write the terminal record and both ledger
+    // it; the second finds it settled and gets nothing back.
+    if (intent.state !== "pending" && intent.state !== "unknown") return undefined;
     if (options.terminal) await this.recordTerminal(options.terminal);
     if (options.hold === "delete") {
       // The head is over: EVERY hold for it goes, the one this intent
@@ -346,40 +363,47 @@ export class HoldStore {
     if (open) {
       const age = open.workingSince === undefined ? Infinity : Date.parse(input.at) - Date.parse(open.workingSince);
       if (Number.isFinite(age) && age < INTENT_STALE_MS) return { status: "busy", intent: open };
-      const resumed = { ...open, workingSince: input.at };
+      // A resume mints a new work token: the executor that went stale
+      // may still be alive, and its next step or resolve refuses.
+      const resumed = { ...open, workingSince: input.at, workToken: this.newId() };
       await this.storage.put(closeKey(open.id), resumed);
       return { status: "resumed", intent: resumed };
     }
-    const intent: CloseIntent = { id: this.newId(), state: "pending", steps: {}, workingSince: input.at, ...input };
+    const intent: CloseIntent = { id: this.newId(), state: "pending", steps: {}, workingSince: input.at, workToken: this.newId(), ...input };
     await this.storage.put(closeKey(intent.id), intent);
     return { status: "created", intent };
   }
 
   /** The door is done with a still-pending close intent (a lost response): release it for a retry. */
-  async releaseClose(id: string): Promise<void> {
+  async releaseClose(id: string, workToken?: string): Promise<void> {
     const intent = await this.storage.get<CloseIntent>(closeKey(id));
-    if (intent && intent.state === "pending") {
+    if (intent && intent.state === "pending" && (workToken === undefined || intent.workToken === workToken)) {
       const released = { ...intent };
       delete released.workingSince;
       await this.storage.put(closeKey(id), released);
     }
   }
 
-  async closeStep(id: string, step: "commented" | "closed"): Promise<void> {
+  /** Record a step; refused (false) when the token is not the current executor's. */
+  async closeStep(id: string, step: "commented" | "closed", workToken?: string): Promise<boolean> {
     const intent = await this.storage.get<CloseIntent>(closeKey(id));
-    if (intent) await this.storage.put(closeKey(id), { ...intent, steps: { ...intent.steps, [step]: true } });
+    if (!intent || intent.state !== "pending") return false;
+    if (workToken !== undefined && intent.workToken !== workToken) return false;
+    await this.storage.put(closeKey(id), { ...intent, steps: { ...intent.steps, [step]: true } });
+    return true;
   }
 
-  async resolveClose(id: string, state: "closed" | "failed", at: string, detail?: string): Promise<void> {
+  async resolveClose(id: string, state: "closed" | "failed", at: string, detail?: string, workToken?: string): Promise<boolean> {
     const intent = await this.storage.get<CloseIntent>(closeKey(id));
-    if (intent) {
-      await this.storage.put(closeKey(id), {
-        ...intent,
-        state,
-        resolvedAt: at,
-        ...(detail !== undefined ? { detail } : {})
-      });
-    }
+    if (!intent || intent.state !== "pending") return false;
+    if (workToken !== undefined && intent.workToken !== workToken) return false;
+    await this.storage.put(closeKey(id), {
+      ...intent,
+      state,
+      resolvedAt: at,
+      ...(detail !== undefined ? { detail } : {})
+    });
+    return true;
   }
 
   // ---- terminal records ------------------------------------------------

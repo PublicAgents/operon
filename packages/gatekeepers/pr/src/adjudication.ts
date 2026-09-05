@@ -201,14 +201,18 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
   // merged (or was overtaken) is deleted, one whose attempt provably
   // did not merge is given back. Nothing here is best-effort: a failed
   // settle leaves the intent open, and the next reconciliation retries.
+  // settleMerge is single-winner: a concurrent reconciliation of the
+  // same intent gets nothing back and ledgers nothing.
+  const settledElsewhere = async () => (await deps.holds.openMergeIntent(intent.repo, intent.number)) ?? { ...intent, state: "failed" as const };
   if (state.merged && state.headSha === intent.headSha) {
     const mergeSha = state.mergeCommitSha ?? "unknown";
     const resolved = await deps.holds.settleMerge(intent.id, { state: "merged", mergeSha }, at, {
       terminal: { ...terminalBase(intent, at), outcome: "merged", by: intent.agentId, mergeSha },
       hold: "delete"
     });
+    if (!resolved) return settledElsewhere();
     await deps.ledger.append("pr_merged", { ...base, mode: intent.mode, mergeSha, heldId: intent.heldId });
-    return resolved ?? intent;
+    return resolved;
   }
   if (state.merged) {
     const resolved = await deps.holds.settleMerge(
@@ -217,14 +221,16 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
       at,
       { terminal: { ...terminalBase(intent, at), outcome: "superseded", by: "unknown" }, hold: "delete" }
     );
+    if (!resolved) return settledElsewhere();
     await deps.ledger.append("merge_superseded", { ...base, mergedHead: state.headSha });
-    return resolved ?? intent;
+    return resolved;
   }
   const resolved = await deps.holds.settleMerge(intent.id, { state: "failed", detail: "reconciled: not merged" }, at, {
     hold: "unclaim"
   });
+  if (!resolved) return settledElsewhere();
   await deps.ledger.append("merge_failed", { ...base, detail: "reconciled: not merged" });
-  return resolved ?? intent;
+  return resolved;
 }
 
 /** A pending intent this old belongs to a door that crashed, not one still working. */
@@ -521,20 +527,27 @@ export async function closeDoor(
   }
   const intent = begun.intent;
   const marker = closeMarker(intent.id);
+  const token = intent.workToken;
+  // Every step presents the work token minted for THIS executor; a
+  // resume after this executor went stale mints a new one, so the old
+  // executor's later steps refuse and it stops rather than acting twice.
+  const fenced = (): DoorResult => refuse(409, "close_superseded", "another executor resumed this close; nothing further was done here");
   try {
-    let commentUrl: string | undefined;
-    if (!intent.steps.commented) {
-      commentUrl = await findCommentWithMarker(deps.api, repo, number, marker);
-      if (commentUrl === undefined) {
-        commentUrl = (await postComment(deps.api, repo, number, `${intent.reason}\n\n${marker}`)).url;
-      }
-      await deps.holds.closeStep(intent.id, "commented");
-    }
-    if (!intent.steps.closed) {
-      if (ref.state === "open") await updateIssue(deps.api, repo, number, { state: "closed" });
-      await deps.holds.closeStep(intent.id, "closed");
-    }
-    await deps.holds.resolveClose(intent.id, "closed", deps.now());
+    // GitHub's truth decides what is left to do, never the stored steps
+    // (a step claimed before an act whose response was lost would
+    // otherwise be skipped on resume); the steps are the record.
+    let commentUrl = await findCommentWithMarker(deps.api, repo, number, marker);
+    if (commentUrl === undefined) {
+      // The step is claimed BEFORE the irreversible act: a superseded
+      // executor learns it here and never posts.
+      if (!(await deps.holds.closeStep(intent.id, "commented", token))) return fenced();
+      commentUrl = (await postComment(deps.api, repo, number, `${intent.reason}\n\n${marker}`)).url;
+    } else if (!(await deps.holds.closeStep(intent.id, "commented", token))) return fenced();
+    if (ref.state === "open") {
+      if (!(await deps.holds.closeStep(intent.id, "closed", token))) return fenced();
+      await updateIssue(deps.api, repo, number, { state: "closed" });
+    } else if (!(await deps.holds.closeStep(intent.id, "closed", token))) return fenced();
+    if (!(await deps.holds.resolveClose(intent.id, "closed", deps.now(), undefined, token))) return fenced();
     await deps.ledger.append("pr_closed", {
       agentId,
       identity: agentId,
@@ -542,22 +555,24 @@ export async function closeDoor(
       number,
       author: ref.author,
       reason: intent.reason,
-      ...(intent.steps.commented || intent.steps.closed ? { resumed: true } : {})
+      ...(begun.status === "resumed" ? { resumed: true } : {})
     });
     return ok({ status: "closed", ...(commentUrl !== undefined ? { commentUrl } : {}) });
   } catch (error) {
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
     if (definitiveFailure(error)) {
       // GitHub said no: the intent is over, and a new call starts a new one.
-      await deps.holds.resolveClose(intent.id, "failed", deps.now(), detail);
+      await deps.holds.resolveClose(intent.id, "failed", deps.now(), detail, token);
       await deps.ledger.append("close_failed", { agentId, repo, number, intentId: intent.id, detail });
       return refuse(502, "close_failed", detail);
     }
     // The wire dropped: the step may have landed. The intent stays
     // pending with the steps recorded so far and is released for the
     // next call, which resumes from GitHub's truth; a close that may
-    // have happened is never reported as failed.
-    await deps.holds.releaseClose(intent.id);
+    // have happened is never reported as failed. The step claimed
+    // before the act stays claimed: the resume checks GitHub's truth
+    // (the marker, the state), never the flag alone.
+    await deps.holds.releaseClose(intent.id, token);
     const current = (await deps.holds.openCloseIntent(repo, number)) ?? intent;
     await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, steps: current.steps, detail });
     return { status: 503, body: { ok: false, error: "outcome_unknown", intentId: intent.id, steps: current.steps, detail } };
@@ -735,6 +750,9 @@ export async function rejectHeld(
   }
   if (rejected.status === "unresolved") {
     return refuse(503, "outcome_unknown", `intent ${rejected.intent.id} is ${rejected.intent.state}; call again shortly`);
+  }
+  if (rejected.status === "already_merged") {
+    return refuse(409, "already_merged", `merged as ${rejected.terminal.mergeSha ?? "unknown"} at ${rejected.terminal.at}`);
   }
   await deps.ledger.append("merge_rejected", {
     agentId: held.agentId,

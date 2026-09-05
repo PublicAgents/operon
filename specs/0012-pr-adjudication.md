@@ -310,7 +310,16 @@ the record corrects itself rather than lying: the next reconciliation
 of that head finds it merged, flips the terminal record from rejected
 to merged, and ledgers `merge_after_rejection` with the rejection's
 time and reason, so the operator learns of the anomaly from the
-ledger and the registry never shows a merged head as rejected. No rejection ever
+ledger and the registry never shows a merged head as rejected. Three
+more single-winner rules close the remaining races: an intent settles
+once (a second reconciliation of the same intent writes and ledgers
+nothing); a rejection never lands on a head whose terminal record
+already says merged; and a close executor holds a work token minted
+by its begin or resume, presented on every step and the resolve, so
+an executor that went stale and was resumed by another stops at its
+next step instead of acting twice, and a resume takes what is left to
+do from GitHub's truth (the marker, the state), never from the stored
+steps. No rejection ever
 lands over an open intent: the store's one-turn reject answers
 `approval_in_flight` for a young pending one and `unresolved` for any
 other, and the door reconciles first, with the agent's credential, or

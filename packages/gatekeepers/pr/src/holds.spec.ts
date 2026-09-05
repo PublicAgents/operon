@@ -112,7 +112,13 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
       hold: "delete"
     });
     expect(settled).toMatchObject({ state: "merged", mergeSha: "m1" });
+    // Single winner: a second settle of the same intent gets nothing.
+    expect(await s.settleMerge(intent.id, { state: "failed", detail: "late" }, later(1500))).toBeUndefined();
     expect(await s.terminal("org/registry", 7, "head1")).toMatchObject({ outcome: "merged", heldId: held.id });
+    // A rejection can no longer land on that head.
+    const late = await s.hold({ ...merge, headSha: "head1" }, later(1600));
+    expect((await s.rejectAndRecord(late.held, { repo: "org/registry", number: 7, headSha: "head1", outcome: "rejected", at: later(1700), by: "operator" }, later(1700))).status).toBe("already_merged");
+    expect(await s.getHeld(late.held.id)).toBeUndefined();
     expect(await s.getHeld(held.id)).toBeUndefined();
     expect(await s.listOpenMergeIntents()).toEqual([]);
     // A failed attempt gives a claimed hold back instead of deleting it.
@@ -133,14 +139,19 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     // A second door arriving while the first works gets busy; after the
     // first releases (a lost response) the second resumes.
     expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(1000) })).status).toBe("busy");
-    await s.closeStep(intent.id, "commented");
-    await s.releaseClose(intent.id);
+    expect(await s.closeStep(intent.id, "commented", intent.workToken)).toBe(true);
+    await s.releaseClose(intent.id, intent.workToken);
     const resumed = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(2000) });
     expect(resumed).toMatchObject({ status: "resumed", intent: { id: intent.id, steps: { commented: true } } });
+    // The resume minted a new token: the first executor's steps and resolve refuse from here on.
+    expect(resumed.intent.workToken).not.toBe(intent.workToken);
+    expect(await s.closeStep(intent.id, "closed", intent.workToken)).toBe(false);
+    expect(await s.resolveClose(intent.id, "closed", later(2500), undefined, intent.workToken)).toBe(false);
     // A door that crashed while working ages out of the way.
-    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) })).status).toBe("resumed");
-    await s.closeStep(intent.id, "closed");
-    await s.resolveClose(intent.id, "closed", later(1000));
+    const again = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) });
+    expect(again.status).toBe("resumed");
+    expect(await s.closeStep(intent.id, "closed", again.intent.workToken)).toBe(true);
+    expect(await s.resolveClose(intent.id, "closed", later(INTENT_STALE_MS + 4000), undefined, again.intent.workToken)).toBe(true);
     expect(await s.openCloseIntent("org/registry", 8)).toBeUndefined();
   });
 
