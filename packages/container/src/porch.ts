@@ -783,6 +783,8 @@ export class Porch {
     if (hasBody) {
       const { text, error } = await this.sweptText(body.body, body.bodyFile, "body");
       if (error) return error;
+      // Blank text is no body either, inline or from the file.
+      if (text === undefined || text.trim().length === 0) return fail(400, "missing_body", `${verdict} needs a body`);
       payload.body = text;
     }
     this.context.log(`reviewing ${repo}#${number}: ${verdict}`);

@@ -618,7 +618,7 @@ function parseGithub(args: string[]): CliCall {
       const verdict = verdicts[0] === "--approve" ? "approve" : verdicts[0] === "--request-changes" ? "request_changes" : "comment";
       // A request for changes or a comment says something; the Gatekeeper
       // refuses missing_body and the round trip is spared here.
-      if (verdict !== "approve" && body === undefined && bodyFile === undefined) {
+      if (verdict !== "approve" && (body === undefined || body.trim().length === 0) && bodyFile === undefined) {
         throw new CliUsageError(`${usage} (--request-changes and --comment need a --body or --body-file)`);
       }
       return {
