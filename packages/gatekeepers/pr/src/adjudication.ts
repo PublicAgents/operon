@@ -646,9 +646,12 @@ async function attributed(
   const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
   if (!terminal) return result;
   // `by` is who decided: the merging agent on a merged record, the
-  // operator on a rejection, nobody known on a superseded one. A record
-  // written before the agent field existed still names the agent on a
-  // merge, and on nothing else.
+  // operator on a rejection, nobody known on a superseded one. The
+  // agent field ships with the first deployed release of these doors
+  // (no colony has run an earlier build, so no store holds a record
+  // without it); reading the decider on a merge is belt and braces, and
+  // on a rejection or a superseded record the decider is not the agent,
+  // so nothing is invented there.
   const agentId = terminal.agentId ?? (terminal.outcome === "merged" ? terminal.by : undefined);
   return {
     ...result,
