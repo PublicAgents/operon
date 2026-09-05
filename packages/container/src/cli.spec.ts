@@ -109,6 +109,7 @@ describe("operon CLI parsing", () => {
     expect(() => parseArgs(["github", "review", "org/repo", "59", "--request-changes"])).toThrow(/need a --body/);
     expect(() => parseArgs(["github", "review", "org/repo", "59", "--comment"])).toThrow(/need a --body/);
     expect(() => parseArgs(["github", "review", "org/repo", "59", "--comment", "--body", "  "])).toThrow(/need a --body/);
+    expect(() => parseArgs(["github", "review", "org/repo", "59", "--comment", "--body-file", ""])).toThrow(/need a --body/);
     expect(() => parseArgs(["github", "review", "org/repo", "59", "--comment", "--body", "a", "--body-file", "b.md"])).toThrow(/not both/);
     expect(parseArgs(["github", "merge", "org/repo", "59"])).toEqual({
       path: "/github/merge",
