@@ -135,9 +135,12 @@ export interface GithubGrants {
 }
 
 /**
- * The repos an agent may read and discuss (spec 0012 §3): the union
- * of everything it may author on, review on, or merge on. A reviewer
- * with no pr grant still reads the pull requests it adjudicates.
+ * The repos an agent may read and discuss through the pr Gatekeeper
+ * (spec 0012 §3): the union of its pr, review and merge repos. A
+ * reviewer with no pr grant still reads the pull requests it
+ * adjudicates. `write` is deliberately absent: it is the App's branch
+ * door on the github Gatekeeper, carries no account identity, and
+ * never made a repo readable here.
  */
 export function reachableGithubRepos(grants: GithubGrants | undefined): string[] {
   if (!grants) return [];

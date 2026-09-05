@@ -215,9 +215,14 @@ describe("capability grants through the manifest (spec 0008)", () => {
     const lonely = withGrants();
     lonely.agents[0].github = { merge: [{ repo: "demo/registry", auto: ["registry/agents/**"] }] };
     expect(() => validateManifest(lonely)).toThrow(/merge_without_reviewer: no other agent holds github.review on demo\/registry/);
+    // No auto paths: every merge is held for the operator, so no
+    // reviewer is required.
+    const heldOnly = withGrants();
+    heldOnly.agents[0].github = { merge: [{ repo: "demo/registry" }] };
+    expect(validateManifest(heldOnly).roster.agents[0].github?.merge).toEqual([{ repo: "demo/registry" }]);
     const paired = withGrants();
     paired.agents = [
-      { ...paired.agents[0], github: { merge: [{ repo: "demo/registry" }] } },
+      { ...paired.agents[0], github: { merge: [{ repo: "demo/registry", auto: ["registry/agents/**"] }] } },
       {
         ...structuredClone(BASE.agents[0]),
         id: "judge",

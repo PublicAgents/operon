@@ -323,11 +323,13 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     }
   }
 
-  // A merge grant on a repo where no OTHER agent may review is a
-  // policy that can never fire on the auto path (spec 0012 §3): the
-  // operator believes it is in force and it is dead.
+  // A merge grant with auto paths on a repo where no OTHER agent may
+  // review is a policy that can never fire (spec 0012 §3): the operator
+  // believes it is in force and it is dead. A grant with no auto paths
+  // holds every merge for the operator and needs no reviewer.
   for (const agent of roster.agents) {
     for (const grant of agent.github?.merge ?? []) {
+      if (!grant.auto?.length) continue;
       const reviewer = roster.agents.find(
         other => other.id !== agent.id && (other.github?.review ?? []).includes(grant.repo)
       );
