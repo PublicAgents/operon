@@ -6,6 +6,8 @@ export {
   type RosterAgent,
   type McpServerDef,
   type GithubGrants,
+  type MergeGrant,
+  reachableGithubRepos,
   type HarnessPin,
   RESERVED_MCP_NAMES
 } from "./roster.js";
