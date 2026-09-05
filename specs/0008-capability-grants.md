@@ -93,7 +93,7 @@ agents:
   - id: promoter
     mcp: [google-analytics]
     github:
-      pr: [livevariant/livevariant, livevariant/operon]
+      pr: [livevariant/livevariant, PublicAgents/operon]
       write: [livevariant/livevariant]
 
 policy:
