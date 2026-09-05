@@ -781,7 +781,22 @@ async function rejectHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input
       try {
         const state = await getPullMergeState(api, held.repo, held.number);
         if (state.merged) {
+          // The merged head's record outlives the hold, so a retry of
+          // this rejection still names the agent and the pull request.
           await deps.holds.deleteHeld(held.id);
+          if (!(await deps.holds.terminal(held.repo, held.number, held.headSha))) {
+            await deps.holds.recordTerminal({
+              repo: held.repo,
+              number: held.number,
+              headSha: held.headSha,
+              outcome: "merged",
+              at,
+              by: held.agentId,
+              agentId: held.agentId,
+              heldId: held.id,
+              ...(state.mergeCommitSha ? { mergeSha: state.mergeCommitSha } : {})
+            });
+          }
           await deps.ledger.append("merge_rejected", {
             agentId: held.agentId,
             repo: held.repo,

@@ -591,6 +591,9 @@ describe("the operator's surface (spec 0012 §8)", () => {
     h.advance(CLAIM_AGE_MS + 1000);
     h.gh.state.merged = true;
     expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged", agentId: "cto", repo: REPO, number: 7 } });
+    // The merged head's record outlives the hold: a retry still names the agent.
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "merged", agentId: "cto", heldId: "hold-1" });
+    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
   });
 
