@@ -113,7 +113,7 @@ export interface WakeConfig {
    * to the fleet list", and conflating them would let the container
    * admit repos the Gatekeeper refuses.
    */
-  githubGrants?: { pr: string[]; write: string[] };
+  githubGrants?: { pr: string[]; write: string[]; review: string[]; merge: string[] };
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -214,7 +214,7 @@ function parseMcpServers(raw: string | undefined): StagedMcpServer[] {
 
 function parseGithubGrants(
   raw: string | undefined
-): { pr: string[]; write: string[] } | undefined {
+): { pr: string[]; write: string[]; review: string[]; merge: string[] } | undefined {
   if (!raw) return undefined;
   let parsed: unknown;
   try {
@@ -225,7 +225,7 @@ function parseGithubGrants(
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new ConfigError(`invalid_env: ${ENV.githubGrants} must be a JSON object`);
   }
-  const record = parsed as { pr?: unknown; write?: unknown };
+  const record = parsed as { pr?: unknown; write?: unknown; review?: unknown; merge?: unknown };
   // Strict: a malformed grant must fail the wake, never quietly shrink
   // to fewer (or zero) repos than the policy the scheduler sent.
   const list = (value: unknown, key: string): string[] => {
@@ -235,7 +235,14 @@ function parseGithubGrants(
     }
     return value as string[];
   };
-  return { pr: list(record.pr, "pr"), write: list(record.write, "write") };
+  // An older scheduler sends no review or merge list; the container
+  // then pre-checks them as empty and refuses by name (fail closed).
+  return {
+    pr: list(record.pr, "pr"),
+    write: list(record.write, "write"),
+    review: list(record.review, "review"),
+    merge: list(record.merge, "merge")
+  };
 }
 
 type EnvSource = Record<string, string | undefined>;

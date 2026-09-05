@@ -232,7 +232,29 @@ describe("prepareLaunch", () => {
     const prepared = await prepareLaunch(granted, "cron", "wake-grants", context());
     expect(JSON.parse(prepared.env[WAKE_ENV.githubGrants] as string)).toEqual({
       pr: ["demo/product"],
-      write: ["demo/product"]
+      write: ["demo/product"],
+      review: [],
+      merge: []
+    });
+    // Review and merge grants travel as repo names only: the auto globs
+    // and check names stay with the Gatekeeper (spec 0012 §3).
+    const adjudicating = await prepareLaunch(
+      {
+        ...agent,
+        github: {
+          review: ["demo/product"],
+          merge: [{ repo: "demo/registry", auto: ["registry/agents/**"], checks: ["validate"] }]
+        }
+      },
+      "cron",
+      "wake-adjudicate",
+      context()
+    );
+    expect(JSON.parse(adjudicating.env[WAKE_ENV.githubGrants] as string)).toEqual({
+      pr: [],
+      write: [],
+      review: ["demo/product"],
+      merge: ["demo/registry"]
     });
     // A write-only grant still carries an explicit empty pr list, so
     // the container refuses PR repos the Gatekeeper would also refuse.
@@ -244,7 +266,9 @@ describe("prepareLaunch", () => {
     );
     expect(JSON.parse(writeOnly.env[WAKE_ENV.githubGrants] as string)).toEqual({
       pr: [],
-      write: ["demo/product"]
+      write: ["demo/product"],
+      review: [],
+      merge: []
     });
     // An agent with no github block carries no variable at all, so the
     // porch falls back to the fleet list rather than reading a missing
@@ -311,7 +335,12 @@ describe("the doors matrix at launch (spec 0006 §7)", () => {
     };
     const prepared = await prepareLaunch(granted, "cron", "wake-gh-closed", context());
     expect(prepared.env.OPERON_PR_URL).toBeUndefined();
-    expect(JSON.parse(prepared.env.OPERON_GITHUB_GRANTS ?? "{}")).toEqual({ pr: [], write: [] });
+    expect(JSON.parse(prepared.env.OPERON_GITHUB_GRANTS ?? "{}")).toEqual({
+      pr: [],
+      write: [],
+      review: [],
+      merge: []
+    });
     // The state commit is plumbing and stays wired.
     expect(prepared.env.OPERON_PERSIST_URL).toBeDefined();
     expect(prepared.closedDoors).toContain("github");

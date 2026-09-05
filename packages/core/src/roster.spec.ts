@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAgent, parseRoster, RosterError } from "./roster.js";
+import { findAgent, parseRoster, RosterError, reachableGithubRepos } from "./roster.js";
 
 const valid = {
   zone: "example-colony.com",
@@ -184,6 +184,44 @@ describe("capability grants (spec 0008)", () => {
     const roster2 = granted();
     (roster2.agents[0].github as Record<string, unknown>).push = ["a/b"];
     expect(() => parseRoster(JSON.stringify(roster2))).toThrowError(/not a github grant/);
+  });
+
+  it("parses review and merge grants and lists the reachable repos", () => {
+    const roster = granted();
+    roster.agents[0].github = {
+      review: ["example-org/registry"],
+      merge: [{ repo: "example-org/registry", auto: ["registry/agents/**", "registry/jobs/**"], checks: ["validate"] }]
+    };
+    const parsed = parseRoster(JSON.stringify(roster));
+    expect(parsed.agents[0].github?.review).toEqual(["example-org/registry"]);
+    expect(parsed.agents[0].github?.merge).toEqual([
+      { repo: "example-org/registry", auto: ["registry/agents/**", "registry/jobs/**"], checks: ["validate"] }
+    ]);
+    expect(reachableGithubRepos(parsed.agents[0].github)).toEqual(["example-org/registry"]);
+    expect(reachableGithubRepos({ pr: ["a/b"], merge: [{ repo: "c/d" }] })).toEqual(["a/b", "c/d"]);
+    expect(reachableGithubRepos(undefined)).toEqual([]);
+  });
+
+  it("refuses malformed merge grants by name", () => {
+    const withMerge = (merge: unknown) => {
+      const roster = granted();
+      roster.agents[0].github = { merge };
+      return JSON.stringify(roster);
+    };
+    expect(() => parseRoster(withMerge([{ repo: "example-org/registry", automatic: [] }]))).toThrowError(
+      /not a merge grant field/
+    );
+    expect(() => parseRoster(withMerge([{ repo: "registry" }]))).toThrowError(/owner\/repo/);
+    expect(() => parseRoster(withMerge([{ repo: "o/r", auto: ["/registry/**"] }]))).toThrowError(/not a path glob/);
+    expect(() => parseRoster(withMerge([{ repo: "o/r", auto: ["registry/../site/**"] }]))).toThrowError(
+      /not a path glob/
+    );
+    expect(() => parseRoster(withMerge([{ repo: "o/r", auto: ["registry/**", "a b"] }]))).toThrowError(
+      /not a path glob/
+    );
+    expect(() => parseRoster(withMerge([{ repo: "o/r", checks: [""] }]))).toThrowError(/checks/);
+    expect(() => parseRoster(withMerge([{ repo: "o/r" }, { repo: "o/r" }]))).toThrowError(/twice/);
+    expect(() => parseRoster(withMerge({ repo: "o/r" }))).toThrowError(/must be an array/);
   });
 
   it("refuses an unknown agent field instead of dropping it", () => {
