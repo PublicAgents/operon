@@ -183,6 +183,10 @@ async function stageHarness(
 ): Promise<StagedHarness> {
   const hasBrowser = Boolean(config.webUrl && config.webToken);
   for (const line of mcpStagingLines(config.mcpServers, hasBrowser, config.localBrowser)) log(line);
+  // The registry duty (spec 0013), named at wake start. The chassis does
+  // not know the agent's chosen handle or whether an entry exists, so
+  // it names the site and nothing more.
+  log(config.registry ? `registry: ${config.registry.site} (${config.registry.repo})` : "registry: off");
   let chromeMajor: number | undefined;
   if (config.localBrowser) {
     // Screenshots and downloads land here, outside the state repo,

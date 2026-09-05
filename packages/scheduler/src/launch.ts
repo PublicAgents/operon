@@ -19,8 +19,7 @@ import {
   type WakeTrigger,
   type WakeSecrets,
   type WakeOptions,
-  type Door
-} from "@operon/core";
+  type Door, registryPrRepo, type RegistryPin } from "@operon/core";
 
 /**
  * Pure assembly of a wake launch: which secret variable a harness draws its
@@ -124,6 +123,8 @@ export interface LaunchContext {
   log?(line: string): void;
   /** Mints a short-lived token scoped to the agent's state repo. */
   getGithubToken(agent: RosterAgent): Promise<string>;
+  /** The registry this colony's agents keep themselves in (spec 0013), when the roster names one. */
+  registry?: RegistryPin;
   options: WakeOptions;
 }
 
@@ -280,18 +281,30 @@ export async function prepareLaunch(
   // A closed GitHub door also closes the branch door: the write grants
   // are withheld (the porch pre-checks them) and the router refuses the
   // branch route, so persist keeps only the state commit.
+  // The registry repo (spec 0013 §2) joins the effective pr grant of
+  // every agent that does not adjudicate there: the explicit list when
+  // the agent has a github block, the fleet list otherwise.
+  const registryRepo = open("github") ? registryPrRepo({ registry: context.registry }, agent) : undefined;
+  const withRegistry = (repos: readonly string[]): string[] =>
+    registryRepo && !repos.includes(registryRepo) ? [...repos, registryRepo] : [...repos];
   const githubGrants = agent.github
     ? {
         // Repo names only: the merge grant's auto globs and check names
         // are the Gatekeeper's business (spec 0012 §3), never the container's.
         githubGrants: JSON.stringify({
-          pr: open("github") ? (agent.github.pr ?? []) : [],
+          pr: open("github") ? withRegistry(agent.github.pr ?? []) : [],
           write: open("github") ? (agent.github.write ?? []) : [],
           review: open("github") ? (agent.github.review ?? []) : [],
           merge: open("github") ? (agent.github.merge ?? []).map(grant => grant.repo) : []
         })
       }
     : {};
+  const fleetPrRepos = (context.options.prRepos ?? "")
+    .split(",")
+    .map(repo => repo.trim())
+    .filter(repo => repo.length > 0);
+  const prRepos = agent.github ? context.options.prRepos : withRegistry(fleetPrRepos).join(",") || undefined;
+  const registry = context.registry ? { registry: JSON.stringify(context.registry) } : {};
 
   // The servers this agent may reach, resolved once here so the
   // WakeContainer intercepts exactly them and the container is handed
@@ -349,6 +362,8 @@ export async function prepareLaunch(
       secrets,
       {
         ...context.options,
+        ...(prRepos !== undefined ? { prRepos } : {}),
+        ...registry,
         ...(harnessExtraArgs ? { harnessExtraArgs } : {}),
         ...doorOptions,
         ...perAgent,

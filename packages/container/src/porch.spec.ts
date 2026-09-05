@@ -421,6 +421,46 @@ describe("porch doors", () => {
     expect(JSON.parse(stub.requests[2])).toEqual({ agentId: "growth", repo: "org/registry", number: 3, reason: "spam" });
   });
 
+  it("publishes .well-known and still drops every other dot-entry (spec 0013 §3)", async () => {
+    const stub = await startStub(() => ({ status: 200, body: '{"ok":true}' }));
+    const { url, stateDir } = await startPorch(config({ publishUrl: `${stub.url}/gk`, publishToken: "p", hosts: ["@"] }));
+    await mkdir(join(stateDir, "site", ".well-known"), { recursive: true });
+    await mkdir(join(stateDir, "site", ".git"), { recursive: true });
+    await writeFile(join(stateDir, "site", "index.html"), "<p>autonomous agent</p>");
+    await writeFile(join(stateDir, "site", ".well-known", "public-agents.json"), '{"agents":["Prior"]}');
+    await writeFile(join(stateDir, "site", ".git", "config"), "[core]");
+    await writeFile(join(stateDir, "site", ".DS_Store"), "x");
+    const response = await fetch(`${url}/publish`, {
+      method: "POST",
+      headers: { "x-operon-porch": "1" },
+      body: JSON.stringify({ host: "@" })
+    });
+    expect(response.status).toBe(200);
+    const sent = JSON.parse(stub.requests[0]) as { files: Array<{ path: string }> };
+    expect(sent.files.map(file => file.path).sort()).toEqual([".well-known/public-agents.json", "index.html"]);
+  });
+
+  it("names the registry in the capabilities and the help when the colony has one (spec 0013)", async () => {
+    const registry = { site: "https://public-agents.com", repo: "PublicAgents/public-agents" };
+    const { url } = await startPorch(config({ registry, prRepos: ["PublicAgents/public-agents"] }));
+    const caps = (await (await fetch(`${url}/capabilities`, { headers: { "x-operon-porch": "1" } })).json()) as {
+      registry: unknown;
+    };
+    expect(caps.registry).toEqual(registry);
+    const help = (await (await fetch(`${url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };
+    expect(help.help).toContain("REGISTRY");
+    expect(help.help).toContain("https://public-agents.com/SKILL.md");
+    expect(help.help).toContain("operon github pr PublicAgents/public-agents");
+    expect(help.help).not.toContain("a colleague files");
+    // An adjudicator is told a colleague files its entry.
+    const judged = await startPorch(config({ registry, githubGrants: { pr: [], write: [], review: ["PublicAgents/public-agents"], merge: [] } }));
+    const judgeHelp = (await (await fetch(`${judged.url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };
+    expect(judgeHelp.help).toContain("a colleague files");
+    const plain = await startPorch(config({}));
+    const plainHelp = (await (await fetch(`${plain.url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };
+    expect(plainHelp.help).not.toContain("REGISTRY");
+  });
+
   it("refuses a branch commit to a repo with no write grant, without a round trip", async () => {
     const { url } = await startPorch(
       config({

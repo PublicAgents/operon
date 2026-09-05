@@ -122,6 +122,17 @@ function launchContext(env: Env): LaunchContext {
     // to hand over (spec 0009).
     // The harness's extra args are read per resolved harness in
     // prepareLaunch (spec 0010 §5), not fixed here.
+    // The registry duty (spec 0013) travels with the launch; a missing
+    // or unparseable ROSTER fails the launch elsewhere, so here it only
+    // means "no registry".
+    ...(() => {
+      try {
+        const registry = parseRoster(env.ROSTER).registry;
+        return registry ? { registry } : {};
+      } catch {
+        return {};
+      }
+    })(),
     options: {
       prRepos: env.PR_REPOS,
       secretDenylist: env.SECRET_DENYLIST,

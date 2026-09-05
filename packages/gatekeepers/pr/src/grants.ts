@@ -1,4 +1,12 @@
-import { findAgent, parseRoster, reachableGithubRepos, type MergeGrant, type RosterAgent } from "@operon/core";
+import {
+  findAgent,
+  parseRoster,
+  reachableGithubRepos,
+  registryPrRepo,
+  type MergeGrant,
+  type Roster,
+  type RosterAgent
+} from "@operon/core";
 
 /**
  * Which repos an agent may reach through this Gatekeeper (spec 0008 §3).
@@ -36,18 +44,26 @@ function fleetRepos(env: GrantSource): string[] {
  * doors refuse an unverifiable claim outright.
  */
 export function grantedRepos(env: GrantSource, agentId: string): string[] {
-  if (typeof env.ROSTER === "string" && env.ROSTER.length > 0) {
-    try {
-      const agent = findAgent(parseRoster(env.ROSTER), agentId);
-      if (agent?.github) return agent.github.pr ?? [];
-      // No block at all: this agent predates grants, so the fleet list
-      // still binds. An unknown agent falls through too, and gets
-      // nothing from it because it has no PAT either.
-    } catch {
-      /* fall through to the fleet list */
-    }
+  const roster = loadRoster(env);
+  const agent = roster ? findAgent(roster, agentId) : undefined;
+  // The registry repo (spec 0013 §2) joins every agent's authoring
+  // grant except an adjudicator's, whether the agent has a block or
+  // falls back to the fleet list.
+  const registry = roster && agent ? registryPrRepo(roster, agent) : undefined;
+  const base = agent?.github ? (agent.github.pr ?? []) : fleetRepos(env);
+  // No block at all: this agent predates grants, so the fleet list
+  // still binds. An unknown agent gets the fleet list too, and nothing
+  // from it because it has no PAT either.
+  return registry && !base.includes(registry) ? [...base, registry] : base;
+}
+
+function loadRoster(env: GrantSource): Roster | undefined {
+  if (typeof env.ROSTER !== "string" || env.ROSTER.length === 0) return undefined;
+  try {
+    return parseRoster(env.ROSTER);
+  } catch {
+    return undefined;
   }
-  return fleetRepos(env);
 }
 
 /**
@@ -74,12 +90,8 @@ export function rosterVerdict(
 }
 
 function rosterAgent(env: GrantSource, agentId: string): RosterAgent | undefined {
-  if (typeof env.ROSTER !== "string" || env.ROSTER.length === 0) return undefined;
-  try {
-    return findAgent(parseRoster(env.ROSTER), agentId);
-  } catch {
-    return undefined;
-  }
+  const roster = loadRoster(env);
+  return roster ? findAgent(roster, agentId) : undefined;
 }
 
 /**
@@ -89,9 +101,13 @@ function rosterAgent(env: GrantSource, agentId: string): RosterAgent | undefined
  * github block keeps the fleet list, exactly as grantedRepos does.
  */
 export function reachableRepos(env: GrantSource, agentId: string): string[] {
-  const agent = rosterAgent(env, agentId);
-  if (agent?.github) return reachableGithubRepos(agent.github);
-  return fleetRepos(env);
+  const roster = loadRoster(env);
+  const agent = roster ? findAgent(roster, agentId) : undefined;
+  const base = agent?.github ? reachableGithubRepos(agent.github) : fleetRepos(env);
+  // Reading the registry follows from authoring on it; an adjudicator
+  // reaches it through its review or merge grant already.
+  const registry = roster && agent ? registryPrRepo(roster, agent) : undefined;
+  return registry && !base.includes(registry) ? [...base, registry] : base;
 }
 
 /** The repos this agent may post reviews on (spec 0012 §5). Nothing without a roster grant. */

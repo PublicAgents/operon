@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAgent, parseRoster, RosterError, reachableGithubRepos } from "./roster.js";
+import { findAgent, parseRoster, RosterError, reachableGithubRepos, registryPrRepo } from "./roster.js";
 
 const valid = {
   zone: "example-colony.com",
@@ -222,6 +222,32 @@ describe("capability grants (spec 0008)", () => {
     expect(() => parseRoster(withMerge([{ repo: "o/r", checks: [""] }]))).toThrowError(/checks/);
     expect(() => parseRoster(withMerge([{ repo: "o/r" }, { repo: "o/r" }]))).toThrowError(/twice/);
     expect(() => parseRoster(withMerge({ repo: "o/r" }))).toThrowError(/must be an array/);
+  });
+
+  it("parses the registry pin and grants its repo to every agent but an adjudicator (spec 0013)", () => {
+    const roster = granted();
+    roster.registry = { site: "https://public-agents.com/", repo: "PublicAgents/public-agents" };
+    roster.agents[0].github = { pr: ["example-org/product"] };
+    const parsed = parseRoster(JSON.stringify(roster));
+    expect(parsed.registry).toEqual({ site: "https://public-agents.com", repo: "PublicAgents/public-agents" });
+    expect(registryPrRepo(parsed, parsed.agents[0])).toBe("PublicAgents/public-agents");
+    expect(registryPrRepo(parsed, { github: undefined })).toBe("PublicAgents/public-agents");
+    expect(registryPrRepo(parsed, { github: { review: ["PublicAgents/public-agents"] } })).toBeUndefined();
+    expect(registryPrRepo(parsed, { github: { merge: [{ repo: "PublicAgents/public-agents" }] } })).toBeUndefined();
+    expect(registryPrRepo({ registry: undefined }, parsed.agents[0])).toBeUndefined();
+    const off = granted();
+    off.registry = false;
+    expect(parseRoster(JSON.stringify(off)).registry).toBeUndefined();
+    for (const bad of [
+      { site: "http://public-agents.com", repo: "a/b" },
+      { site: "https://public-agents.com", repo: "nope" },
+      { site: "https://public-agents.com", repo: "a/b", extra: 1 },
+      "https://public-agents.com"
+    ]) {
+      const broken = granted();
+      broken.registry = bad;
+      expect(() => parseRoster(JSON.stringify(broken)), JSON.stringify(bad)).toThrowError(/registry/);
+    }
   });
 
   it("refuses an unknown agent field instead of dropping it", () => {

@@ -44,6 +44,7 @@ export const ENV = {
   mcpServers: "OPERON_MCP_SERVERS",
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
+  registry: "OPERON_REGISTRY",
   disabledDoors: "OPERON_DISABLED_DOORS",
   localBrowser: "OPERON_LOCAL_BROWSER",
   chronicleUrl: "OPERON_CHRONICLE_URL",
@@ -114,6 +115,8 @@ export interface WakeConfig {
    * admit repos the Gatekeeper refuses.
    */
   githubGrants?: { pr: string[]; write: string[]; review: string[]; merge: string[] };
+  /** The registry this agent keeps itself in (spec 0013), when the colony names one. */
+  registry?: { site: string; repo: string };
   /** chronicle Gatekeeper endpoint + internal bearer: transcript shipping. */
   chronicleUrl?: string;
   chronicleToken?: string;
@@ -210,6 +213,21 @@ function parseMcpServers(raw: string | undefined): StagedMcpServer[] {
     if (!ok) throw new ConfigError(`invalid_env: ${ENV.mcpServers} entry is malformed`);
   }
   return parsed as StagedMcpServer[];
+}
+
+function parseRegistry(raw: string | undefined): { site: string; repo: string } | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`invalid_env: ${ENV.registry} must be JSON`);
+  }
+  const record = parsed as { site?: unknown; repo?: unknown };
+  if (typeof record?.site !== "string" || typeof record?.repo !== "string" || !record.site || !record.repo) {
+    throw new ConfigError(`invalid_env: ${ENV.registry} must be {site, repo}`);
+  }
+  return { site: record.site, repo: record.repo };
 }
 
 function parseGithubGrants(
@@ -318,6 +336,7 @@ export function readWakeConfig(env: EnvSource): WakeConfig {
     mcpServers: parseMcpServers(env[ENV.mcpServers]),
     mcpToken: env[ENV.mcpToken],
     githubGrants: parseGithubGrants(env[ENV.githubGrants]),
+    registry: parseRegistry(env[ENV.registry]),
     chronicleUrl: env[ENV.chronicleUrl],
     chronicleToken: env[ENV.chronicleToken],
     xUrl: env[ENV.xUrl],

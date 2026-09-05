@@ -277,6 +277,37 @@ describe("prepareLaunch", () => {
     expect(plain.env[WAKE_ENV.githubGrants]).toBeUndefined();
   });
 
+  it("adds the registry repo to the effective pr grant of everyone but an adjudicator (spec 0013)", async () => {
+    const registry = { site: "https://public-agents.com", repo: "PublicAgents/public-agents" };
+    const withRegistry = () => ({ ...context(), registry });
+    const plain = await prepareLaunch(agent, "cron", "wake-reg-plain", withRegistry());
+    expect(plain.env[WAKE_ENV.registry]).toBe(JSON.stringify(registry));
+    expect(plain.env[WAKE_ENV.prRepos]).toContain("PublicAgents/public-agents");
+    const blocked = await prepareLaunch(
+      { ...agent, github: { pr: ["demo/product"] } },
+      "cron",
+      "wake-reg-block",
+      withRegistry()
+    );
+    expect(JSON.parse(blocked.env[WAKE_ENV.githubGrants] as string).pr).toEqual(["demo/product", "PublicAgents/public-agents"]);
+    const adjudicator = await prepareLaunch(
+      { ...agent, github: { review: ["PublicAgents/public-agents"] } },
+      "cron",
+      "wake-reg-judge",
+      withRegistry()
+    );
+    expect(JSON.parse(adjudicator.env[WAKE_ENV.githubGrants] as string).pr).toEqual([]);
+    const closed = await prepareLaunch(
+      { ...agent, github: { pr: ["demo/product"] }, doors: { github: false } },
+      "cron",
+      "wake-reg-closed",
+      withRegistry()
+    );
+    expect(JSON.parse(closed.env[WAKE_ENV.githubGrants] as string).pr).toEqual([]);
+    const none = await prepareLaunch(agent, "cron", "wake-reg-none", context());
+    expect(none.env[WAKE_ENV.registry]).toBeUndefined();
+  });
+
   it("fails closed with a named error when the mind credential is missing", async () => {
     const missing = context({ getSecret: () => undefined });
     await expect(prepareLaunch(agent, "cron", "wake-1", missing)).rejects.toThrowError(

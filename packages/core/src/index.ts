@@ -7,7 +7,9 @@ export {
   type McpServerDef,
   type GithubGrants,
   type MergeGrant,
+  type RegistryPin,
   reachableGithubRepos,
+  registryPrRepo,
   type HarnessPin,
   RESERVED_MCP_NAMES
 } from "./roster.js";

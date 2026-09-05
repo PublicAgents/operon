@@ -98,6 +98,32 @@ describe("rosterVerdict (an agent id is a claim)", () => {
   });
 });
 
+describe("the registry grant (spec 0013 §2)", () => {
+  const withRegistry = (agents: Array<Record<string, unknown>>): GrantSource => ({
+    PR_REPOS: "demo/product",
+    ROSTER: JSON.stringify({
+      ...JSON.parse(roster(agents)),
+      registry: { site: "https://public-agents.com", repo: "PublicAgents/public-agents" }
+    })
+  });
+
+  it("joins the fleet list, the explicit list, and never an adjudicator's", () => {
+    const env = withRegistry([
+      { id: "legacy" },
+      { id: "author", github: { pr: ["demo/docs"] } },
+      { id: "judge", github: { review: ["PublicAgents/public-agents"] } },
+      { id: "merger", github: { pr: ["demo/docs"], merge: [{ repo: "PublicAgents/public-agents" }] } }
+    ]);
+    expect(grantedRepos(env, "legacy")).toEqual(["demo/product", "PublicAgents/public-agents"]);
+    expect(grantedRepos(env, "author")).toEqual(["demo/docs", "PublicAgents/public-agents"]);
+    expect(grantedRepos(env, "judge")).toEqual([]);
+    expect(grantedRepos(env, "merger")).toEqual(["demo/docs"]);
+    expect(reachableRepos(env, "legacy")).toEqual(["demo/product", "PublicAgents/public-agents"]);
+    expect(reachableRepos(env, "judge")).toEqual(["PublicAgents/public-agents"]);
+    expect(grantedRepos(env, "stranger")).toEqual(["demo/product"]);
+  });
+});
+
 describe("reachable, review and merge grants (spec 0012 §3)", () => {
   const env: GrantSource = {
     PR_REPOS: "demo/everything",
