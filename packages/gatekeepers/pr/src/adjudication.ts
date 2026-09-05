@@ -366,7 +366,7 @@ async function executeMerge(
       ...(heldId !== undefined ? { heldId } : {})
     });
     await deps.notify(`[${agentId}] merged ${repo}#${number} "${input.title}" (${mode}, approved by ${input.approvedBy.join(", ") || "the operator"})`);
-    return ok({ status: "merged", mergeSha: result.mergeSha, headSha, mode });
+    return ok({ status: "merged", agentId, repo, number, mergeSha: result.mergeSha, headSha, mode });
   } catch (error) {
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
     if (definitiveFailure(error)) {
@@ -633,7 +633,7 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
   const giveBack = async (error: string, detail?: string) => {
     await deps.holds.unclaimHeld(held.id);
     await deps.ledger.append("merge_approve_failed", { agentId, repo, number, heldId: held.id, reason: error, detail });
-    return refuse(409, error, detail);
+    return { status: 409, body: { ok: false, error, ...(detail !== undefined ? { detail } : {}), agentId, repo, number } };
   };
   if (!api || login === undefined) return giveBack("no_longer_qualifies", "credential_unconfigured");
   if (!grant) return giveBack("no_longer_qualifies", "merge_not_granted");
@@ -783,7 +783,7 @@ export async function rejectHeld(
     headSha: held.headSha,
     ...(input.reason !== undefined ? { reason: input.reason } : {})
   });
-  return ok({ status: "rejected", heldId: held.id });
+  return ok({ status: "rejected", heldId: held.id, agentId: held.agentId, repo: held.repo, number: held.number });
 }
 
 export type { HeldMerge };
