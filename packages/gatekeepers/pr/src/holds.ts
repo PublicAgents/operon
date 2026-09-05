@@ -242,9 +242,18 @@ export class HoldStore {
     const intent = await this.storage.get<MergeIntent>(intentKey(id));
     if (!intent) return undefined;
     if (options.terminal) await this.recordTerminal(options.terminal);
-    if (options.hold && intent.heldId !== undefined) {
-      if (options.hold === "delete") await this.deleteHeld(intent.heldId);
-      else await this.unclaimHeld(intent.heldId);
+    if (options.hold === "delete") {
+      // The head is over: EVERY hold for it goes, the one this intent
+      // came from and any other (an agent's own merge call can settle
+      // a head the operator was still deciding).
+      for (const held of await this.listHeld()) {
+        if (held.repo === intent.repo && held.number === intent.number && held.headSha === intent.headSha) {
+          await this.deleteHeld(held.id);
+        }
+      }
+      if (intent.heldId !== undefined) await this.deleteHeld(intent.heldId);
+    } else if (options.hold === "unclaim" && intent.heldId !== undefined) {
+      await this.unclaimHeld(intent.heldId);
     }
     return this.resolveMerge(id, result, at);
   }

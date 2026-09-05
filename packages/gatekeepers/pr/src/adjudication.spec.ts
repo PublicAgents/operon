@@ -389,6 +389,20 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect((await approve()).body).toMatchObject({ status: "merged" });
   });
 
+  it("an approval that loses the intent race gives its hold back, and the winner's merge clears it", async () => {
+    const { h, approve } = await held();
+    // A concurrent merge call already holds the intent for this head.
+    const { intent } = await h.holds.beginMerge({ repo: REPO, number: 7, headSha: HEAD, agentId: "cto", mode: "auto", at: h.deps.now() });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "merge_in_progress" } });
+    expect((await h.holds.listHeld())[0]).toMatchObject({ id: "hold-1", claimed: false });
+    // The winner settles as merged: the hold for that head is gone too.
+    await h.holds.settleMerge(intent.id, { state: "merged", mergeSha: "m" }, h.deps.now(), {
+      terminal: { repo: REPO, number: 7, headSha: HEAD, outcome: "merged", at: h.deps.now(), by: "cto", mergeSha: "m" },
+      hold: "delete"
+    });
+    expect(await h.holds.listHeld()).toEqual([]);
+  });
+
   it("refuses a hold whose head moved and invalidates it", async () => {
     const { h, approve } = await held();
     h.gh.state.headSha = HEAD2;

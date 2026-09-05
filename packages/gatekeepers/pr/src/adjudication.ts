@@ -272,6 +272,10 @@ async function executeMerge(
   if (!begun.created) {
     // Another call started an irreversible act for this pull request
     // between our read and our write: the store refused a second one.
+    // A hold this attempt had claimed goes back to the operator; the
+    // winning intent, when it settles, deletes every hold for the
+    // head it merged.
+    if (heldId !== undefined) await deps.holds.unclaimHeld(heldId);
     await deps.ledger.append("merge_denied", { agentId, repo, number, headSha, reason: "merge_in_progress", intentId: begun.intent.id });
     return refuse(409, "merge_in_progress", `intent ${begun.intent.id} is ${begun.intent.state}; call again to reconcile`);
   }
