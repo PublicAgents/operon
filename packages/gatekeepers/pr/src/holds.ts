@@ -222,10 +222,26 @@ export class HoldStore {
     return { created: true, intent };
   }
 
-  /** Reject in ONE turn: the terminal record and the hold's deletion together. */
-  async rejectAndRecord(held: HeldMerge, record: TerminalRecord): Promise<void> {
+  /**
+   * Reject in ONE turn: the check for an intent in flight, the terminal
+   * record and the hold's deletion together. beginMerge is one turn
+   * too, so the two cannot interleave: either the approval's intent
+   * exists when the rejection looks (approval_in_flight), or the hold
+   * is gone when the approval begins (hold_gone). No awaited network
+   * read sits between the check and the write.
+   */
+  async rejectAndRecord(
+    held: HeldMerge,
+    record: TerminalRecord,
+    at: string
+  ): Promise<{ status: "rejected" } | { status: "approval_in_flight"; intent: MergeIntent }> {
+    const open = await this.openMergeIntent(held.repo, held.number);
+    if (open && open.state === "pending" && Date.parse(at) - Date.parse(open.at) < INTENT_STALE_MS) {
+      return { status: "approval_in_flight", intent: open };
+    }
     await this.recordTerminal(record);
     await this.deleteHeld(held.id);
+    return { status: "rejected" };
   }
 
   async resolveMerge(

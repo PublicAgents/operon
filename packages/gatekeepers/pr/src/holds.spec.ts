@@ -87,7 +87,14 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     const claimed = await s.claimHeld(held.id, T0);
     expect(claimed?.claimToken).toBeDefined();
     expect(await s.beginMerge({ ...base, claimToken: "wrong" })).toEqual({ created: false, reason: "hold_gone" });
-    await s.rejectAndRecord(claimed!, { repo: "org/registry", number: 7, headSha: "head1", outcome: "rejected", at: T0, by: "operator", heldId: held.id });
+    // With the approval's intent already begun, the rejection yields in the same turn.
+    const begun = await s.beginMerge({ ...base, claimToken: claimed?.claimToken });
+    expect(begun.created).toBe(true);
+    const record = { repo: "org/registry", number: 7, headSha: "head1", outcome: "rejected" as const, at: T0, by: "operator", heldId: held.id };
+    expect((await s.rejectAndRecord(claimed!, record, T0)).status).toBe("approval_in_flight");
+    // Once that intent is over, the rejection lands and a later begin finds the hold gone.
+    if (begun.created) await s.resolveMerge(begun.intent.id, { state: "failed", detail: "no" }, T0);
+    expect((await s.rejectAndRecord(claimed!, record, T0)).status).toBe("rejected");
     expect(await s.beginMerge({ ...base, claimToken: claimed?.claimToken })).toEqual({ created: false, reason: "hold_gone" });
     expect(await s.getHeld(held.id)).toBeUndefined();
     expect(await s.terminal("org/registry", 7, "head1")).toMatchObject({ outcome: "rejected" });

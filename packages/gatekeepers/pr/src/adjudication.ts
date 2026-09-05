@@ -676,19 +676,27 @@ export async function rejectHeld(
       }
     }
   }
-  // The terminal record and the hold's deletion land in one turn: a
-  // stale approval that reaches beginMerge afterwards finds no hold and
-  // stops before GitHub.
-  await deps.holds.rejectAndRecord(held, {
-    repo: held.repo,
-    number: held.number,
-    headSha: held.headSha,
-    outcome: "rejected",
-    at,
-    by: "operator",
-    heldId: held.id,
-    ...(input.reason !== undefined ? { reason: input.reason } : {})
-  });
+  // The in-flight check, the terminal record and the hold's deletion
+  // land in ONE store turn (no GitHub read between them): an approval
+  // that began its intent first is reported in flight, and one that
+  // begins afterwards finds no hold and stops before GitHub.
+  const rejected = await deps.holds.rejectAndRecord(
+    held,
+    {
+      repo: held.repo,
+      number: held.number,
+      headSha: held.headSha,
+      outcome: "rejected",
+      at,
+      by: "operator",
+      heldId: held.id,
+      ...(input.reason !== undefined ? { reason: input.reason } : {})
+    },
+    at
+  );
+  if (rejected.status === "approval_in_flight") {
+    return refuse(409, "approval_in_flight", `intent ${rejected.intent.id} began at ${rejected.intent.at}; wait for its outcome`);
+  }
   await deps.ledger.append("merge_rejected", {
     agentId: held.agentId,
     repo: held.repo,

@@ -288,10 +288,11 @@ not-merged attempt unclaims it for another decision. The claim itself
 is a fence: it mints a token the approval must present when it begins
 its intent, and the begin refuses `hold_gone` when the hold is no
 longer there with that token. A rejection that overrides a stale claim
-first yields to a pending intent (`approval_in_flight`) or reconciles
-an older one, then deletes the hold and writes the terminal record in
-one turn; a slow approval that wakes up afterwards stops before
-GitHub.
+reconciles an older intent first, and then, in ONE store turn with no
+network read between them, checks again for an intent in flight
+(`approval_in_flight`), writes the terminal record and deletes the
+hold; the begin is one turn too, so the two cannot interleave, and a
+slow approval that wakes up afterwards stops before GitHub.
 
 ## 7. The close door
 
