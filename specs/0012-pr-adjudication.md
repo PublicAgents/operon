@@ -297,10 +297,15 @@ executor has a deadline too: no merge call starts once its intent is
 older than the stale bound, and the call carries the time that
 remains; past the bound the attempt answers `executor_stale` and is
 over. A call the client gave up on is a lost response (the intent goes
-`unknown`), and because the server may still be finishing it,
-reconciliation of an unknown intent waits a grace (one minute after
-it became unknown) before reading GitHub as the truth; a pending
-intent is reconciled only past the stale bound. No rejection ever
+`unknown`), and because the server may still be finishing it (GitHub
+answers or times out an API request within ten seconds of receiving
+it), reconciliation of an unknown intent waits a grace of one minute
+after it became unknown before reading GitHub as the truth; a pending
+intent, whose request was aborted at the stale bound at the latest, is
+reconciled only past the stale bound plus that grace. So by the time
+a reconciliation says "not merged" and a rejection is recorded on
+that reading, no merge request of that intent can still be in
+flight. No rejection ever
 lands over an open intent: the store's one-turn reject answers
 `approval_in_flight` for a young pending one and `unresolved` for any
 other, and the door reconciles first, with the agent's credential, or

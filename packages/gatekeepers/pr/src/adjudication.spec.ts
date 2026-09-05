@@ -316,8 +316,12 @@ describe("mergeDoor (spec 0012 §6)", () => {
     expect(await mergeDoor(h.deps, h.mergeInput)).toMatchObject({ status: 409, body: { error: "merge_in_progress" } });
     expect(h.gh.state.mergePayload).toBeUndefined();
     // Nobody resolved it: the door that made it crashed. Past the stale
-    // bound it is reconciled (not merged) and a fresh decision follows.
+    // bound plus the grace (its request, aborted at the bound, is over on
+    // GitHub's side too) it is reconciled (not merged) and a fresh
+    // decision follows. Before that the door still waits.
     h.advance(INTENT_STALE_MS + 1000);
+    expect(await mergeDoor(h.deps, h.mergeInput)).toMatchObject({ status: 503, body: { error: "outcome_unknown" } });
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     expect((await mergeDoor(h.deps, h.mergeInput)).body).toMatchObject({ status: "merged" });
     expect(h.kinds()).toEqual(["merge_denied", "merge_failed", "pr_merged"]);
   });

@@ -92,17 +92,24 @@ export const CLAIM_AGE_MS = 5 * 60 * 1000;
 /** A pending intent older than this belongs to a door that crashed mid-flight, not one still working. */
 export const INTENT_STALE_MS = 5 * 60 * 1000;
 /**
- * After a lost response, the server may still be finishing the request
- * the client gave up on; reconciliation waits this long before reading
- * GitHub as the truth, so a straggling merge cannot land after a
- * reconciliation that said "not merged".
+ * After a request the client gave up on, the server may still be
+ * finishing it: GitHub's API answers or times out a request within ten
+ * seconds of receiving it. Reconciliation therefore waits this grace
+ * (six times that) after the client's abort before reading GitHub as
+ * the truth, so no merge request can still be in flight when a
+ * reconciliation says "not merged" and a rejection is recorded on it.
  */
 export const UNKNOWN_GRACE_MS = 60 * 1000;
 
-/** Whether an open intent may be reconciled now, or must still be waited for. */
+/**
+ * Whether an open intent may be reconciled now, or must still be
+ * waited for. An unknown one: the grace after it became unknown. A
+ * pending one (a crashed executor): its request was aborted at the
+ * stale bound at the latest, so the stale bound plus the grace.
+ */
 export function reconcilable(intent: MergeIntent, now: string): boolean {
   const t = Date.parse(now);
-  if (intent.state === "pending") return t - Date.parse(intent.at) >= INTENT_STALE_MS;
+  if (intent.state === "pending") return t - Date.parse(intent.at) >= INTENT_STALE_MS + UNKNOWN_GRACE_MS;
   if (intent.state === "unknown") return t - Date.parse(intent.unknownAt ?? intent.at) >= UNKNOWN_GRACE_MS;
   return false;
 }
