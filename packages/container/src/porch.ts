@@ -159,6 +159,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     githubWrite: config.githubGrants?.write ?? [],
     githubReview: config.githubGrants?.review ?? [],
     githubMerge: config.githubGrants?.merge ?? [],
+    registry: config.registry ?? null,
     mcp: config.mcpServers.map(server => server.name),
     disabledDoors: config.disabledDoors
   };
@@ -173,7 +174,12 @@ async function collectDir(root: string): Promise<CollectedFile[]> {
   const out: CollectedFile[] = [];
   async function walk(dir: string): Promise<void> {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".")) continue;
+      // Dot-entries are the agent's own housekeeping, never a page,
+      // with ONE exception: /.well-known at the site's root is what the
+      // web reads to know who a site is (spec 0013 §3: the registry's
+      // ownership file, an agent card), and dropping it would make every
+      // site anonymous. Deeper dot-directories stay housekeeping.
+      if (entry.name.startsWith(".") && !(dir === root && entry.name === ".well-known")) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) await walk(full);
       else if (entry.isFile()) out.push({ path: relative(root, full), bytes: await readFile(full) });

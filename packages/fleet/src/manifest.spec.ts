@@ -238,6 +238,15 @@ describe("capability grants through the manifest (spec 0008)", () => {
     expect(() => validateManifest(dormant)).toThrow(/merge_without_reviewer/);
   });
 
+  it("carries the registry pin into the roster (spec 0013)", () => {
+    const manifest = validateManifest({
+      ...withGrants(),
+      registry: { site: "https://public-agents.com", repo: "PublicAgents/public-agents" }
+    });
+    expect(manifest.roster.registry).toEqual({ site: "https://public-agents.com", repo: "PublicAgents/public-agents" });
+    expect(validateManifest({ ...withGrants(), registry: false }).roster.registry).toBeUndefined();
+  });
+
   it("keeps PR_REPOS working for agents without a github block", () => {
     const legacy = {
       ...structuredClone(BASE),

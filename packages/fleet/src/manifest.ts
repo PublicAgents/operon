@@ -304,7 +304,8 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     JSON.stringify({
       zone: root.zone,
       agents: root.agents,
-      ...(root.mcp !== undefined ? { mcp: root.mcp } : {})
+      ...(root.mcp !== undefined ? { mcp: root.mcp } : {}),
+      ...(root.registry !== undefined ? { registry: root.registry } : {})
     })
   );
 

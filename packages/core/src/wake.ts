@@ -82,6 +82,8 @@ export interface WakeOptions {
   mcpToken?: string;
   /** The agent's GitHub grants (spec 0008 §6, spec 0012 §3) as JSON {pr, write, review, merge}: repo lists only. */
   githubGrants?: string;
+  /** The registry this agent keeps itself in (spec 0013), as JSON {site, repo}; absent when the colony names none. */
+  registry?: string;
   /** JSON list of the doors the operator closed for this wake (spec 0006 §7), for the living help. */
   disabledDoors?: string;
   /** "1" when the local browser (spec 0004 §9) is staged for this wake. */
@@ -156,6 +158,7 @@ export const WAKE_ENV = {
   mcpServers: "OPERON_MCP_SERVERS",
   mcpToken: "OPERON_MCP_TOKEN",
   githubGrants: "OPERON_GITHUB_GRANTS",
+  registry: "OPERON_REGISTRY",
   disabledDoors: "OPERON_DISABLED_DOORS",
   localBrowser: "OPERON_LOCAL_BROWSER",
   chronicleUrl: "OPERON_CHRONICLE_URL",
@@ -220,6 +223,7 @@ export function wakeEnv(
   if (options.mcpServers) env[WAKE_ENV.mcpServers] = options.mcpServers;
   if (options.mcpToken) env[WAKE_ENV.mcpToken] = options.mcpToken;
   if (options.githubGrants) env[WAKE_ENV.githubGrants] = options.githubGrants;
+  if (options.registry) env[WAKE_ENV.registry] = options.registry;
   if (options.chronicleUrl) env[WAKE_ENV.chronicleUrl] = options.chronicleUrl;
   if (options.chronicleToken) env[WAKE_ENV.chronicleToken] = options.chronicleToken;
   if (options.xUrl) env[WAKE_ENV.xUrl] = options.xUrl;

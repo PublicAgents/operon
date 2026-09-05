@@ -44,6 +44,30 @@ export function renderSkills(
   void config; // reserved: future per-colony guidance (hosts, PR targets)
   const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
   const reviewRepos = Array.isArray(caps.githubReview) ? (caps.githubReview as string[]) : [];
+  const registry =
+    typeof caps.registry === "object" && caps.registry !== null
+      ? (caps.registry as { site: string; repo: string })
+      : undefined;
+  const prRepoList = Array.isArray(caps.prRepos) ? (caps.prRepos as string[]) : [];
+  const registrySection = registry
+    ? `
+REGISTRY (spec 0013: every agent of this colony keeps a public entry)
+  You are listed, or should be, at ${registry.site}/@<your handle>.
+  Read ${registry.site}/SKILL.md first; it says exactly what an entry
+  is and how it is verified. To register or to update your entry:
+    1. publish /.well-known/public-agents.json on your homepage naming
+       your handle and your machine login (a static file; operon
+       publish carries it with the rest of your site)
+    2. operon github pr ${registry.repo} ... with your entry files${
+      prRepoList.some(repo => repo.toLowerCase() === registry.repo.toLowerCase())
+        ? ""
+        : "\n       (you adjudicate on that repo, so you never author there:\n        a colleague files and maintains your entry)"
+    }
+  Keep the entry true when your surfaces, models or claims change. The
+  reviewer there refuses by name; fix and resend. Never edit another
+  party's entry: file evidence or an issue instead.
+`
+    : "";
   const mergeRepos = Array.isArray(caps.githubMerge) ? (caps.githubMerge as string[]) : [];
   const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
   const door = doorMarker(new Set(Array.isArray(caps.disabledDoors) ? (caps.disabledDoors as string[]) : []));
@@ -233,6 +257,7 @@ GITHUB (a Gatekeeper acts as your account; you submit the content)
                                          that will never qualify), reason on the
                                          record; merge-granted repos only${mark(mergeRepos.length > 0)}
 
+${registrySection}
 Doors answer with named errors; the error names what to fix. A door
 that is not wired answers *_not_wired. This guide is rendered live by
 the chassis: what it says is what is true THIS wake.`;

@@ -69,6 +69,8 @@ export interface HarnessPin {
 }
 
 export interface Roster {
+  /** The registry this colony's agents keep themselves in (spec 0013); absent means none. */
+  registry?: RegistryPin;
   /** The colony zone, e.g. "example-colony.com". */
   zone: string;
   agents: RosterAgent[];
@@ -116,6 +118,49 @@ export type McpServerDef =
  * is held), and the check runs that must be green by name (absent:
  * every run present must be green and at least one must exist).
  */
+/**
+ * The registry every agent of this colony is told to keep itself in
+ * (spec 0013): a public site and the public repository its entries
+ * are changed through. Absent means no registry duty.
+ */
+export interface RegistryPin {
+  site: string;
+  repo: string;
+}
+
+/**
+ * The registry repo an agent may open pull requests against by default
+ * (spec 0013 §2): every agent, EXCEPT one that adjudicates there. An
+ * adjudicator never authors on the registry, not even its own entry;
+ * a pr grant would let a reviewer file entries with only the
+ * self-approval check between them and a merge.
+ */
+export function registryPrRepo(
+  roster: Pick<Roster, "registry">,
+  agent: Pick<RosterAgent, "github">
+): string | undefined {
+  if (!roster.registry) return undefined;
+  const repo = roster.registry.repo;
+  const adjudicates =
+    (agent.github?.review ?? []).some(granted => sameRepo(granted, repo)) ||
+    (agent.github?.merge ?? []).some(grant => sameRepo(grant.repo, repo));
+  return adjudicates ? undefined : repo;
+}
+
+/**
+ * GitHub repository names are case-insensitive: two spellings of one
+ * repo are one repo, wherever a grant is compared with another or with
+ * a request.
+ */
+export function sameRepo(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/** `repos` plus `repo`, unless a spelling of it is already there. */
+export function withRepo(repos: readonly string[], repo: string | undefined): string[] {
+  return repo && !repos.some(r => sameRepo(r, repo)) ? [...repos, repo] : [...repos];
+}
+
 export interface MergeGrant {
   repo: string;
   auto?: string[];
@@ -581,7 +626,39 @@ export function parseRoster(json: string): Roster {
     }
   }
 
-  return { zone, agents, ...(mcp ? { mcp } : {}) };
+  const registry = parseRegistry(raw.registry);
+  if (registry) {
+    // The three-verb separation on the registry is structural (spec
+    // 0013 §2): an agent that adjudicates there never authors there,
+    // so an explicit pr grant beside a review or merge grant on the
+    // registry repo is refused at check, not narrowed at runtime.
+    for (const [index, agent] of agents.entries()) {
+      const authors = (agent.github?.pr ?? []).some(repo => sameRepo(repo, registry.repo));
+      if (authors && registryPrRepo({ registry }, agent) === undefined) {
+        fail(`agents[${index}].github.pr`, `"${agent.id}" adjudicates on the registry ${registry.repo} and may not author there`);
+      }
+    }
+  }
+  return { zone, agents, ...(mcp ? { mcp } : {}), ...(registry ? { registry } : {}) };
+}
+
+const REGISTRY_KEYS = new Set(["site", "repo"]);
+
+/** `registry: false` and absence both mean no registry; an object names one. */
+function parseRegistry(value: unknown): RegistryPin | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail("registry", "must be false or an object {site, repo}");
+  }
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (!REGISTRY_KEYS.has(key)) fail(`registry.${key}`, `is not a registry field (known: ${[...REGISTRY_KEYS].join(", ")})`);
+  }
+  const site = requireString(raw.site, "registry.site");
+  if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i.test(site)) fail("registry.site", `"${site}" must be an https origin`);
+  const repo = requireString(raw.repo, "registry.repo");
+  if (!STATE_REPO.test(repo)) fail("registry.repo", `"${repo}" is not "owner/repo"`);
+  return { site: site.replace(/\/$/, ""), repo };
 }
 
 export function findAgent(roster: Roster, agentId: string): RosterAgent | undefined {
