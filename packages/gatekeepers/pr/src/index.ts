@@ -1,4 +1,4 @@
-import { grantedRepos, rosterVerdict } from "./grants.js";
+import { grantedRepos, reachableRepos, rosterVerdict } from "./grants.js";
 import {
   errorResponse,
   json,
@@ -273,9 +273,11 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   const pat = identify(env, body.value.agentId);
   if (pat instanceof Response) return pat;
   try {
+    // Watched repos are everything the agent may read (spec 0012 §3):
+    // a reviewer with no authoring grant still sees what it adjudicates.
     const activity = await listActivity(
       { token: pat.token, userAgent: "operon-gatekeeper-pr" },
-      grantedRepos(env, body.value.agentId as string)
+      reachableRepos(env, body.value.agentId as string)
     );
     return json({ ok: true, ...activity });
   } catch (error) {
@@ -305,7 +307,7 @@ async function conversationAccess(
   const login = await authenticatedLogin({ token: pat, userAgent: "operon-gatekeeper-pr" });
   const ref = await getIssueRef({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number);
   const own = ref.author === login;
-  if (!own && !grantedRepos(env, agentId).includes(repo)) {
+  if (!own && !reachableRepos(env, agentId).includes(repo)) {
     return errorResponse(403, "not_own_and_not_granted", `${repo}#${number}`);
   }
   return { ref, own };
@@ -498,7 +500,7 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   const body = await readJson<{ agentId?: string; repo?: string; path?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, repo, path } = body.value;
-  const grantedForFile = typeof agentId === "string" ? grantedRepos(env, agentId) : [];
+  const grantedForFile = typeof agentId === "string" ? reachableRepos(env, agentId) : [];
   if (typeof repo !== "string" || !REPO.test(repo) || !grantedForFile.includes(repo)) {
     return errorResponse(
       403,
