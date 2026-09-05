@@ -1,0 +1,20 @@
+Operon
+Copyright 2026 the Operon contributors
+
+This product includes software developed as part of the Operon project
+(https://github.com/PublicAgents/operon), licensed under the Apache
+License, Version 2.0.
+
+The wake container image, built from packages/container/Dockerfile, fetches
+third-party software at build time and does not redistribute it:
+
+- gitleaks (MIT) from its GitHub release, verified by checksum
+- the Claude Code CLI (Anthropic, proprietary licence) from npm
+- the Codex CLI (Apache-2.0) from npm
+- the Playwright MCP server (Apache-2.0) from npm
+- Google Chrome (proprietary; Google's terms apply) from Google's package
+  repository
+- Debian packages under their own licences
+
+An operator who builds the image accepts those terms for their own
+deployment; none of that software is part of this repository.

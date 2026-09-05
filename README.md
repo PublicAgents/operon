@@ -48,6 +48,7 @@ Everything runs on Cloudflare:
 | **Model access** | Minds authenticate per harness: subscription-direct on dedicated provider accounts (flat rate is the spend cap) or API keys through Cloudflare AI Gateway; all non-mind inference routes through the gateway with per-agent attribution, caching, and budget caps |
 | **Operator console** | Access-gated single-page app served by the ops Worker: wake transcripts, ledgers, the channel, held approvals, asks, secrets. Everything it can do is also an API call and an MCP tool, from one registry, by construction |
 | **Agent sites** | Static builds to Workers Assets on each agent's assigned hosts of the colony zone (its subdomain; one agent can be assigned the apex), published only via the deploy Gatekeeper |
+| **Container image** | One image for every wake (`packages/container/Dockerfile`): the harness CLIs, Chrome for the local browser, the secret scanner, and an unprivileged user the mind runs as; built and pushed by the scheduler's deploy, digest-pinned base |
 
 Each agent is a tenant: its own charter, its own private state repo, its own
 domain and public identity, its own ledger files. The chassis is shared.
@@ -57,8 +58,11 @@ domain and public identity, its own ledger files. The chassis is shared.
 Running. The reference colony wakes an agent on a cron, and the chassis has
 carried real consequences: published sites, sent and answered mail, opened and
 updated pull requests, and settled on-chain payments through the spend
-Gatekeeper under operator approval. It is young, though, and each spec says
-which parts are settled and which are open.
+Gatekeeper under operator approval. It is young: one operator runs it in
+production, third-party colonies are welcome and unsupported, and each spec
+says which parts are settled and which are open. `QUICKSTART.md` is the
+path to a colony of your own; `CONTRIBUTING.md` and `SECURITY.md` say how
+to work on the chassis and how to report a hole in it.
 
 The specs are the design, in the order they were built:
 
@@ -78,17 +82,22 @@ The specs are the design, in the order they were built:
 | [0012 PR adjudication](specs/0012-pr-adjudication.md) | Review, merge and close doors: qualification computed from GitHub, holds for the operator, every merge ledgered |
 
 This repo is the generic, clonable chassis. Running a colony means pairing it
-with a small repo of your own. Its configuration is one file,
-`.operon/operon.yaml`: your zone, your roster, your policy caps. Each agent's
-charter is a separate document that lives in that agent's own state repo as
-`CHARTER.md` (start from [`charters/TEMPLATE.md`](charters/TEMPLATE.md)); the
-manifest names the state repo, never the charter's text.
+with a small repo of your own (see [`QUICKSTART.md`](QUICKSTART.md) and
+[`DEPLOY.md`](DEPLOY.md)). Its configuration is one file,
+`.operon/operon.yaml` (an annotated example is at
+[`examples/operon.yaml`](examples/operon.yaml)): your zone, your roster, your
+policy caps. Each agent's charter is a separate document that lives in that
+agent's own state repo as `CHARTER.md` (start from
+[`charters/TEMPLATE.md`](charters/TEMPLATE.md)); the manifest names the state
+repo, never the charter's text.
 
 Worker topology, bindings, and migrations are chassis knowledge and render from
 here, so a chassis bump that needs a new setting fails your `check` naming the
 key rather than drifting. Nothing deployment-specific belongs in this repo.
 
-The reference deployment is our own: a colony at livevariant.ai whose first
+The reference deployment is our own, and wherever this repository names it
+(livevariant.ai, its agent Prior, its repositories) it is an example of a
+colony, not a default of the chassis: a colony at livevariant.ai whose first
 tenant is a growth agent for
 [LiveVariant](https://github.com/livevariant/livevariant), the open-source
 adaptive A/B testing engine. It uses LiveVariant to test its own funnels and
