@@ -57,23 +57,36 @@ export async function loadProject(root = process.cwd(), onlyProject = undefined)
       "run this from a project root (no .operon/operon.yaml or .operon/projects/*/operon.yaml here)"
     );
   }
-  const manifests = found.map(({ path, directoryName }) =>
-    parseManifest(readFileSync(path, "utf8"), { directoryName })
-  );
+  const manifests = found.map(({ path, directoryName }) => ({
+    path,
+    manifest: parseManifest(readFileSync(path, "utf8"), { directoryName })
+  }));
   const selected =
     onlyProject === undefined
       ? manifests
-      : manifests.filter(manifest => manifest.project === onlyProject);
+      : manifests.filter(({ manifest }) => manifest.project === onlyProject);
   if (selected.length === 0) throw new Error(`no project named "${onlyProject}" here`);
   if (selected.length > 1) {
     throw new Error(
-      `several projects here (${selected.map(m => m.project).join(", ")}); ` +
+      `several projects here (${selected.map(({ manifest }) => manifest.project).join(", ")}); ` +
         "name one with --project"
     );
   }
-  const manifest = selected[0];
+  const { manifest, path: manifestPath } = selected[0];
   return {
     manifest,
+    /** The file this manifest was read from: what a tool writes back into, never a guessed location. */
+    manifestPath,
+    /** Every project in the repo, for the tools that must see across projects. */
+    all: manifests.map(entry => entry.manifest),
+    /**
+     * The project whose control plane enrolls this one (spec 0006 §9),
+     * or undefined: it holds the WAKE_TRIGGER_TOKEN_<PROJECT> copy that
+     * a wake-trigger rotation must write too.
+     */
+    host: manifests
+      .map(entry => entry.manifest)
+      .find(other => other.project !== manifest.project && (other.control?.enrolled ?? []).some(e => e.project === manifest.project)),
     /** "gatekeeper-x" -> the deployed Worker name for this project. */
     workerName: key => `${manifest.workerPrefix}-${key}`,
     /** The ops gateway's own hostname, as the templates route it. */

@@ -4,7 +4,8 @@
  *
  *   node operon/tools/fleet.mjs check   [--project <name>]
  *   node operon/tools/fleet.mjs render  [--project <name>]
- *   node operon/tools/fleet.mjs deploy  [--project <name>] [--no-drain]
+ *   node operon/tools/fleet.mjs migrate [--project <name>]
+ *   node operon/tools/fleet.mjs deploy  [--project <name>] [--no-drain] [--bootstrap]
  *
  * The manifest is `.operon/operon.yaml` (single project) or
  * `.operon/projects/<name>/operon.yaml` (several). Configs render from
@@ -31,7 +32,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { ensureOpsAccess } from "./access.mjs";
+import { ensureOpsAccess, githubRepoOf } from "./access.mjs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -92,12 +93,18 @@ async function loadFleet() {
 }
 
 const [, , command, ...rest] = process.argv;
-if (!["check", "render", "deploy"].includes(command ?? "")) {
-  fail("usage: fleet.mjs <check|render|deploy> [--project <name>] [--no-drain]");
+if (!["check", "render", "migrate", "deploy"].includes(command ?? "")) {
+  fail("usage: fleet.mjs <check|render|migrate|deploy> [--project <name>] [--no-drain] [--bootstrap]");
 }
 const projectFlagIndex = rest.indexOf("--project");
 const onlyProject = projectFlagIndex >= 0 ? rest[projectFlagIndex + 1] : undefined;
 const noDrain = rest.includes("--no-drain");
+// A project's FIRST deploy: every Worker binds Workers that do not
+// exist yet, and the cycles through gatekeeper-telegram mean no order
+// deploys them in one pass. Pass one deploys each Worker without its
+// service bindings (nothing has a bearer yet, so nothing is reachable),
+// pass two the real configs (spec 0012 §10).
+const bootstrapMode = rest.includes("--bootstrap");
 
 const { parseManifest, renderWorkers, DEPLOY_ORDER, D1_PLACEHOLDER } = await loadFleet();
 
@@ -184,8 +191,29 @@ function render(manifest, { resolveIds }) {
   return { buildDir, workers };
 }
 
+/**
+ * The ops plane a call goes to: the project's own, or a PER-PROJECT
+ * override (OPERON_OPS_URL_<PROJECT>). The bare OPERON_OPS_URL is
+ * honored only when this run deploys one project: with several it
+ * would drain the wrong plane for all but one of them.
+ */
+function opsUrlFor(manifest) {
+  const perProject = process.env[`OPERON_OPS_URL_${manifest.project.toUpperCase().replace(/-/g, "_")}`];
+  if (perProject) return perProject;
+  if (process.env.OPERON_OPS_URL) {
+    if (manifests.length > 1) {
+      fail(
+        `OPERON_OPS_URL is set but this run deploys ${manifests.length} projects; ` +
+          `set OPERON_OPS_URL_<PROJECT> per project or unset it (each project drains its own ops.<zone>)`
+      );
+    }
+    return process.env.OPERON_OPS_URL;
+  }
+  return `https://ops.${manifest.roster.zone}`;
+}
+
 async function opsCall(manifest, tool, body) {
-  const opsUrl = process.env.OPERON_OPS_URL ?? `https://ops.${manifest.roster.zone}`;
+  const opsUrl = opsUrlFor(manifest);
   const headers = { "content-type": "application/json", "x-operon-console": "1" };
   if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
     headers["CF-Access-Client-Id"] = process.env.CF_ACCESS_CLIENT_ID;
@@ -391,6 +419,21 @@ for (const manifest of manifests) {
     continue;
   }
 
+  if (command === "migrate") {
+    // The chronicle's D1 migrations, for EVERY project rendered here:
+    // a colony workflow says `migrate` once and never names a project.
+    const { buildDir } = render(manifest, { resolveIds: true });
+    const configPath = join(buildDir, "gatekeeper-chronicle.json");
+    console.log(`→ ${manifest.project}: applying chronicle migrations to ${manifest.resources.d1Name}`);
+    execFileSync(
+      "npx",
+      ["wrangler", "d1", "migrations", "apply", manifest.resources.d1Name, "--remote", "-c", configPath],
+      { cwd: PROJECT_ROOT, stdio: "inherit", timeout: WORKER_DEPLOY_TIMEOUT_MS }
+    );
+    console.log(`✓ ${manifest.project}: migrations applied`);
+    continue;
+  }
+
   // deploy
   const consoleIndex = join(CHASSIS_ROOT, "packages/console/dist/index.html");
   if (!existsSync(consoleIndex)) {
@@ -405,7 +448,9 @@ for (const manifest of manifests) {
       const access = await ensureOpsAccess(manifest, {
         apiToken: process.env.CLOUDFLARE_API_TOKEN,
         accountId: manifest.accountId,
-        createServiceToken: false
+        createServiceToken: false,
+        // The CI service token is named per repository (spec 0012 §10).
+        ghRepo: process.env.GITHUB_REPOSITORY ?? githubRepoOf(PROJECT_ROOT)
       });
       for (const line of access.lines) console.log(`  ${line}`);
       for (const need of access.needs) console.log(`  ! ${need}`);
@@ -493,14 +538,12 @@ for (const manifest of manifests) {
   // resume always runs when a pause was taken, and the final report
   // names every failure that occurred, the stuck-pause recovery first
   // because it is the one that costs wakes every hour it is missed.
-  // The WHOLE roster, mcp defs included: the scheduler resolves MCP
-  // grants and the umbilical routes from this var, so an entry dropped
+  // The WHOLE roster, every field: the scheduler resolves grants, MCP
+  // defs and the umbilical routes from this var, so a field dropped
   // here is a capability that validates at check and vanishes in prod.
-  const rosterVar = JSON.stringify({
-    zone: manifest.roster.zone,
-    agents: manifest.roster.agents,
-    ...(manifest.roster.mcp !== undefined ? { mcp: manifest.roster.mcp } : {})
-  });
+  // The parsed roster is exactly what parseRoster accepted, so nothing
+  // unknown rides along and nothing known is left behind.
+  const rosterVar = JSON.stringify(manifest.roster);
   let deployError = null;
   // The rollouts this deploy starts, waited for after the LAST worker:
   // a rollout runs on the platform's clock, so the workers behind the
@@ -508,6 +551,25 @@ for (const manifest of manifests) {
   const rollouts = [];
   try {
     if (paused) await waitForQuiet(manifest);
+    if (bootstrapMode) {
+      const stubDir = join(buildDir, "bootstrap");
+      mkdirSync(stubDir, { recursive: true });
+      console.log(`\n→ bootstrap pass one: every worker without its service bindings`);
+      for (const key of DEPLOY_ORDER) {
+        const worker = workersByKey.get(key);
+        if (!worker) continue;
+        const { services: _services, ...stripped } = worker.config;
+        const stubPath = join(stubDir, `${key}.json`);
+        writeFileSync(stubPath, JSON.stringify(stripped, null, 2) + "\n");
+        console.log(`  ${manifest.project}/${key} (stub)`);
+        execFileSync("npx", ["wrangler", "deploy", "-c", stubPath, "--var", `ROSTER:${rosterVar}`], {
+          cwd: PROJECT_ROOT,
+          stdio: "inherit",
+          timeout: worker.config.containers?.length ? CONTAINER_DEPLOY_TIMEOUT_MS : WORKER_DEPLOY_TIMEOUT_MS
+        });
+      }
+      console.log(`\n→ bootstrap pass two: the real configs`);
+    }
     for (const key of DEPLOY_ORDER) {
       console.log(`\n→ deploying ${manifest.project}/${key}`);
       const worker = workersByKey.get(key);
