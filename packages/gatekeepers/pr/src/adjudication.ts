@@ -676,8 +676,21 @@ async function approveHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, inpu
   if (snapshot.headSha !== held.headSha) {
     // The operator approved a revision that no longer exists: the hold
     // is void, and the next merge request makes a fresh one with fresh
-    // evidence. Nothing is silently refreshed.
+    // evidence. Nothing is silently refreshed. The held head's terminal
+    // record says it was superseded, so a late answer about this hold
+    // still names the agent and the pull request.
     await deps.holds.deleteHeld(held.id);
+    await deps.holds.recordTerminal({
+      repo,
+      number,
+      headSha: held.headSha,
+      outcome: "superseded",
+      at,
+      by: "operator",
+      agentId,
+      heldId: held.id,
+      reason: `head_moved to ${snapshot.headSha}`
+    });
     await deps.ledger.append("merge_hold_invalidated", {
       agentId,
       repo,

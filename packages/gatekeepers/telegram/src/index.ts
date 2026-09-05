@@ -156,9 +156,9 @@ async function heldDecision(
   env: Env,
   gate: HeldGate,
   approve: boolean,
-  agentId: string,
+  agentId: string | undefined,
   heldId: string
-): Promise<{ ok: boolean; detail: string; agentId: string; pr?: { repo: string; number: number } }> {
+): Promise<{ ok: boolean; detail: string; agentId?: string; pr?: { repo: string; number: number } }> {
   const verb = approve ? "approve" : "reject";
   // The decision goes over a private service binding to the Gatekeeper's
   // binding-only Ops entrypoint: no bearer on the wire, and only workers
@@ -177,9 +177,13 @@ async function heldDecision(
   // holding agent and the pull request, and the audit row carries each
   // in its own field (the agent id stays the bare roster id, so the
   // chronicle's exact-match queries find it).
-  let named = agentId;
+  // A hold nobody remembers any more (no hold, no terminal record) is
+  // ledgered without an agent rather than under a placeholder that a
+  // roster-scoped query would never match.
+  let named: string | undefined = agentId;
   let pr: { repo: string; number: number } | undefined;
   if (gate === "merge") {
+    named = undefined;
     try {
       const body = JSON.parse(text) as { agentId?: string; repo?: string; number?: number };
       if (typeof body.agentId === "string") named = body.agentId;
@@ -188,7 +192,13 @@ async function heldDecision(
       /* the detail carries what came back */
     }
   }
-  await ledger(env).append(`${gate}_decision`, { verb, agentId: named, heldId, status: response.status, ...(pr ?? {}) });
+  await ledger(env).append(`${gate}_decision`, {
+    verb,
+    ...(named !== undefined ? { agentId: named } : {}),
+    heldId,
+    status: response.status,
+    ...(pr ?? {})
+  });
   return { ok: response.ok, detail, agentId: named, pr };
 }
 
@@ -323,8 +333,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
         return json({ ok: true });
       }
       const { gate, approve } = GATE_BY_PREFIX[match[1]];
-      const result = await heldDecision(env, gate, approve, match[2] || "(hold)", match[3]);
-      const who = result.pr ? `${result.agentId} (${result.pr.repo}#${result.pr.number})` : result.agentId;
+      const result = await heldDecision(env, gate, approve, match[2], match[3]);
+      const agent = result.agentId ?? "an agent no longer on record";
+      const who = result.pr ? `${agent} (${result.pr.repo}#${result.pr.number})` : agent;
       await answerCallback(
         env,
         action.callbackId,

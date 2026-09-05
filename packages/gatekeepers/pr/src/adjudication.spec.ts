@@ -467,6 +467,9 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(await approve()).toMatchObject({ status: 409, body: { error: "head_moved", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
     expect(h.kinds()).toEqual(["merge_held", "merge_hold_invalidated"]);
+    // The held head's record survives the hold: a late answer about it still names the agent.
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded", agentId: "cto", heldId: "hold-1" });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
     expect(h.gh.state.mergePayload).toBeUndefined();
   });
 
