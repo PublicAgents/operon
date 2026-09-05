@@ -110,12 +110,42 @@ export type McpServerDef =
       args: string[];
     };
 
-/** Per-agent GitHub grants (spec 0008 §6). Absent lists grant nothing. */
+/**
+ * A merge grant (spec 0012 §3): the repo, the path globs a PR may
+ * touch to merge without the operator (absent or empty: every merge
+ * is held), and the check runs that must be green by name (absent:
+ * every run present must be green and at least one must exist).
+ */
+export interface MergeGrant {
+  repo: string;
+  auto?: string[];
+  checks?: string[];
+}
+
+/** Per-agent GitHub grants (spec 0008 §6, spec 0012 §3). Absent lists grant nothing. */
 export interface GithubGrants {
   /** Repos this agent may open fork PRs / issues against and watch. */
   pr?: string[];
   /** Repos where the agent may commit to NON-default branches via the App. */
   write?: string[];
+  /** Repos on which this agent may post pull-request reviews. */
+  review?: string[];
+  /** Repos on which this agent may merge and close pull requests. */
+  merge?: MergeGrant[];
+}
+
+/**
+ * The repos an agent may read and discuss (spec 0012 §3): the union
+ * of everything it may author on, review on, or merge on. A reviewer
+ * with no pr grant still reads the pull requests it adjudicates.
+ */
+export function reachableGithubRepos(grants: GithubGrants | undefined): string[] {
+  if (!grants) return [];
+  const out = new Set<string>();
+  for (const repo of grants.pr ?? []) out.add(repo);
+  for (const repo of grants.review ?? []) out.add(repo);
+  for (const grant of grants.merge ?? []) out.add(grant.repo);
+  return [...out];
 }
 
 export class RosterError extends Error {
@@ -321,7 +351,40 @@ function parseMcpDefs(value: unknown): Record<string, McpServerDef> {
   return defs;
 }
 
-const GITHUB_GRANT_KEYS = new Set(["pr", "write"]);
+const GITHUB_GRANT_KEYS = new Set(["pr", "write", "review", "merge"]);
+const MERGE_GRANT_KEYS = new Set(["repo", "auto", "checks"]);
+/** A path glob: the safe path charset plus `*`; no leading slash, no `..` (checked apart). */
+const AUTO_GLOB = /^[A-Za-z0-9_.*/-]+$/;
+
+function parseMergeGrant(value: unknown, path: string): MergeGrant {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail(path, "must be an object {repo, auto?, checks?}");
+  }
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (!MERGE_GRANT_KEYS.has(key)) {
+      fail(`${path}.${key}`, `is not a merge grant field (known: ${[...MERGE_GRANT_KEYS].join(", ")})`);
+    }
+  }
+  const repo = requireString(raw.repo, `${path}.repo`);
+  if (!STATE_REPO.test(repo)) fail(`${path}.repo`, `"${repo}" is not "owner/repo"`);
+  const grant: MergeGrant = { repo };
+  if (raw.auto !== undefined) {
+    grant.auto = requireStringArray(raw.auto, `${path}.auto`).map((glob, i) => {
+      if (!AUTO_GLOB.test(glob) || glob.startsWith("/") || glob.split("/").includes("..")) {
+        fail(`${path}.auto[${i}]`, `"${glob}" is not a path glob (letters, digits, . _ - / *; no leading /, no ..)`);
+      }
+      return glob;
+    });
+  }
+  if (raw.checks !== undefined) {
+    grant.checks = requireStringArray(raw.checks, `${path}.checks`).map((name, i) => {
+      if (name.length === 0) fail(`${path}.checks[${i}]`, "must be a non-empty check name");
+      return name;
+    });
+  }
+  return grant;
+}
 
 function parseGithubGrants(value: unknown, path: string): GithubGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -333,7 +396,7 @@ function parseGithubGrants(value: unknown, path: string): GithubGrants {
       fail(`${path}.${key}`, `is not a github grant (known: ${[...GITHUB_GRANT_KEYS].join(", ")})`);
     }
   }
-  const repos = (key: "pr" | "write"): string[] | undefined => {
+  const repos = (key: "pr" | "write" | "review"): string[] | undefined => {
     if (raw[key] === undefined) return undefined;
     return requireStringArray(raw[key], `${path}.${key}`).map((repo, i) => {
       if (!STATE_REPO.test(repo)) fail(`${path}.${key}[${i}]`, `"${repo}" is not "owner/repo"`);
@@ -342,7 +405,23 @@ function parseGithubGrants(value: unknown, path: string): GithubGrants {
   };
   const pr = repos("pr");
   const write = repos("write");
-  return { ...(pr ? { pr } : {}), ...(write ? { write } : {}) };
+  const review = repos("review");
+  let merge: MergeGrant[] | undefined;
+  if (raw.merge !== undefined) {
+    if (!Array.isArray(raw.merge)) fail(`${path}.merge`, "must be an array of {repo, auto?, checks?}");
+    merge = raw.merge.map((entry, i) => parseMergeGrant(entry, `${path}.merge[${i}]`));
+    const seen = new Set<string>();
+    for (const grant of merge) {
+      if (seen.has(grant.repo)) fail(`${path}.merge`, `names "${grant.repo}" twice`);
+      seen.add(grant.repo);
+    }
+  }
+  return {
+    ...(pr ? { pr } : {}),
+    ...(write ? { write } : {}),
+    ...(review ? { review } : {}),
+    ...(merge ? { merge } : {})
+  };
 }
 
 function parseAgent(value: unknown, index: number): RosterAgent {

@@ -80,7 +80,7 @@ export interface WakeOptions {
    * reading the web door's would tie MCP access to browser access.
    */
   mcpToken?: string;
-  /** The agent's GitHub grants (spec 0008 §6) as JSON {pr, write}. */
+  /** The agent's GitHub grants (spec 0008 §6, spec 0012 §3) as JSON {pr, write, review, merge}: repo lists only. */
   githubGrants?: string;
   /** JSON list of the doors the operator closed for this wake (spec 0006 §7), for the living help. */
   disabledDoors?: string;

@@ -282,9 +282,13 @@ export async function prepareLaunch(
   // branch route, so persist keeps only the state commit.
   const githubGrants = agent.github
     ? {
+        // Repo names only: the merge grant's auto globs and check names
+        // are the Gatekeeper's business (spec 0012 §3), never the container's.
         githubGrants: JSON.stringify({
           pr: open("github") ? (agent.github.pr ?? []) : [],
-          write: open("github") ? (agent.github.write ?? []) : []
+          write: open("github") ? (agent.github.write ?? []) : [],
+          review: open("github") ? (agent.github.review ?? []) : [],
+          merge: open("github") ? (agent.github.merge ?? []).map(grant => grant.repo) : []
         })
       }
     : {};

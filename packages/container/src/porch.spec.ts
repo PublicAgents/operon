@@ -352,7 +352,7 @@ describe("porch doors", () => {
         prUrl: "http://unused",
         prToken: "b",
         prRepos: ["org/allowed"],
-        githubGrants: { pr: ["org/mine"], write: [] }
+        githubGrants: { pr: ["org/mine"], write: [], review: [], merge: [] }
       })
     );
     const refused = await fetch(`${url}/github/pr`, {
@@ -372,7 +372,7 @@ describe("porch doors", () => {
         prUrl: "http://unused",
         prToken: "b",
         prRepos: ["org/allowed"],
-        githubGrants: { pr: [], write: [] }
+        githubGrants: { pr: [], write: [], review: [], merge: [] }
       })
     );
     const response = await fetch(`${url}/github/pr`, {
@@ -388,7 +388,7 @@ describe("porch doors", () => {
       config({
         persistUrl: "http://unused/commit",
         persistToken: "b",
-        githubGrants: { pr: ["org/mine"], write: ["org/mine"] }
+        githubGrants: { pr: ["org/mine"], write: ["org/mine"], review: [], merge: [] }
       })
     );
     const response = await fetch(`${url}/github/branch`, {

@@ -314,10 +314,27 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   // github: block, for one release.
   if (policy.pr?.PR_REPOS !== undefined) {
     for (const agent of roster.agents) {
-      if (agent.github?.pr !== undefined) {
+      if (agent.github !== undefined) {
         fail(
           "policy.pr.PR_REPOS",
-          `conflicts with agents.${agent.id}.github.pr; grant repos per agent OR fleet-wide, not both`
+          `conflicts with agents.${agent.id}.github; grant repos per agent OR fleet-wide, not both`
+        );
+      }
+    }
+  }
+
+  // A merge grant on a repo where no OTHER agent may review is a
+  // policy that can never fire on the auto path (spec 0012 §3): the
+  // operator believes it is in force and it is dead.
+  for (const agent of roster.agents) {
+    for (const grant of agent.github?.merge ?? []) {
+      const reviewer = roster.agents.find(
+        other => other.id !== agent.id && (other.github?.review ?? []).includes(grant.repo)
+      );
+      if (!reviewer) {
+        fail(
+          `agents.${agent.id}.github.merge`,
+          `merge_without_reviewer: no other agent holds github.review on ${grant.repo}`
         );
       }
     }
