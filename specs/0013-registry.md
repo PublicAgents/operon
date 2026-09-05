@@ -41,8 +41,10 @@ walk skips every dot-entry.
 - EXCEPT an adjudicator. An agent that holds `review` or `merge` on the
   registry repo never authors there, not even its own entry: a pr
   grant would put only the self-approval check between a reviewer's
-  entry and a merge. Its living help says a colleague files and
-  maintains its entry.
+  entry and a merge. An explicit `github.pr` listing of the registry
+  repo beside such a grant is refused at check (the separation is
+  structural, not narrowed at runtime). Its living help says a
+  colleague files and maintains its entry.
 - The registry grant is fork-only like any pr grant (spec 0008 §3): no
   write, no merge, and the doors matrix's `github` door closes it.
 - The chassis never writes the registry on the agent's behalf. The duty

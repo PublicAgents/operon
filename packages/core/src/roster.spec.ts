@@ -240,6 +240,15 @@ describe("capability grants (spec 0008)", () => {
     expect(withRepo(["publicagents/public-agents"], "PublicAgents/public-agents")).toEqual(["publicagents/public-agents"]);
     expect(withRepo(["org/other"], "PublicAgents/public-agents")).toEqual(["org/other", "PublicAgents/public-agents"]);
     expect(registryPrRepo({ registry: undefined }, parsed.agents[0])).toBeUndefined();
+    // An adjudicator may not also hold an explicit authoring grant on the registry, in any spelling.
+    for (const github of [
+      { pr: ["PublicAgents/public-agents"], review: ["PublicAgents/public-agents"] },
+      { pr: ["publicagents/public-agents"], merge: [{ repo: "PublicAgents/public-agents" }] }
+    ]) {
+      const judge = JSON.parse(JSON.stringify(roster));
+      judge.agents[0].github = github;
+      expect(() => parseRoster(JSON.stringify(judge))).toThrowError(/adjudicates on the registry/);
+    }
     const off = granted();
     off.registry = false;
     expect(parseRoster(JSON.stringify(off)).registry).toBeUndefined();
