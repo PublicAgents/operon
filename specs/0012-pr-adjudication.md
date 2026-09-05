@@ -272,6 +272,20 @@ results for its merge-granted repos.
 409 with the reason as the error name. GitHub errors answer
 `merge_failed` 502 after the intent row says failed.
 
+**Concurrency.** Beginning an intent is one serialized turn in the
+store: the check for an open intent and the write happen together, so
+two overlapping merge calls for one pull request cannot both start an
+irreversible act; the loser answers 409 `merge_in_progress`. A pending
+intent younger than the stale bound (five minutes) is a door still
+working; an older one belongs to a door that crashed and is reconciled
+like an unknown one. The same rule closes the close door
+(`close_in_progress`): a close intent carries `workingSince` while a
+door works it and is released on a lost response. The operator's held
+listing reconciles every open intent first, with the credential of the
+agent that made it, so a lost response never leaves a claimed hold in
+the queue: a reconciled merge deletes its hold, a reconciled
+not-merged attempt unclaims it for another decision.
+
 ## 7. The close door
 
 `POST /gatekeeper/close {agentId, repo, number, reason}`: for spam and
