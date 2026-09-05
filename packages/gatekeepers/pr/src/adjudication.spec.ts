@@ -409,7 +409,15 @@ describe("the operator's surface (spec 0012 §8)", () => {
       held: [],
       terminals: [expect.objectContaining({ outcome: "merged" })]
     });
-    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable" } });
+    // A refusal about a decided hold still names the agent and the PR it concerned.
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+  });
+
+  it("a refusal over a live hold names the agent and the pull request it concerns", async () => {
+    const { h, approve, reject } = await held();
+    await h.holds.claimHeld("hold-1", h.deps.now());
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+    expect(await reject("no")).toMatchObject({ status: 409, body: { error: "approval_in_flight", agentId: "cto", repo: REPO, number: 7 } });
   });
 
   it("an approval whose response was lost is reconciled by the held listing, and the hold is cleared", async () => {
@@ -487,7 +495,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "rejected", reason: "no", by: "operator" });
     expect(h.kinds()).toEqual(["merge_held", "merge_rejected"]);
     // A retry of a lost rejection answers rejected without a second ledger row.
-    expect((await reject("no")).body).toMatchObject({ status: "rejected", repeated: true });
+    expect((await reject("no")).body).toMatchObject({ status: "rejected", repeated: true, agentId: "cto", repo: REPO, number: 7 });
     expect(h.kinds()).toEqual(["merge_held", "merge_rejected"]);
   });
 

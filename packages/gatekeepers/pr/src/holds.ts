@@ -86,6 +86,8 @@ export interface TerminalRecord {
   at: string;
   /** Who decided: a roster id for a merge, "operator" for a rejection. */
   by: string;
+  /** The agent whose merge request was held, when the record closes a hold. */
+  agentId?: string;
   heldId?: string;
   mergeSha?: string;
   reason?: string;

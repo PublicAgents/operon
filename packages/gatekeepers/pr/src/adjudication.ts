@@ -622,7 +622,27 @@ export interface ApproveInput {
   identities: Identities;
 }
 
+/**
+ * Every answer about a hold names the agent it concerns, on success and
+ * on refusal alike: an operator surface that carries only the hold id
+ * (Telegram's compact callbacks) attributes the decision from the
+ * answer. The hold itself, or the terminal record that closed it, is
+ * the source; an answer that already names the agent is left alone.
+ */
+async function attributed(deps: Omit<AdjudicationDeps, "api">, heldId: string, result: DoorResult): Promise<DoorResult> {
+  if (result.body.agentId !== undefined) return result;
+  const held = await deps.holds.getHeld(heldId);
+  if (held) return { ...result, body: { ...result.body, agentId: held.agentId, repo: held.repo, number: held.number } };
+  const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
+  if (!terminal) return result;
+  return { ...result, body: { ...result.body, agentId: terminal.agentId ?? terminal.by, repo: terminal.repo, number: terminal.number } };
+}
+
 export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
+  return attributed(deps, input.heldId, await approveHeldUnattributed(deps, input));
+}
+
+async function approveHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
   const at = deps.now();
   const held = await deps.holds.claimHeld(input.heldId, at);
   if (!held) return refuse(409, "held_unavailable", "already claimed, decided, or not found");
@@ -691,10 +711,17 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
   return result;
 }
 
-export async function rejectHeld(
-  deps: Omit<AdjudicationDeps, "api">,
-  input: { heldId: string; reason?: string; apiFor: (agentId: string) => GithubApi | undefined }
-): Promise<DoorResult> {
+export interface RejectInput {
+  heldId: string;
+  reason?: string;
+  apiFor: (agentId: string) => GithubApi | undefined;
+}
+
+export async function rejectHeld(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {
+  return attributed(deps, input.heldId, await rejectHeldUnattributed(deps, input));
+}
+
+async function rejectHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {
   const at = deps.now();
   const verdict = await deps.holds.rejectVerdict(input.heldId, at);
   if (verdict.status === "not_found") {
@@ -761,6 +788,7 @@ export async function rejectHeld(
       outcome: "rejected",
       at,
       by: "operator",
+      agentId: held.agentId,
       heldId: held.id,
       ...(input.reason !== undefined ? { reason: input.reason } : {})
     },
