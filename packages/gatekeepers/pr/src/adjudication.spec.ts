@@ -434,15 +434,26 @@ describe("closeDoor (spec 0012 §7)", () => {
     const h = harness();
     // The comment lands, then the PATCH is lost.
     h.gh.state.fail[`PATCH /repos/${REPO}/issues/7`] = "lost";
-    expect(await closeDoor(h.deps, input)).toMatchObject({ status: 502, body: { error: "close_failed" } });
+    expect(await closeDoor(h.deps, input)).toMatchObject({
+      status: 503,
+      body: { error: "outcome_unknown", steps: { commented: true } }
+    });
     expect(h.gh.state.comments).toHaveLength(1);
     expect(await h.holds.openCloseIntent(REPO, 7)).toMatchObject({ steps: { commented: true } });
     const retry = await closeDoor(h.deps, input);
     expect(retry.body).toMatchObject({ status: "closed" });
     expect(h.gh.state.comments).toHaveLength(1);
     expect(h.gh.state.state).toBe("closed");
-    expect(h.kinds()).toEqual(["close_failed", "pr_closed"]);
+    expect(h.kinds()).toEqual(["close_outcome_unknown", "pr_closed"]);
     expect(h.ledger[1].data).toMatchObject({ resumed: true });
+  });
+
+  it("GitHub refusing the close ends the intent as failed", async () => {
+    const h = harness();
+    h.gh.state.fail[`PATCH /repos/${REPO}/issues/7`] = 422;
+    expect(await closeDoor(h.deps, input)).toMatchObject({ status: 502, body: { error: "close_failed" } });
+    expect(await h.holds.openCloseIntent(REPO, 7)).toBeUndefined();
+    expect(h.kinds()).toEqual(["close_failed"]);
   });
 
   it("a lost comment response is found by its marker on retry", async () => {

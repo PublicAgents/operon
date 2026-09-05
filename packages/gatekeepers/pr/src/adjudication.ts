@@ -442,10 +442,20 @@ export async function closeDoor(
     });
     return ok({ status: "closed", ...(commentUrl !== undefined ? { commentUrl } : {}) });
   } catch (error) {
-    // The intent stays pending so the next call finishes what was lost.
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
-    await deps.ledger.append("close_failed", { agentId, repo, number, intentId: intent.id, detail });
-    return refuse(502, "close_failed", detail);
+    if (definitiveFailure(error)) {
+      // GitHub said no: the intent is over, and a new call starts a new one.
+      await deps.holds.resolveClose(intent.id, "failed", deps.now(), detail);
+      await deps.ledger.append("close_failed", { agentId, repo, number, intentId: intent.id, detail });
+      return refuse(502, "close_failed", detail);
+    }
+    // The wire dropped: the step may have landed. The intent stays
+    // pending with the steps recorded so far, and the next call resumes
+    // from GitHub's truth; a close that may have happened is never
+    // reported as failed.
+    const current = (await deps.holds.openCloseIntent(repo, number)) ?? intent;
+    await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, steps: current.steps, detail });
+    return { status: 503, body: { ok: false, error: "outcome_unknown", intentId: intent.id, steps: current.steps, detail } };
   }
 }
 
