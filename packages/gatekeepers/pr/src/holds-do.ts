@@ -41,7 +41,10 @@ export class PrHolds extends DurableObject {
   openMergeIntent(repo: string, number: number): Promise<MergeIntent | undefined> {
     return this.store.openMergeIntent(repo, number);
   }
-  beginMerge(input: Parameters<HoldStore["beginMerge"]>[0]): Promise<MergeIntent> {
+  listOpenMergeIntents(): Promise<MergeIntent[]> {
+    return this.store.listOpenMergeIntents();
+  }
+  beginMerge(input: Parameters<HoldStore["beginMerge"]>[0]): ReturnType<HoldStore["beginMerge"]> {
     return this.store.beginMerge(input);
   }
   resolveMerge(
@@ -54,8 +57,11 @@ export class PrHolds extends DurableObject {
   openCloseIntent(repo: string, number: number): Promise<CloseIntent | undefined> {
     return this.store.openCloseIntent(repo, number);
   }
-  beginClose(input: Parameters<HoldStore["beginClose"]>[0]): Promise<CloseIntent> {
+  beginClose(input: Parameters<HoldStore["beginClose"]>[0]): ReturnType<HoldStore["beginClose"]> {
     return this.store.beginClose(input);
+  }
+  releaseClose(id: string): Promise<void> {
+    return this.store.releaseClose(id);
   }
   closeStep(id: string, step: "commented" | "closed"): Promise<void> {
     return this.store.closeStep(id, step);

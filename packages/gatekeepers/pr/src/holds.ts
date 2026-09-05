@@ -61,6 +61,8 @@ export interface CloseIntent {
   at: string;
   steps: { commented?: boolean; closed?: boolean };
   state: "pending" | "closed" | "failed";
+  /** Set while a door is working the intent; a crashed door leaves it, so it ages out. */
+  workingSince?: string;
   detail?: string;
   resolvedAt?: string;
 }
@@ -83,6 +85,8 @@ export interface TerminalRecord {
 
 /** A claim younger than this is an approval in flight (spend's bound). */
 export const CLAIM_AGE_MS = 5 * 60 * 1000;
+/** A pending intent older than this belongs to a door that crashed mid-flight, not one still working. */
+export const INTENT_STALE_MS = 5 * 60 * 1000;
 /** Terminal records outlive their usefulness after this. */
 export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -177,10 +181,29 @@ export class HoldStore {
     return undefined;
   }
 
-  async beginMerge(input: Omit<MergeIntent, "id" | "state">): Promise<MergeIntent> {
+  /** Every merge intent that is pending or unknown, across pull requests. */
+  async listOpenMergeIntents(): Promise<MergeIntent[]> {
+    const out: MergeIntent[] = [];
+    for (const intent of (await this.storage.list<MergeIntent>("intent:")).values()) {
+      if (intent.state === "pending" || intent.state === "unknown") out.push(intent);
+    }
+    return out.sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  /**
+   * Begin a merge intent ATOMICALLY: the check for an open intent and
+   * the write are one serialized turn, so two overlapping merge calls
+   * for one pull request cannot both start an irreversible act. The
+   * loser gets the open intent back and decides what to do with it.
+   */
+  async beginMerge(
+    input: Omit<MergeIntent, "id" | "state">
+  ): Promise<{ created: true; intent: MergeIntent } | { created: false; intent: MergeIntent }> {
+    const open = await this.openMergeIntent(input.repo, input.number);
+    if (open) return { created: false, intent: open };
     const intent: MergeIntent = { id: this.newId(), state: "pending", ...input };
     await this.storage.put(intentKey(intent.id), intent);
-    return intent;
+    return { created: true, intent };
   }
 
   async resolveMerge(
@@ -210,10 +233,36 @@ export class HoldStore {
     return undefined;
   }
 
-  async beginClose(input: Omit<CloseIntent, "id" | "state" | "steps">): Promise<CloseIntent> {
-    const intent: CloseIntent = { id: this.newId(), state: "pending", steps: {}, ...input };
+  /**
+   * Begin or resume a close ATOMICALLY. A pending intent another door
+   * is working right now (workingSince younger than the stale bound)
+   * answers busy; an older one is resumed by the caller. Both the
+   * lookup and the write happen in one serialized turn.
+   */
+  async beginClose(
+    input: Omit<CloseIntent, "id" | "state" | "steps" | "workingSince">
+  ): Promise<{ status: "created" | "resumed" | "busy"; intent: CloseIntent }> {
+    const open = await this.openCloseIntent(input.repo, input.number);
+    if (open) {
+      const age = open.workingSince === undefined ? Infinity : Date.parse(input.at) - Date.parse(open.workingSince);
+      if (Number.isFinite(age) && age < INTENT_STALE_MS) return { status: "busy", intent: open };
+      const resumed = { ...open, workingSince: input.at };
+      await this.storage.put(closeKey(open.id), resumed);
+      return { status: "resumed", intent: resumed };
+    }
+    const intent: CloseIntent = { id: this.newId(), state: "pending", steps: {}, workingSince: input.at, ...input };
     await this.storage.put(closeKey(intent.id), intent);
-    return intent;
+    return { status: "created", intent };
+  }
+
+  /** The door is done with a still-pending close intent (a lost response): release it for a retry. */
+  async releaseClose(id: string): Promise<void> {
+    const intent = await this.storage.get<CloseIntent>(closeKey(id));
+    if (intent && intent.state === "pending") {
+      const released = { ...intent };
+      delete released.workingSince;
+      await this.storage.put(closeKey(id), released);
+    }
   }
 
   async closeStep(id: string, step: "commented" | "closed"): Promise<void> {

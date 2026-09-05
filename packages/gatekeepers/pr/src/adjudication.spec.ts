@@ -12,7 +12,7 @@ import {
   type AdjudicationDeps,
   type Identities
 } from "./adjudication.js";
-import { CLAIM_AGE_MS, HoldStore, memoryStorage } from "./holds.js";
+import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, memoryStorage } from "./holds.js";
 
 const HEAD = "head1111111111111111111111111111111111111";
 const HEAD2 = "head2222222222222222222222222222222222222";
@@ -304,6 +304,18 @@ describe("mergeDoor (spec 0012 §6)", () => {
     expect(await h.holds.openMergeIntent(REPO, 7)).toMatchObject({ state: "unknown" });
   });
 
+  it("a pending intent still in flight answers in progress; a stale one is reconciled", async () => {
+    const h = harness();
+    await h.holds.beginMerge({ repo: REPO, number: 7, headSha: HEAD, agentId: "cto", mode: "auto", at: h.deps.now() });
+    expect(await mergeDoor(h.deps, h.mergeInput)).toMatchObject({ status: 409, body: { error: "merge_in_progress" } });
+    expect(h.gh.state.mergePayload).toBeUndefined();
+    // Nobody resolved it: the door that made it crashed. Past the stale
+    // bound it is reconciled (not merged) and a fresh decision follows.
+    h.advance(INTENT_STALE_MS + 1000);
+    expect((await mergeDoor(h.deps, h.mergeInput)).body).toMatchObject({ status: "merged" });
+    expect(h.kinds()).toEqual(["merge_denied", "merge_failed", "pr_merged"]);
+  });
+
   it("a head the operator rejected never holds again", async () => {
     const h = harness({ files: [{ filename: "site/index.ts" }] });
     await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "rejected", at: "2026-09-05T09:00:00Z", by: "operator", reason: "not now" });
@@ -338,15 +350,43 @@ describe("the operator's surface (spec 0012 §8)", () => {
   }
 
   it("approves the held head, merges it as the operator's decision, and removes the hold", async () => {
-    const { h, approve } = await held();
+    const { h, approve, operatorDeps } = await held();
     const result = await approve();
     expect(result.body).toMatchObject({ status: "merged", mode: "operator", mergeSha: "merge-sha" });
     expect(h.gh.state.mergePayload).toEqual({ sha: HEAD, merge_method: "squash" });
     expect(h.kinds()).toEqual(["merge_held", "pr_merged"]);
     expect(h.ledger[1].data).toMatchObject({ mode: "operator", heldId: "hold-1" });
     expect(await h.holds.listHeld()).toEqual([]);
-    expect((await listHeld({ holds: h.holds })).body).toMatchObject({ held: [], terminals: [expect.objectContaining({ outcome: "merged" })] });
+    expect((await listHeld(operatorDeps, () => undefined)).body).toMatchObject({
+      held: [],
+      terminals: [expect.objectContaining({ outcome: "merged" })]
+    });
     expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable" } });
+  });
+
+  it("an approval whose response was lost is reconciled by the held listing, and the hold is cleared", async () => {
+    const { h, approve, operatorDeps } = await held();
+    h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
+    expect(await approve()).toMatchObject({ status: 503, body: { error: "outcome_unknown" } });
+    // The hold stays claimed and the intent unknown until GitHub is read.
+    expect((await h.holds.listHeld())[0]).toMatchObject({ id: "hold-1", claimed: true });
+    h.gh.state.merged = true;
+    h.gh.state.state = "closed";
+    h.gh.state.mergeCommitSha = "merge-sha";
+    const listing = await listHeld(operatorDeps, () => h.deps.api);
+    expect(listing.body).toMatchObject({ held: [], unknown: [], reconciled: 1 });
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "merged", heldId: "hold-1" });
+    expect(h.kinds()).toEqual(["merge_held", "merge_outcome_unknown", "pr_merged"]);
+    expect(h.ledger[2].data).toMatchObject({ mode: "operator", heldId: "hold-1", reconciled: true });
+  });
+
+  it("an approval whose response was lost but never merged gives the hold back", async () => {
+    const { h, approve, operatorDeps } = await held();
+    h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
+    await approve();
+    const listing = await listHeld(operatorDeps, () => h.deps.api);
+    expect(listing.body).toMatchObject({ held: [expect.objectContaining({ id: "hold-1", claimed: false })], reconciled: 1 });
+    expect((await approve()).body).toMatchObject({ status: "merged" });
   });
 
   it("refuses a hold whose head moved and invalidates it", async () => {
@@ -420,6 +460,14 @@ describe("closeDoor (spec 0012 §7)", () => {
     expect(await h.holds.openCloseIntent(REPO, 7)).toBeUndefined();
   });
 
+  it("a second close call while the first works answers in progress", async () => {
+    const h = harness();
+    const begun = await h.holds.beginClose({ repo: REPO, number: 7, agentId: "cto", reason: input.reason, at: h.deps.now() });
+    expect(begun.status).toBe("created");
+    expect(await closeDoor(h.deps, input)).toMatchObject({ status: 409, body: { error: "close_in_progress" } });
+    expect(h.gh.state.comments).toEqual([]);
+  });
+
   it("refuses by name", async () => {
     const h = harness();
     expect(await closeDoor(h.deps, { ...input, granted: false })).toMatchObject({ status: 403, body: { error: "repo_not_granted" } });
@@ -460,7 +508,8 @@ describe("closeDoor (spec 0012 §7)", () => {
     const h = harness();
     // The comment was posted but the response never arrived: simulate by
     // recording the marker on GitHub's side before the retry.
-    const intent = await h.holds.beginClose({ repo: REPO, number: 7, agentId: "cto", reason: input.reason, at: h.deps.now() });
+    const { intent } = await h.holds.beginClose({ repo: REPO, number: 7, agentId: "cto", reason: input.reason, at: h.deps.now() });
+    await h.holds.releaseClose(intent.id);
     h.gh.state.comments.push({ body: `${input.reason}\n\n${closeMarker(intent.id)}`, html_url: "https://github.com/org/registry/pull/7#c0" });
     expect((await closeDoor(h.deps, input)).body).toMatchObject({ status: "closed", commentUrl: "https://github.com/org/registry/pull/7#c0" });
     expect(h.gh.state.comments).toHaveLength(1);

@@ -50,7 +50,7 @@ export class Ops extends OpsEntrypoint<Env> {
     const path = new URL(request.url).pathname;
     if (path === "/gatekeeper/pr/ledger") return json(await ledger(this.env).recent());
     if (path === "/gatekeeper/pr/held" && request.method === "POST") {
-      return toResponse(await listHeld({ holds: holds(this.env) }));
+      return toResponse(await listHeld(operatorDeps(this.env), apiFor(this.env)));
     }
     if (path === "/gatekeeper/pr/approve" && request.method === "POST") {
       return handleApprove(request, this.env);
@@ -137,9 +137,12 @@ async function identities(env: Env): Promise<Identities> {
   const agents = rosterAgentIds(env)
     .map(agentId => ({ agentId, pat: patForAgent(env, agentId) }))
     .filter((entry): entry is { agentId: string; pat: { token: string; shared: boolean } } => entry.pat !== undefined);
-  // The fingerprint names which agent uses which credential without
-  // holding a token: a rotation invalidates the cache, a restart too.
-  const fingerprint = agents.map(entry => `${entry.agentId}:${entry.pat.shared ? "shared" : "own"}:${entry.pat.token.length}`).join(",");
+  // The fingerprint is a digest of which agent uses which credential,
+  // so a rotation to ANY new value invalidates the cache (a restart
+  // does too); no token is held by the cache.
+  const fingerprint = await digest(
+    agents.map(entry => `${entry.agentId}:${entry.pat.shared ? "shared" : "own"}:${entry.pat.token}`).join("\n")
+  );
   if (identityCache && identityCache.fingerprint === fingerprint && Date.now() - identityCache.at < IDENTITY_TTL_MS) {
     return identityCache.identities;
   }
@@ -151,6 +154,20 @@ async function identities(env: Env): Promise<Identities> {
   );
   identityCache = { at: Date.now(), fingerprint, identities: resolved };
   return resolved;
+}
+
+async function digest(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function operatorDeps(env: Env): Omit<AdjudicationDeps, "api"> {
+  return {
+    holds: holds(env),
+    ledger: ledger(env),
+    notify: (text: string, actions?: OperatorAction[]) => notifyOperator(env, text, actions ? { actions } : {}),
+    now: () => new Date().toISOString()
+  };
 }
 
 function deps(env: Env, token: string): AdjudicationDeps {
@@ -251,12 +268,7 @@ async function handleApprove(request: Request, env: Env): Promise<Response> {
   const api = apiFor(env);
   return toResponse(
     await approveHeld(
-      {
-        holds: holds(env),
-        ledger: ledger(env),
-        notify: (text, actions) => notifyOperator(env, text, actions ? { actions } : {}),
-        now: () => new Date().toISOString()
-      },
+      operatorDeps(env),
       {
         heldId: body.value.heldId,
         grantFor: (agentId, repo) => mergeGrant(env, agentId, repo),
@@ -276,12 +288,7 @@ async function handleReject(request: Request, env: Env): Promise<Response> {
   if (!body.ok || typeof body.value.heldId !== "string") return errorResponse(400, "invalid_request");
   return toResponse(
     await rejectHeld(
-      {
-        holds: holds(env),
-        ledger: ledger(env),
-        notify: (text, actions) => notifyOperator(env, text, actions ? { actions } : {}),
-        now: () => new Date().toISOString()
-      },
+      operatorDeps(env),
       {
         heldId: body.value.heldId,
         ...(typeof body.value.reason === "string" ? { reason: body.value.reason } : {}),

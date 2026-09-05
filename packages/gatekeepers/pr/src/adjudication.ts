@@ -21,7 +21,7 @@ import {
   updateIssue,
   type PullSnapshot
 } from "./github.js";
-import type { HoldStore, HeldMerge, MergeIntent, TerminalRecord } from "./holds.js";
+import { INTENT_STALE_MS, type HoldStore, type HeldMerge, type MergeIntent, type TerminalRecord } from "./holds.js";
 import { mergeDecision, mergePreconditions, reviewDecision, type MergeContext } from "./merge-policy.js";
 
 /** The hold store's surface, so the DO stub and the in-memory store both fit. */
@@ -173,10 +173,16 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
   }
   const at = deps.now();
   const base = { agentId: intent.agentId, repo: intent.repo, number: intent.number, headSha: intent.headSha, reconciled: true };
+  // A hold whose approval merged (or was overtaken) is over: it must
+  // not sit claimed in the operator's queue forever.
+  const clearHold = async () => {
+    if (intent.heldId !== undefined) await deps.holds.deleteHeld(intent.heldId).catch(() => undefined);
+  };
   if (state.merged && state.headSha === intent.headSha) {
     const mergeSha = state.mergeCommitSha ?? "unknown";
     const resolved = await deps.holds.resolveMerge(intent.id, { state: "merged", mergeSha }, at);
     await deps.holds.recordTerminal({ ...terminalBase(intent, at), outcome: "merged", by: intent.agentId, mergeSha });
+    await clearHold();
     await deps.ledger.append("pr_merged", { ...base, mode: intent.mode, mergeSha, heldId: intent.heldId });
     return resolved ?? intent;
   }
@@ -187,12 +193,41 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
       at
     );
     await deps.holds.recordTerminal({ ...terminalBase(intent, at), outcome: "superseded", by: "unknown" });
+    await clearHold();
     await deps.ledger.append("merge_superseded", { ...base, mergedHead: state.headSha });
     return resolved ?? intent;
   }
   const resolved = await deps.holds.resolveMerge(intent.id, { state: "failed", detail: "reconciled: not merged" }, at);
+  // An operator-approved attempt that provably did not merge gives the
+  // hold back for another decision.
+  if (intent.heldId !== undefined) await deps.holds.unclaimHeld(intent.heldId).catch(() => undefined);
   await deps.ledger.append("merge_failed", { ...base, detail: "reconciled: not merged" });
   return resolved ?? intent;
+}
+
+/** A pending intent this old belongs to a door that crashed, not one still working. */
+function stalePending(intent: MergeIntent, now: string): boolean {
+  return intent.state === "pending" && Date.parse(now) - Date.parse(intent.at) >= INTENT_STALE_MS;
+}
+
+/**
+ * Every open intent brought to GitHub's truth, with the credential of
+ * the agent that made it (spec 0012 §6, §8): what the operator's held
+ * listing does first, so a lost response never leaves a claimed hold
+ * in the queue or an intent unknown longer than GitHub is unreachable.
+ */
+export async function reconcileOpenIntents(
+  deps: Omit<AdjudicationDeps, "api">,
+  apiFor: (agentId: string) => GithubApi | undefined
+): Promise<MergeIntent[]> {
+  const out: MergeIntent[] = [];
+  for (const intent of await deps.holds.listOpenMergeIntents()) {
+    if (intent.state === "pending" && !stalePending(intent, deps.now())) continue;
+    const api = apiFor(intent.agentId);
+    if (!api) continue;
+    out.push(await reconcileIntent({ ...deps, api }, intent));
+  }
+  return out;
 }
 
 function terminalBase(intent: MergeIntent, at: string): Omit<TerminalRecord, "outcome" | "by"> {
@@ -226,7 +261,7 @@ async function executeMerge(
   }
 ): Promise<DoorResult> {
   const { agentId, repo, number, headSha, mode, heldId } = input;
-  const intent = await deps.holds.beginMerge({
+  const begun = await deps.holds.beginMerge({
     repo,
     number,
     headSha,
@@ -235,6 +270,13 @@ async function executeMerge(
     ...(heldId !== undefined ? { heldId } : {}),
     at: deps.now()
   });
+  if (!begun.created) {
+    // Another call started an irreversible act for this pull request
+    // between our read and our write: the store refused a second one.
+    await deps.ledger.append("merge_denied", { agentId, repo, number, headSha, reason: "merge_in_progress", intentId: begun.intent.id });
+    return refuse(409, "merge_in_progress", `intent ${begun.intent.id} is ${begun.intent.state}; call again to reconcile`);
+  }
+  const intent = begun.intent;
   try {
     const result = await mergePullRequest(deps.api, repo, number, headSha);
     const at = deps.now();
@@ -284,7 +326,13 @@ export async function mergeDoor(deps: AdjudicationDeps, input: MergeInput): Prom
   }
 
   // An open intent is reconciled before anything else (spec 0012 §6).
+  // A PENDING one younger than the stale bound is a door still working
+  // this pull request: it is in progress, not lost.
   const open = await deps.holds.openMergeIntent(repo, number);
+  if (open && open.state === "pending" && !stalePending(open, deps.now())) {
+    await deps.ledger.append("merge_denied", { agentId, repo, number, reason: "merge_in_progress", intentId: open.id });
+    return refuse(409, "merge_in_progress", `intent ${open.id} started at ${open.at}`);
+  }
   if (open) {
     const reconciled = await reconcileIntent(deps, open);
     if (reconciled.state === "unknown") {
@@ -410,12 +458,16 @@ export async function closeDoor(
 
   // A retry finds its own intent and resumes from GitHub's truth, not
   // from memory: the marker says whether the reason was posted, the
-  // state says whether the patch landed.
-  let intent = await deps.holds.openCloseIntent(repo, number);
-  if (!intent) {
-    if (ref.state !== "open") return denied("already_closed", 409);
-    intent = await deps.holds.beginClose({ repo, number, agentId, reason, at: deps.now() });
+  // state says whether the patch landed. The begin is atomic in the
+  // store, so two overlapping close calls cannot both work the same
+  // intent: the second answers busy.
+  const begun = await deps.holds.beginClose({ repo, number, agentId, reason, at: deps.now() });
+  if (begun.status === "busy") return refuse(409, "close_in_progress", `intent ${begun.intent.id}`);
+  if (begun.status === "created" && ref.state !== "open") {
+    await deps.holds.resolveClose(begun.intent.id, "failed", deps.now(), "already closed");
+    return denied("already_closed", 409);
   }
+  const intent = begun.intent;
   const marker = closeMarker(intent.id);
   try {
     let commentUrl: string | undefined;
@@ -450,9 +502,10 @@ export async function closeDoor(
       return refuse(502, "close_failed", detail);
     }
     // The wire dropped: the step may have landed. The intent stays
-    // pending with the steps recorded so far, and the next call resumes
-    // from GitHub's truth; a close that may have happened is never
-    // reported as failed.
+    // pending with the steps recorded so far and is released for the
+    // next call, which resumes from GitHub's truth; a close that may
+    // have happened is never reported as failed.
+    await deps.holds.releaseClose(intent.id);
     const current = (await deps.holds.openCloseIntent(repo, number)) ?? intent;
     await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, steps: current.steps, detail });
     return { status: 503, body: { ok: false, error: "outcome_unknown", intentId: intent.id, steps: current.steps, detail } };
@@ -461,10 +514,15 @@ export async function closeDoor(
 
 // ---- the operator's surface (§8) -------------------------------------------
 
-export async function listHeld(deps: Pick<AdjudicationDeps, "holds">): Promise<DoorResult> {
+export async function listHeld(
+  deps: Omit<AdjudicationDeps, "api">,
+  apiFor: (agentId: string) => GithubApi | undefined
+): Promise<DoorResult> {
+  const reconciled = await reconcileOpenIntents(deps, apiFor);
   const held = await deps.holds.listHeld();
   const terminals = await deps.holds.listTerminals();
-  return ok({ held, terminals });
+  const unknown = (await deps.holds.listOpenMergeIntents()).filter(intent => intent.state === "unknown");
+  return ok({ held, terminals, unknown, ...(reconciled.length > 0 ? { reconciled: reconciled.length } : {}) });
 }
 
 export interface ApproveInput {

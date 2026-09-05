@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLAIM_AGE_MS, HoldStore, memoryStorage, TERMINAL_RETENTION_MS } from "./holds.js";
+import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, memoryStorage, TERMINAL_RETENTION_MS } from "./holds.js";
 
 const T0 = "2026-09-05T10:00:00.000Z";
 const later = (ms: number) => new Date(Date.parse(T0) + ms).toISOString();
@@ -60,9 +60,16 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
   it("keeps one open merge intent per pull request until it is terminal", async () => {
     const s = store();
     expect(await s.openMergeIntent("org/registry", 7)).toBeUndefined();
-    const intent = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "auto", at: T0 });
-    expect(intent).toMatchObject({ id: "id-1", state: "pending" });
+    const begun = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "auto", at: T0 });
+    expect(begun).toMatchObject({ created: true, intent: { id: "id-1", state: "pending" } });
     expect((await s.openMergeIntent("org/registry", 7))?.id).toBe("id-1");
+    // The begin is atomic: a second begin for the same pull request gets
+    // the open intent back instead of a twin.
+    expect(await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "auto", at: T0 })).toMatchObject({
+      created: false,
+      intent: { id: "id-1" }
+    });
+    expect((await s.listOpenMergeIntents()).map(i => i.id)).toEqual(["id-1"]);
     await s.resolveMerge("id-1", { state: "unknown", detail: "timeout" }, later(1000));
     expect(await s.openMergeIntent("org/registry", 7)).toMatchObject({ state: "unknown", detail: "timeout" });
     const merged = await s.resolveMerge("id-1", { state: "merged", mergeSha: "m1" }, later(2000));
@@ -71,12 +78,20 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(await s.resolveMerge("ghost", { state: "failed" }, T0)).toBeUndefined();
   });
 
-  it("records close steps so a retry resumes where the last call stopped", async () => {
+  it("records close steps so a retry resumes where the last call stopped, and refuses a twin while one works", async () => {
     const s = store();
-    const intent = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: T0 });
-    expect(intent.steps).toEqual({});
+    const begun = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: T0 });
+    expect(begun).toMatchObject({ status: "created", intent: { steps: {}, workingSince: T0 } });
+    const { intent } = begun;
+    // A second door arriving while the first works gets busy; after the
+    // first releases (a lost response) the second resumes.
+    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(1000) })).status).toBe("busy");
     await s.closeStep(intent.id, "commented");
-    expect((await s.openCloseIntent("org/registry", 8))?.steps).toEqual({ commented: true });
+    await s.releaseClose(intent.id);
+    const resumed = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(2000) });
+    expect(resumed).toMatchObject({ status: "resumed", intent: { id: intent.id, steps: { commented: true } } });
+    // A door that crashed while working ages out of the way.
+    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) })).status).toBe("resumed");
     await s.closeStep(intent.id, "closed");
     await s.resolveClose(intent.id, "closed", later(1000));
     expect(await s.openCloseIntent("org/registry", 8)).toBeUndefined();
