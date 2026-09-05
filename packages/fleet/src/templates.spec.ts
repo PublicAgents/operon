@@ -37,7 +37,7 @@ const RAW = {
     },
     x: { X_DISCLOSURE_ATTESTED: "true", X_DAILY_CAP: "4" },
     pr: {
-      PR_REPOS: "livevariant/livevariant,livevariant/operon,livevariant/colony,punkpeye/awesome-mcp-servers"
+      PR_REPOS: "livevariant/livevariant,PublicAgents/operon,PublicAgents/colony,punkpeye/awesome-mcp-servers"
     }
   },
   zone: "livevariant.ai",
@@ -215,7 +215,7 @@ describe("renderWorkers reproduces the livevariant colony", () => {
     expect(scheduler.triggers).toEqual({ crons: ["0 6,12,18 * * *"] });
     expect(scheduler.vars.NOTIFY_URL).toBeUndefined();
     expect(scheduler.vars.PERSIST_URL).toBeUndefined();
-    expect(scheduler.vars.PR_REPOS).toContain("livevariant/operon");
+    expect(scheduler.vars.PR_REPOS).toContain("PublicAgents/operon");
     // The autonomy flags are the adapters' own (spec 0010 §2); the
     // policy vars exist for extras and start empty.
     expect(scheduler.vars.HARNESS_EXTRA_ARGS).toBe("[]");
