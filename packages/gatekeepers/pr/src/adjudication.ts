@@ -629,9 +629,17 @@ export interface ApproveInput {
  * answer. The hold itself, or the terminal record that closed it, is
  * the source; an answer that already names the agent is left alone.
  */
-async function attributed(deps: Omit<AdjudicationDeps, "api">, heldId: string, result: DoorResult): Promise<DoorResult> {
+async function attributed(
+  deps: Omit<AdjudicationDeps, "api">,
+  heldId: string,
+  decide: () => Promise<DoorResult>
+): Promise<DoorResult> {
+  // Read the hold before deciding: a decision may delete it (head_moved,
+  // a conceded already_merged) without leaving a terminal record.
+  const before = await deps.holds.getHeld(heldId);
+  const result = await decide();
   if (result.body.agentId !== undefined) return result;
-  const held = await deps.holds.getHeld(heldId);
+  const held = before ?? (await deps.holds.getHeld(heldId));
   if (held) return { ...result, body: { ...result.body, agentId: held.agentId, repo: held.repo, number: held.number } };
   const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
   if (!terminal) return result;
@@ -639,7 +647,7 @@ async function attributed(deps: Omit<AdjudicationDeps, "api">, heldId: string, r
 }
 
 export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
-  return attributed(deps, input.heldId, await approveHeldUnattributed(deps, input));
+  return attributed(deps, input.heldId, () => approveHeldUnattributed(deps, input));
 }
 
 async function approveHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
@@ -718,7 +726,7 @@ export interface RejectInput {
 }
 
 export async function rejectHeld(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {
-  return attributed(deps, input.heldId, await rejectHeldUnattributed(deps, input));
+  return attributed(deps, input.heldId, () => rejectHeldUnattributed(deps, input));
 }
 
 async function rejectHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {

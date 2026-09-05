@@ -464,7 +464,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
   it("refuses a hold whose head moved and invalidates it", async () => {
     const { h, approve } = await held();
     h.gh.state.headSha = HEAD2;
-    expect(await approve()).toMatchObject({ status: 409, body: { error: "head_moved" } });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "head_moved", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
     expect(h.kinds()).toEqual(["merge_held", "merge_hold_invalidated"]);
     expect(h.gh.state.mergePayload).toBeUndefined();
@@ -587,7 +587,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
     await h.holds.claimHeld("hold-1", h.deps.now());
     h.advance(CLAIM_AGE_MS + 1000);
     h.gh.state.merged = true;
-    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged" } });
+    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
   });
 
