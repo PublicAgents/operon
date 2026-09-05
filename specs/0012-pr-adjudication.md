@@ -229,13 +229,23 @@ after the decision); then the terminal result (`merged {mergeSha}` or
 `failed {detail}`) lands on the same row; then the ledger row
 `pr_merged {mode: "auto", approvedBy, files, headSha, mergeSha}` and a
 notify without buttons. A lost GitHub response (timeout, 5xx after the
-merge landed) leaves the intent open: the door answers
-`outcome_unknown`, and the next call for that pull request, or the
-operator's held listing, reconciles by reading `merged` and
-`merge_commit_sha` on the pull request before anything else. A merge
-is never reported as failed after it succeeded and never attempted
-twice. Terminal results stay in the DO for thirty days, keyed by
-`(repo, number, headSha)`.
+merge landed) leaves the intent open in state `unknown`: the door
+answers `outcome_unknown`, and the next call for that pull request,
+or the operator's held listing, reconciles FIRST by reading `merged`
+and `merge_commit_sha` on the pull request. The reconciliation has
+three outcomes and each is a defined transition: merged with the
+intent's head (`merged {mergeSha}`, the ledger row `pr_merged` is
+written then, with `reconciled: true`); merged with a different head
+(`superseded`: someone else merged a later revision, ledgered as
+`merge_superseded`, never counted as this agent's merge); not merged
+(`failed {detail: "reconciled: not merged"}`). Only a terminal intent
+lets a new merge call for the same pull request proceed, and that call
+makes a NEW intent after fresh qualification; the at-most-once
+guarantee is per intent, never "never again". While GitHub itself is
+unreachable the intent stays `unknown` and the door keeps answering
+`outcome_unknown`; it never guesses. A merge is never reported as
+failed after it succeeded and never attempted twice. Terminal results
+stay in the DO for thirty days, keyed by `(repo, number, headSha)`.
 
 **Hold path.** `PrHolds.hold` deduplicates on `(repo, number,
 headSha)` (a claimed hold counts), ledgers `merge_held {heldId,
@@ -258,12 +268,24 @@ results for its merge-granted repos.
 `POST /gatekeeper/close {agentId, repo, number, reason}`: for spam and
 for pull requests that will never qualify. Requires a merge grant on
 the repo (`repo_not_granted`), a pull request (`not_a_pr`), an open
-one (`already_closed`) and a reason (`missing_reason`). The door posts
-the reason as a comment, then patches the state to closed. Ledger
-`pr_closed {agentId, identity, repo, number, author, reason}`,
-`close_denied`, `close_failed`. The update door's `not_author` refusal
-is untouched: closing another party's pull request exists only here,
-only for merge-granted agents, only with a reason on the record.
+one (`already_closed`) and a reason (`missing_reason`). Closing is
+two GitHub calls, and a lost response between them must neither
+duplicate the reason nor misreport the close, so it is accounted like
+a merge: `PrHolds` records a close intent `{repo, number, reason,
+steps}` first; the reason is posted as a comment carrying an
+invisible marker (`<!-- operon-close <intentId> -->`) and the step
+`commented` is recorded; the state is patched to closed and the step
+`closed` is recorded; then the ledger row. A retry for the same pull
+request finds the open intent and resumes from GitHub's truth, not
+from memory: it lists the comments for the marker before posting
+again, and reads the state before patching (closing a closed pull
+request is a no-op). The terminal record says which steps completed,
+so a close whose comment landed but whose patch was lost is finished
+on retry rather than reported as failed. Ledger `pr_closed {agentId,
+identity, repo, number, author, reason}`, `close_denied`,
+`close_failed`. The update door's `not_author` refusal is untouched:
+closing another party's pull request exists only here, only for
+merge-granted agents, only with a reason on the record.
 
 ## 8. The operator's surface
 
@@ -393,7 +415,11 @@ Spec 0008 §6's count of Gatekeeper-authoritative doors becomes eleven.
 3. Nothing outside the grant's `auto` globs merges without a claimed
    operator approval whose recorded head equals the merged head.
 4. A hold merges at most once; a rejected head never re-holds; a lost
-   GitHub response is reconciled before any retry.
+   GitHub response is reconciled before any retry, and every
+   reconciliation outcome (merged, superseded, not merged) is a
+   terminal transition.
+9. A close retried after a lost response posts its reason once and
+   finishes the step that was lost.
 5. The shared PAT never satisfies a merge (`shared_identity`).
 6. A closed `github` door closes review, merge and close.
 7. Renaming operator-owned code into a data path is not a data change.
