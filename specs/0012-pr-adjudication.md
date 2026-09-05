@@ -244,8 +244,17 @@ makes a NEW intent after fresh qualification; the at-most-once
 guarantee is per intent, never "never again". While GitHub itself is
 unreachable the intent stays `unknown` and the door keeps answering
 `outcome_unknown`; it never guesses. A merge is never reported as
-failed after it succeeded and never attempted twice. Terminal results
-stay in the DO for thirty days, keyed by `(repo, number, headSha)`.
+failed after it succeeded and never attempted twice.
+
+Two kinds of row, never confused: INTENT rows are keyed by their own
+id, one per attempt, never overwritten, so a head that was attempted,
+reconciled as not merged and attempted again keeps both histories.
+TERMINAL records are keyed by `(repo, number, headSha)` and say what
+became of a head: `merged`, `superseded` or `rejected`, the outcomes
+after which that head can never merge through this door again. A
+failed or not-merged attempt writes NO terminal record (the head is
+still open and a fresh attempt is legitimate), so a retry against the
+same head overwrites nothing. Terminal records stay for thirty days.
 
 **Hold path.** `PrHolds.hold` deduplicates on `(repo, number,
 headSha)` (a claimed hold counts), ledgers `merge_held {heldId,
@@ -281,9 +290,15 @@ from memory: it lists the comments for the marker before posting
 again, and reads the state before patching (closing a closed pull
 request is a no-op). The terminal record says which steps completed,
 so a close whose comment landed but whose patch was lost is finished
-on retry rather than reported as failed. Ledger `pr_closed {agentId,
-identity, repo, number, author, reason}`, `close_denied`,
-`close_failed`. The update door's `not_author` refusal is untouched:
+on retry rather than reported as failed. A lost response on either
+step (the wire dropped, a 5xx) leaves the intent pending with the
+steps recorded so far and answers 503 `outcome_unknown {intentId,
+steps}`, ledgered as `close_outcome_unknown`; the door never reports
+`close_failed` for a close that may have landed. Only GitHub's own
+refusal (a 4xx) resolves the intent `failed` and answers 502
+`close_failed`. Ledger `pr_closed {agentId, identity, repo, number,
+author, reason}`, `close_denied`, `close_failed`,
+`close_outcome_unknown`. The update door's `not_author` refusal is untouched:
 closing another party's pull request exists only here, only for
 merge-granted agents, only with a reason on the record.
 
@@ -419,7 +434,10 @@ Spec 0008 §6's count of Gatekeeper-authoritative doors becomes eleven.
    reconciliation outcome (merged, superseded, not merged) is a
    terminal transition.
 9. A close retried after a lost response posts its reason once and
-   finishes the step that was lost.
+   finishes the step that was lost; a lost response is reported as
+   unknown, never as failed.
+10. A failed or not-merged attempt writes no terminal record; a retry
+    against the same head overwrites no history.
 5. The shared PAT never satisfies a merge (`shared_identity`).
 6. A closed `github` door closes review, merge and close.
 7. Renaming operator-owned code into a data path is not a data change.
