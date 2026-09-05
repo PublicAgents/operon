@@ -78,6 +78,28 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(await s.resolveMerge("ghost", { state: "failed" }, T0)).toBeUndefined();
   });
 
+  it("settles an intent, its terminal record and its hold in one turn", async () => {
+    const s = store();
+    const { held } = await s.hold(merge, T0);
+    await s.claimHeld(held.id, T0);
+    const { intent } = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "operator", heldId: held.id, at: T0 });
+    const settled = await s.settleMerge(intent.id, { state: "merged", mergeSha: "m1" }, later(1000), {
+      terminal: { repo: "org/registry", number: 7, headSha: "head1", outcome: "merged", at: later(1000), by: "cto", heldId: held.id, mergeSha: "m1" },
+      hold: "delete"
+    });
+    expect(settled).toMatchObject({ state: "merged", mergeSha: "m1" });
+    expect(await s.terminal("org/registry", 7, "head1")).toMatchObject({ outcome: "merged", heldId: held.id });
+    expect(await s.getHeld(held.id)).toBeUndefined();
+    expect(await s.listOpenMergeIntents()).toEqual([]);
+    // A failed attempt gives a claimed hold back instead of deleting it.
+    const second = await s.hold({ ...merge, headSha: "head2" }, later(2000));
+    await s.claimHeld(second.held.id, later(2000));
+    const again = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head2", agentId: "cto", mode: "operator", heldId: second.held.id, at: later(2000) });
+    await s.settleMerge(again.intent.id, { state: "failed", detail: "no" }, later(3000), { hold: "unclaim" });
+    expect(await s.getHeld(second.held.id)).toMatchObject({ claimed: false });
+    expect(await s.settleMerge("ghost", { state: "failed" }, T0)).toBeUndefined();
+  });
+
   it("records close steps so a retry resumes where the last call stopped, and refuses a twin while one works", async () => {
     const s = store();
     const begun = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: T0 });

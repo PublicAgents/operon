@@ -173,34 +173,33 @@ export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeInten
   }
   const at = deps.now();
   const base = { agentId: intent.agentId, repo: intent.repo, number: intent.number, headSha: intent.headSha, reconciled: true };
-  // A hold whose approval merged (or was overtaken) is over: it must
-  // not sit claimed in the operator's queue forever.
-  const clearHold = async () => {
-    if (intent.heldId !== undefined) await deps.holds.deleteHeld(intent.heldId).catch(() => undefined);
-  };
+  // The intent's terminal state, the head's terminal record and the
+  // hold it came from settle in ONE store turn: a hold whose approval
+  // merged (or was overtaken) is deleted, one whose attempt provably
+  // did not merge is given back. Nothing here is best-effort: a failed
+  // settle leaves the intent open, and the next reconciliation retries.
   if (state.merged && state.headSha === intent.headSha) {
     const mergeSha = state.mergeCommitSha ?? "unknown";
-    const resolved = await deps.holds.resolveMerge(intent.id, { state: "merged", mergeSha }, at);
-    await deps.holds.recordTerminal({ ...terminalBase(intent, at), outcome: "merged", by: intent.agentId, mergeSha });
-    await clearHold();
+    const resolved = await deps.holds.settleMerge(intent.id, { state: "merged", mergeSha }, at, {
+      terminal: { ...terminalBase(intent, at), outcome: "merged", by: intent.agentId, mergeSha },
+      hold: "delete"
+    });
     await deps.ledger.append("pr_merged", { ...base, mode: intent.mode, mergeSha, heldId: intent.heldId });
     return resolved ?? intent;
   }
   if (state.merged) {
-    const resolved = await deps.holds.resolveMerge(
+    const resolved = await deps.holds.settleMerge(
       intent.id,
       { state: "superseded", detail: `merged at ${state.headSha.slice(0, 7)}, intent was ${intent.headSha.slice(0, 7)}` },
-      at
+      at,
+      { terminal: { ...terminalBase(intent, at), outcome: "superseded", by: "unknown" }, hold: "delete" }
     );
-    await deps.holds.recordTerminal({ ...terminalBase(intent, at), outcome: "superseded", by: "unknown" });
-    await clearHold();
     await deps.ledger.append("merge_superseded", { ...base, mergedHead: state.headSha });
     return resolved ?? intent;
   }
-  const resolved = await deps.holds.resolveMerge(intent.id, { state: "failed", detail: "reconciled: not merged" }, at);
-  // An operator-approved attempt that provably did not merge gives the
-  // hold back for another decision.
-  if (intent.heldId !== undefined) await deps.holds.unclaimHeld(intent.heldId).catch(() => undefined);
+  const resolved = await deps.holds.settleMerge(intent.id, { state: "failed", detail: "reconciled: not merged" }, at, {
+    hold: "unclaim"
+  });
   await deps.ledger.append("merge_failed", { ...base, detail: "reconciled: not merged" });
   return resolved ?? intent;
 }
@@ -280,17 +279,24 @@ async function executeMerge(
   try {
     const result = await mergePullRequest(deps.api, repo, number, headSha);
     const at = deps.now();
-    await deps.holds.resolveMerge(intent.id, { state: "merged", mergeSha: result.mergeSha }, at);
-    await deps.holds.recordTerminal({
-      repo,
-      number,
-      headSha,
-      outcome: "merged",
+    await deps.holds.settleMerge(
+      intent.id,
+      { state: "merged", mergeSha: result.mergeSha },
       at,
-      by: agentId,
-      mergeSha: result.mergeSha,
-      ...(heldId !== undefined ? { heldId } : {})
-    });
+      {
+        terminal: {
+          repo,
+          number,
+          headSha,
+          outcome: "merged",
+          at,
+          by: agentId,
+          mergeSha: result.mergeSha,
+          ...(heldId !== undefined ? { heldId } : {})
+        },
+        hold: "delete"
+      }
+    );
     await deps.ledger.append("pr_merged", {
       agentId,
       identity: agentId,
@@ -308,7 +314,9 @@ async function executeMerge(
   } catch (error) {
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
     if (definitiveFailure(error)) {
-      await deps.holds.resolveMerge(intent.id, { state: "failed", detail }, deps.now());
+      // GitHub said no: the attempt is over and the hold, if any, goes
+      // back to the operator in the same turn.
+      await deps.holds.settleMerge(intent.id, { state: "failed", detail }, deps.now(), { hold: "unclaim" });
       await deps.ledger.append("merge_failed", { agentId, repo, number, headSha, mode, detail });
       return refuse(502, "merge_failed", detail);
     }
@@ -596,14 +604,9 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
     files: snapshot.files.map(file => file.filename),
     title: held.title
   });
-  if (result.status === 200) {
-    // Best effort: a failed delete leaves a claimed orphan that can never
-    // merge again, which must not turn a success into an error.
-    await deps.holds.deleteHeld(held.id).catch(() => undefined);
-  } else if (result.body.error === "merge_failed") {
-    await deps.holds.unclaimHeld(held.id);
-  }
-  // outcome_unknown keeps the claim: the reconciliation decides.
+  // The hold's fate (deleted on a merge, unclaimed on GitHub's refusal)
+  // settled with the intent in one store turn; outcome_unknown keeps
+  // the claim, and the reconciliation decides.
   return result;
 }
 

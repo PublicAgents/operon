@@ -224,6 +224,31 @@ export class HoldStore {
     return resolved;
   }
 
+  /**
+   * Settle a merge intent in ONE serialized turn: its terminal state,
+   * the terminal record for its head, and what becomes of the hold it
+   * came from (deleted when the head merged or was overtaken, unclaimed
+   * when the attempt provably did not merge). One turn, so a failure
+   * between the writes cannot leave the intent terminal and the hold
+   * stranded: either all of it lands or the intent stays open and the
+   * next reconciliation does it again.
+   */
+  async settleMerge(
+    id: string,
+    result: { state: "merged"; mergeSha: string } | { state: "superseded" | "failed"; detail?: string },
+    at: string,
+    options: { terminal?: TerminalRecord; hold?: "delete" | "unclaim" } = {}
+  ): Promise<MergeIntent | undefined> {
+    const intent = await this.storage.get<MergeIntent>(intentKey(id));
+    if (!intent) return undefined;
+    if (options.terminal) await this.recordTerminal(options.terminal);
+    if (options.hold && intent.heldId !== undefined) {
+      if (options.hold === "delete") await this.deleteHeld(intent.heldId);
+      else await this.unclaimHeld(intent.heldId);
+    }
+    return this.resolveMerge(id, result, at);
+  }
+
   // ---- close intents ---------------------------------------------------
 
   async openCloseIntent(repo: string, number: number): Promise<CloseIntent | undefined> {
