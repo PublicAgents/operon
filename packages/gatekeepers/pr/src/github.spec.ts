@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openPullRequest } from "./github.js";
+import { FILES_CAP, getPullSnapshot, mergePullRequest, openPullRequest, submitReview, findCommentWithMarker } from "./github.js";
 
 /**
  * A scripted GitHub API: asserts the Gatekeeper drives the fork + Git Data
@@ -245,5 +245,115 @@ describe("openPullRequest with submodules", () => {
     expect((trees[0] as { tree: unknown[] }).tree).toEqual([
       { path: "operon", mode: "160000", type: "commit", sha }
     ]);
+  });
+});
+
+describe("getPullSnapshot (spec 0012 §6)", () => {
+  function snapshotFetch(options: { files: number; mergeableAfter: number; calls: string[] }): typeof fetch {
+    let pullReads = 0;
+    return (async (input: string | URL | Request) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      const key = `GET ${url.pathname}`;
+      options.calls.push(key);
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const respond = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
+      if (key === "GET /repos/org/repo/pulls/7") {
+        pullReads += 1;
+        return respond({
+          state: "open",
+          merged: false,
+          draft: false,
+          mergeable: pullReads >= options.mergeableAfter ? true : null,
+          mergeable_state: "clean",
+          title: "t",
+          html_url: "u",
+          head: { sha: "head" },
+          user: { login: "author" }
+        });
+      }
+      if (key === "GET /repos/org/repo/pulls/7/files") {
+        const start = (page - 1) * 100;
+        const count = Math.max(0, Math.min(100, options.files - start));
+        return respond(
+          Array.from({ length: count }, (_, i) =>
+            i === 0 && page === 1 ? { filename: "a", previous_filename: "z" } : { filename: `f${start + i}` }
+          )
+        );
+      }
+      if (key === "GET /repos/org/repo/pulls/7/reviews") {
+        return respond(page === 1 ? [{ user: { login: "r" }, state: "APPROVED", commit_id: "head", submitted_at: "2026-01-01T00:00:00Z" }] : []);
+      }
+      if (key === "GET /repos/org/repo/commits/head/status") return respond({ statuses: [{ context: "ci", state: "success" }] });
+      if (key === "GET /repos/org/repo/commits/head/check-runs") {
+        return respond({ total_count: 1, check_runs: page === 1 ? [{ name: "validate", status: "completed", conclusion: "success" }] : [] });
+      }
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+  }
+
+  it("polls mergeable, pages the files and reads statuses and check runs", async () => {
+    const calls: string[] = [];
+    const sleeps: number[] = [];
+    const snapshot = await getPullSnapshot(
+      { token: "t", userAgent: "test", fetch: snapshotFetch({ files: 150, mergeableAfter: 3, calls }) },
+      "org/repo",
+      7,
+      { sleep: async ms => void sleeps.push(ms) }
+    );
+    expect(sleeps).toEqual([2000, 2000]);
+    expect(snapshot).toMatchObject({ mergeable: true, headSha: "head", author: "author", filesTruncated: false });
+    expect(snapshot.files).toHaveLength(150);
+    expect(snapshot.files[0]).toEqual({ filename: "a", previousFilename: "z" });
+    expect(snapshot.reviews).toEqual([{ login: "r", state: "APPROVED", commitId: "head", submittedAt: "2026-01-01T00:00:00Z" }]);
+    expect(snapshot.checks).toEqual({
+      statuses: [{ context: "ci", state: "success" }],
+      runs: [{ name: "validate", status: "completed", conclusion: "success" }]
+    });
+    expect(calls.filter(call => call.endsWith("/files"))).toHaveLength(2);
+  });
+
+  it("gives up on mergeable after the attempts and marks a capped file listing incomplete", async () => {
+    const calls: string[] = [];
+    const snapshot = await getPullSnapshot(
+      { token: "t", userAgent: "test", fetch: snapshotFetch({ files: FILES_CAP + 50, mergeableAfter: 99, calls }) },
+      "org/repo",
+      7,
+      { attempts: 2, sleep: async () => undefined }
+    );
+    expect(snapshot.mergeable).toBeNull();
+    expect(calls.filter(call => call === "GET /repos/org/repo/pulls/7")).toHaveLength(2);
+    expect(snapshot.filesTruncated).toBe(true);
+    expect(snapshot.files.length).toBeGreaterThanOrEqual(FILES_CAP);
+  });
+});
+
+describe("review, merge and marker calls (spec 0012 §5 to §7)", () => {
+  function recording(calls: Array<{ key: string; body?: unknown }>): typeof fetch {
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      const key = `${init?.method ?? "GET"} ${url.pathname}`;
+      calls.push({ key, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      if (key === "POST /repos/org/repo/pulls/7/reviews") return new Response(JSON.stringify({ html_url: "r", id: 5 }));
+      if (key === "PUT /repos/org/repo/pulls/7/merge") {
+        return new Response(JSON.stringify({ merged: true, sha: "m", message: "ok" }));
+      }
+      if (key === "GET /repos/org/repo/issues/7/comments") {
+        return new Response(JSON.stringify([{ body: "hello", html_url: "c1" }, { body: "x <!-- operon-close abc -->", html_url: "c2" }]));
+      }
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+  }
+
+  it("sends commit_id with a review, sha and squash with a merge, and finds a marker", async () => {
+    const calls: Array<{ key: string; body?: unknown }> = [];
+    const api = { token: "t", userAgent: "test", fetch: recording(calls) };
+    expect(await submitReview(api, "org/repo", 7, "APPROVE", undefined, "head")).toEqual({ url: "r", id: 5 });
+    expect(calls[0]).toEqual({ key: "POST /repos/org/repo/pulls/7/reviews", body: { event: "APPROVE", commit_id: "head" } });
+    await submitReview(api, "org/repo", 7, "REQUEST_CHANGES", "no", "head");
+    expect(calls[1].body).toEqual({ event: "REQUEST_CHANGES", commit_id: "head", body: "no" });
+    expect(await mergePullRequest(api, "org/repo", 7, "head")).toEqual({ merged: true, mergeSha: "m", message: "ok" });
+    expect(calls[2].body).toEqual({ merge_method: "squash", sha: "head" });
+    expect(await findCommentWithMarker(api, "org/repo", 7, "<!-- operon-close abc -->")).toBe("c2");
+    expect(await findCommentWithMarker(api, "org/repo", 7, "<!-- operon-close zzz -->")).toBeUndefined();
   });
 });

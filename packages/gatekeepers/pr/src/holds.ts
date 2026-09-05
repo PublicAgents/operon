@@ -1,0 +1,276 @@
+/**
+ * The pr Gatekeeper's decision storage (spec 0012 §6, §8): merges held
+ * for the operator, the intent rows that make a merge or a close
+ * accountable across a lost response, and the terminal records that
+ * keep a rejected head from holding again.
+ *
+ * Pure over a minimal storage interface so the lifecycle is tested
+ * without a Durable Object runtime; PrHolds (holds-do.ts) is the DO
+ * that hands it ctx.storage. Every method is one serialized turn when
+ * run inside the DO, which is what makes the claim atomic.
+ */
+
+export interface KeyValueStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+  list<T>(prefix: string): Promise<Map<string, T>>;
+}
+
+export interface HeldMerge {
+  id: string;
+  queuedAt: string;
+  agentId: string;
+  repo: string;
+  number: number;
+  /** The author's words: rendered as untrusted text everywhere. */
+  title: string;
+  author: string;
+  headSha: string;
+  /** The paths outside the grant's auto globs, the reason it is held. */
+  outside: string[];
+  /** Roster ids whose approvals qualified. */
+  approvedBy: string[];
+  claimed?: boolean;
+  claimedAt?: string;
+}
+
+export type MergeIntentState = "pending" | "unknown" | "merged" | "superseded" | "failed";
+
+export interface MergeIntent {
+  id: string;
+  repo: string;
+  number: number;
+  headSha: string;
+  agentId: string;
+  mode: "auto" | "operator";
+  heldId?: string;
+  at: string;
+  state: MergeIntentState;
+  mergeSha?: string;
+  detail?: string;
+  resolvedAt?: string;
+}
+
+export interface CloseIntent {
+  id: string;
+  repo: string;
+  number: number;
+  agentId: string;
+  reason: string;
+  at: string;
+  steps: { commented?: boolean; closed?: boolean };
+  state: "pending" | "closed" | "failed";
+  detail?: string;
+  resolvedAt?: string;
+}
+
+export type TerminalOutcome = "merged" | "rejected" | "superseded" | "failed";
+
+/** What became of one head of one pull request; keyed by (repo, number, headSha). */
+export interface TerminalRecord {
+  repo: string;
+  number: number;
+  headSha: string;
+  outcome: TerminalOutcome;
+  at: string;
+  /** Who decided: a roster id for a merge, "operator" for a rejection. */
+  by: string;
+  heldId?: string;
+  mergeSha?: string;
+  reason?: string;
+}
+
+/** A claim younger than this is an approval in flight (spend's bound). */
+export const CLAIM_AGE_MS = 5 * 60 * 1000;
+/** Terminal records outlive their usefulness after this. */
+export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+const heldKey = (id: string) => `held:${id}`;
+const intentKey = (id: string) => `intent:${id}`;
+const closeKey = (id: string) => `close:${id}`;
+const terminalKey = (repo: string, number: number, headSha: string) => `term:${repo}#${number}@${headSha}`;
+
+export class HoldStore {
+  constructor(
+    private readonly storage: KeyValueStorage,
+    private readonly newId: () => string = () => crypto.randomUUID()
+  ) {}
+
+  // ---- holds -----------------------------------------------------------
+
+  /**
+   * Hold a merge for the operator, deduplicated on (repo, number,
+   * headSha), claimed rows included: a decision in flight is still THE
+   * hold for this head, and reporting it beats minting a twin.
+   */
+  async hold(
+    merge: Omit<HeldMerge, "id" | "queuedAt" | "claimed" | "claimedAt">,
+    at: string
+  ): Promise<{ held: HeldMerge; deduped: boolean }> {
+    for (const existing of await this.listHeld()) {
+      if (existing.repo === merge.repo && existing.number === merge.number && existing.headSha === merge.headSha) {
+        return { held: existing, deduped: true };
+      }
+    }
+    const held: HeldMerge = { id: this.newId(), queuedAt: at, ...merge };
+    await this.storage.put(heldKey(held.id), held);
+    return { held, deduped: false };
+  }
+
+  async getHeld(id: string): Promise<HeldMerge | undefined> {
+    return this.storage.get<HeldMerge>(heldKey(id));
+  }
+
+  /** Only the first caller gets the hold; a second concurrent approval gets nothing. */
+  async claimHeld(id: string, at: string): Promise<HeldMerge | undefined> {
+    const held = await this.storage.get<HeldMerge>(heldKey(id));
+    if (!held || held.claimed) return undefined;
+    const claimed = { ...held, claimed: true, claimedAt: at };
+    await this.storage.put(heldKey(id), claimed);
+    return claimed;
+  }
+
+  async unclaimHeld(id: string): Promise<void> {
+    const held = await this.storage.get<HeldMerge>(heldKey(id));
+    if (held) await this.storage.put(heldKey(id), { ...held, claimed: false, claimedAt: undefined });
+  }
+
+  async deleteHeld(id: string): Promise<void> {
+    await this.storage.delete(heldKey(id));
+  }
+
+  async listHeld(): Promise<HeldMerge[]> {
+    const entries = await this.storage.list<HeldMerge>("held:");
+    return [...entries.values()].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  }
+
+  /**
+   * Whether a rejection may proceed now (spec 0012 §8, spend's rule): a
+   * young claim is an approval executing, so the answer is
+   * approval_in_flight; a stale claim is a crashed approval and the
+   * caller must read GitHub before overriding it.
+   */
+  async rejectVerdict(
+    id: string,
+    at: string
+  ): Promise<{ status: "not_found" } | { status: "approval_in_flight" } | { status: "stale_claim"; held: HeldMerge } | { status: "clear"; held: HeldMerge }> {
+    const held = await this.storage.get<HeldMerge>(heldKey(id));
+    if (!held) return { status: "not_found" };
+    if (held.claimed && held.claimedAt !== undefined) {
+      const ageMs = Date.parse(at) - Date.parse(held.claimedAt);
+      if (Number.isFinite(ageMs) && ageMs < CLAIM_AGE_MS) return { status: "approval_in_flight" };
+      return { status: "stale_claim", held };
+    }
+    return { status: "clear", held };
+  }
+
+  // ---- merge intents ---------------------------------------------------
+
+  /** The pending or unknown merge intent for a pull request, if one exists. */
+  async openMergeIntent(repo: string, number: number): Promise<MergeIntent | undefined> {
+    for (const intent of (await this.storage.list<MergeIntent>("intent:")).values()) {
+      if (intent.repo === repo && intent.number === number && (intent.state === "pending" || intent.state === "unknown")) {
+        return intent;
+      }
+    }
+    return undefined;
+  }
+
+  async beginMerge(input: Omit<MergeIntent, "id" | "state">): Promise<MergeIntent> {
+    const intent: MergeIntent = { id: this.newId(), state: "pending", ...input };
+    await this.storage.put(intentKey(intent.id), intent);
+    return intent;
+  }
+
+  async resolveMerge(
+    id: string,
+    result: { state: "merged"; mergeSha: string } | { state: "superseded" | "failed" | "unknown"; detail?: string },
+    at: string
+  ): Promise<MergeIntent | undefined> {
+    const intent = await this.storage.get<MergeIntent>(intentKey(id));
+    if (!intent) return undefined;
+    const resolved: MergeIntent = {
+      ...intent,
+      state: result.state,
+      ...(result.state === "merged" ? { mergeSha: result.mergeSha } : {}),
+      ...("detail" in result && result.detail !== undefined ? { detail: result.detail } : {}),
+      ...(result.state === "unknown" ? {} : { resolvedAt: at })
+    };
+    await this.storage.put(intentKey(id), resolved);
+    return resolved;
+  }
+
+  // ---- close intents ---------------------------------------------------
+
+  async openCloseIntent(repo: string, number: number): Promise<CloseIntent | undefined> {
+    for (const intent of (await this.storage.list<CloseIntent>("close:")).values()) {
+      if (intent.repo === repo && intent.number === number && intent.state === "pending") return intent;
+    }
+    return undefined;
+  }
+
+  async beginClose(input: Omit<CloseIntent, "id" | "state" | "steps">): Promise<CloseIntent> {
+    const intent: CloseIntent = { id: this.newId(), state: "pending", steps: {}, ...input };
+    await this.storage.put(closeKey(intent.id), intent);
+    return intent;
+  }
+
+  async closeStep(id: string, step: "commented" | "closed"): Promise<void> {
+    const intent = await this.storage.get<CloseIntent>(closeKey(id));
+    if (intent) await this.storage.put(closeKey(id), { ...intent, steps: { ...intent.steps, [step]: true } });
+  }
+
+  async resolveClose(id: string, state: "closed" | "failed", at: string, detail?: string): Promise<void> {
+    const intent = await this.storage.get<CloseIntent>(closeKey(id));
+    if (intent) {
+      await this.storage.put(closeKey(id), {
+        ...intent,
+        state,
+        resolvedAt: at,
+        ...(detail !== undefined ? { detail } : {})
+      });
+    }
+  }
+
+  // ---- terminal records ------------------------------------------------
+
+  async terminal(repo: string, number: number, headSha: string): Promise<TerminalRecord | undefined> {
+    return this.storage.get<TerminalRecord>(terminalKey(repo, number, headSha));
+  }
+
+  /** Record what became of a head, pruning records older than the retention. */
+  async recordTerminal(record: TerminalRecord): Promise<void> {
+    await this.storage.put(terminalKey(record.repo, record.number, record.headSha), record);
+    const cutoff = Date.parse(record.at) - TERMINAL_RETENTION_MS;
+    for (const [key, existing] of await this.storage.list<TerminalRecord>("term:")) {
+      if (Date.parse(existing.at) < cutoff) await this.storage.delete(key);
+    }
+  }
+
+  async listTerminals(): Promise<TerminalRecord[]> {
+    const entries = await this.storage.list<TerminalRecord>("term:");
+    return [...entries.values()].sort((a, b) => b.at.localeCompare(a.at));
+  }
+}
+
+/** An in-memory storage for tests and for the porch-less paths. */
+export function memoryStorage(): KeyValueStorage {
+  const map = new Map<string, unknown>();
+  return {
+    async get<T>(key: string) {
+      return map.get(key) as T | undefined;
+    },
+    async put<T>(key: string, value: T) {
+      map.set(key, structuredClone(value));
+    },
+    async delete(key: string) {
+      map.delete(key);
+    },
+    async list<T>(prefix: string) {
+      const out = new Map<string, T>();
+      for (const [key, value] of map) if (key.startsWith(prefix)) out.set(key, structuredClone(value) as T);
+      return out;
+    }
+  };
+}

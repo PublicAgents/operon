@@ -6,6 +6,7 @@ import {
   type GitLink,
   type GithubApi
 } from "@operon/worker-kit/git-data";
+import type { PrSnapshot, SnapshotFile, SnapshotReview } from "./merge-policy.js";
 
 /**
  * Fork-based pull requests through the GitHub Git Data API only: no git, no
@@ -506,4 +507,186 @@ export async function getUpstreamFile(
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   }
   return { exists: true, contentBase64: btoa(binary) };
+}
+
+// ---- adjudication (spec 0012 §5, §6, §7) -----------------------------------
+
+
+/** GitHub's per-page maximum and the cap after which a file listing is incomplete. */
+const PAGE = 100;
+export const FILES_CAP = 3000;
+
+async function pages<T>(client: GithubApi, path: string, pick: (page: unknown) => T[], cap: number): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  const joiner = path.includes("?") ? "&" : "?";
+  for (let page = 1; ; page += 1) {
+    const chunk = pick(await githubApi(client, "GET", `${path}${joiner}per_page=${PAGE}&page=${page}`));
+    items.push(...chunk);
+    if (chunk.length < PAGE) return { items, truncated: false };
+    if (items.length >= cap) return { items, truncated: true };
+  }
+}
+
+export interface PullSnapshot extends PrSnapshot {
+  title: string;
+  url: string;
+  number: number;
+}
+
+/**
+ * Everything the merge decision reads (spec 0012 §6), in one place:
+ * the pull request, every page of its files (both sides of a rename),
+ * its reviews, and the statuses and check runs on its head. GitHub
+ * computes `mergeable` lazily, so the read polls a few times before
+ * giving up and reporting it unknown.
+ */
+export async function getPullSnapshot(
+  api: GithubApi,
+  repo: string,
+  number: number,
+  options: { attempts?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<PullSnapshot> {
+  const client: GithubApi = { ...api, userAgent: UA };
+  const attempts = options.attempts ?? 5;
+  const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  interface PullBody {
+    state: string;
+    merged: boolean;
+    draft: boolean;
+    mergeable: boolean | null;
+    mergeable_state: string;
+    title: string;
+    html_url: string;
+    head: { sha: string };
+    user?: { login?: string };
+  }
+  let pull = (await githubApi(client, "GET", `/repos/${repo}/pulls/${number}`)) as PullBody;
+  for (let attempt = 1; pull.mergeable === null && pull.state === "open" && !pull.merged && attempt < attempts; attempt += 1) {
+    await sleep(2000);
+    pull = (await githubApi(client, "GET", `/repos/${repo}/pulls/${number}`)) as PullBody;
+  }
+  const headSha = pull.head.sha;
+  const files = await pages<SnapshotFile>(
+    client,
+    `/repos/${repo}/pulls/${number}/files`,
+    page =>
+      (page as Array<{ filename: string; previous_filename?: string }>).map(file => ({
+        filename: file.filename,
+        ...(file.previous_filename !== undefined ? { previousFilename: file.previous_filename } : {})
+      })),
+    FILES_CAP
+  );
+  const reviews = await pages<SnapshotReview>(
+    client,
+    `/repos/${repo}/pulls/${number}/reviews`,
+    page =>
+      (page as Array<{ user?: { login?: string }; state: string; commit_id: string; submitted_at?: string }>).map(review => ({
+        login: review.user?.login ?? "unknown",
+        state: review.state,
+        commitId: review.commit_id,
+        submittedAt: review.submitted_at ?? ""
+      })),
+    10_000
+  );
+  const combined = (await githubApi(client, "GET", `/repos/${repo}/commits/${headSha}/status`)) as {
+    statuses?: Array<{ context: string; state: string }>;
+  };
+  const runs = await pages<{ name: string; status: string; conclusion: string | null }>(
+    client,
+    `/repos/${repo}/commits/${headSha}/check-runs`,
+    page =>
+      ((page as { check_runs?: Array<{ name: string; status: string; conclusion: string | null }> }).check_runs ?? []).map(
+        run => ({ name: run.name, status: run.status, conclusion: run.conclusion })
+      ),
+    10_000
+  );
+  return {
+    number,
+    title: pull.title,
+    url: pull.html_url,
+    state: pull.state === "open" ? "open" : "closed",
+    merged: pull.merged,
+    draft: pull.draft,
+    mergeable: pull.mergeable,
+    mergeableState: pull.mergeable_state,
+    headSha,
+    author: pull.user?.login ?? "unknown",
+    files: files.items,
+    filesTruncated: files.truncated,
+    reviews: reviews.items,
+    checks: {
+      statuses: (combined.statuses ?? []).map(status => ({ context: status.context, state: status.state })),
+      runs: runs.items
+    }
+  };
+}
+
+/** The little a reconciliation needs: did this pull request merge, and with what. */
+export async function getPullMergeState(
+  api: GithubApi,
+  repo: string,
+  number: number
+): Promise<{ merged: boolean; mergeCommitSha: string | null; headSha: string; state: string }> {
+  const pull = (await githubApi({ ...api, userAgent: UA }, "GET", `/repos/${repo}/pulls/${number}`)) as {
+    merged: boolean;
+    merge_commit_sha: string | null;
+    head: { sha: string };
+    state: string;
+  };
+  return { merged: pull.merged, mergeCommitSha: pull.merge_commit_sha, headSha: pull.head.sha, state: pull.state };
+}
+
+/**
+ * Post a review bound to a head (spec 0012 §5): `commit_id` makes the
+ * approval GitHub's answer for THAT head, so a push between the
+ * reviewer's read and its submit cannot be approved unseen.
+ */
+export async function submitReview(
+  api: GithubApi,
+  repo: string,
+  number: number,
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+  body: string | undefined,
+  commitId: string
+): Promise<{ url: string; id: number }> {
+  const review = (await githubApi({ ...api, userAgent: UA }, "POST", `/repos/${repo}/pulls/${number}/reviews`, {
+    event,
+    commit_id: commitId,
+    ...(body !== undefined ? { body } : {})
+  })) as { html_url: string; id: number };
+  return { url: review.html_url, id: review.id };
+}
+
+/**
+ * Squash-merge one head (spec 0012 §6): the `sha` argument makes GitHub
+ * refuse a head that moved after the decision, closing the window
+ * between qualification and the merge.
+ */
+export async function mergePullRequest(
+  api: GithubApi,
+  repo: string,
+  number: number,
+  headSha: string
+): Promise<{ merged: boolean; mergeSha: string; message: string }> {
+  const result = (await githubApi({ ...api, userAgent: UA }, "PUT", `/repos/${repo}/pulls/${number}/merge`, {
+    merge_method: "squash",
+    sha: headSha
+  })) as { merged: boolean; sha: string; message: string };
+  return { merged: result.merged, mergeSha: result.sha, message: result.message };
+}
+
+/** The url of the first conversation comment carrying a marker, if any. */
+export async function findCommentWithMarker(
+  api: GithubApi,
+  repo: string,
+  number: number,
+  marker: string
+): Promise<string | undefined> {
+  const comments = await pages<{ body?: string; html_url: string }>(
+    { ...api, userAgent: UA },
+    `/repos/${repo}/issues/${number}/comments`,
+    page => page as Array<{ body?: string; html_url: string }>,
+    10_000
+  );
+  return comments.items.find(comment => comment.body?.includes(marker))?.html_url;
 }

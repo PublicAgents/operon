@@ -158,13 +158,17 @@ function latestReviews(reviews: readonly SnapshotReview[]): Map<string, Snapshot
  * with the outside paths otherwise, and a named refusal before either
  * when the pull request does not qualify at all.
  */
-export function mergeDecision(pr: PrSnapshot, ctx: MergeContext): MergeVerdict {
-  const refuse = (reason: MergeRefusal, detail?: string): MergeVerdict => ({
-    kind: "refuse",
-    reason,
-    ...(detail !== undefined ? { detail } : {})
-  });
-
+/**
+ * The state and checks half of the decision (spec 0012 §6), before any
+ * review or path rule: what an operator's approval re-applies at claim
+ * time, because the review rule and the path rule are what the operator
+ * is deciding. Undefined means the pull request passes this half.
+ */
+export function mergePreconditions(
+  pr: PrSnapshot,
+  ctx: Pick<MergeContext, "mergerLogin" | "checks" | "sharedIdentity">
+): { reason: MergeRefusal; detail?: string } | undefined {
+  const refuse = (reason: MergeRefusal, detail?: string) => ({ reason, ...(detail !== undefined ? { detail } : {}) });
   if (pr.merged) return refuse("already_merged");
   if (pr.state !== "open") return refuse("not_open");
   if (pr.draft) return refuse("draft");
@@ -188,8 +192,19 @@ export function mergeDecision(pr: PrSnapshot, ctx: MergeContext): MergeVerdict {
   if (redRun) {
     return refuse("checks_not_green", `check ${redRun.name}: ${redRun.status}/${redRun.conclusion ?? "none"}`);
   }
-
   if (ctx.sharedIdentity) return refuse("shared_identity");
+  return undefined;
+}
+
+export function mergeDecision(pr: PrSnapshot, ctx: MergeContext): MergeVerdict {
+  const refuse = (reason: MergeRefusal, detail?: string): MergeVerdict => ({
+    kind: "refuse",
+    reason,
+    ...(detail !== undefined ? { detail } : {})
+  });
+
+  const precondition = mergePreconditions(pr, ctx);
+  if (precondition) return refuse(precondition.reason, precondition.detail);
 
   const latest = latestReviews(pr.reviews);
   const discarded: string[] = [];
