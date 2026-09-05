@@ -71,6 +71,11 @@ The specs are the design, in the order they were built:
 | [0005 console](specs/0005-console.md) | The registry that makes UI, API, and MCP the same surface, and how untrusted output is rendered |
 | [0006 fleet](specs/0006-fleet.md) | One manifest per project, chassis-owned worker templates, drained deploys |
 | [0007 asks](specs/0007-asks.md) | The operator's decision queue: durable, threaded, bounded |
+| [0008 capability grants](specs/0008-capability-grants.md) | Per-agent MCP servers and GitHub repos: the boundary is the token or the binding, never argument parsing |
+| [0009 private by construction](specs/0009-private-by-construction.md) | No Gatekeeper hostnames: binding-only entrypoints, one Access surface owned by the tools |
+| [0010 harness lockdown](specs/0010-harness-lockdown.md) | The harness sees only what the chassis stages; one agent, many harnesses |
+| [0011 telemetry](specs/0011-telemetry.md) | Usage, events and traces per wake, through the chassis and never to the provider |
+| [0012 PR adjudication](specs/0012-pr-adjudication.md) | Review, merge and close doors: qualification computed from GitHub, holds for the operator, every merge ledgered |
 
 This repo is the generic, clonable chassis. Running a colony means pairing it
 with a small repo of your own. Its configuration is one file,
