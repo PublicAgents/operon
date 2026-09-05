@@ -154,6 +154,10 @@ export interface MergeInput {
   identities: Identities;
 }
 
+class StaleExecutor extends Error {
+  override name = "StaleExecutor";
+}
+
 /** The same credential, with every request bounded by a deadline. */
 function withDeadline(api: GithubApi, ms: number): GithubApi {
   const inner = api.fetch ?? fetch;
@@ -530,6 +534,16 @@ export async function closeDoor(
   const intent = begun.intent;
   const marker = closeMarker(intent.id);
   const token = intent.workToken;
+  // Every GitHub call of this executor ends at the stale bound: past it
+  // a resume may take over, and a request that could still be in flight
+  // then would be the duplicate the work token cannot stop.
+  const startedAt = Date.parse(intent.workingSince ?? intent.at);
+  const budget = () => INTENT_STALE_MS - (Date.parse(deps.now()) - startedAt);
+  const api = () => {
+    const remaining = budget();
+    if (remaining <= 0) throw new StaleExecutor();
+    return withDeadline(deps.api, remaining);
+  };
   // Every step presents the work token minted for THIS executor; a
   // resume after this executor went stale mints a new one, so the old
   // executor's later steps refuse and it stops rather than acting twice.
@@ -538,16 +552,16 @@ export async function closeDoor(
     // GitHub's truth decides what is left to do, never the stored steps
     // (a step claimed before an act whose response was lost would
     // otherwise be skipped on resume); the steps are the record.
-    let commentUrl = await findCommentWithMarker(deps.api, repo, number, marker);
+    let commentUrl = await findCommentWithMarker(api(), repo, number, marker);
     if (commentUrl === undefined) {
       // The step is claimed BEFORE the irreversible act: a superseded
       // executor learns it here and never posts.
       if (!(await deps.holds.closeStep(intent.id, "commented", token))) return fenced();
-      commentUrl = (await postComment(deps.api, repo, number, `${intent.reason}\n\n${marker}`)).url;
+      commentUrl = (await postComment(api(), repo, number, `${intent.reason}\n\n${marker}`)).url;
     } else if (!(await deps.holds.closeStep(intent.id, "commented", token))) return fenced();
     if (ref.state === "open") {
       if (!(await deps.holds.closeStep(intent.id, "closed", token))) return fenced();
-      await updateIssue(deps.api, repo, number, { state: "closed" });
+      await updateIssue(api(), repo, number, { state: "closed" });
     } else if (!(await deps.holds.closeStep(intent.id, "closed", token))) return fenced();
     if (!(await deps.holds.resolveClose(intent.id, "closed", deps.now(), undefined, token))) return fenced();
     await deps.ledger.append("pr_closed", {
@@ -561,6 +575,11 @@ export async function closeDoor(
     });
     return ok({ status: "closed", ...(commentUrl !== undefined ? { commentUrl } : {}) });
   } catch (error) {
+    if (error instanceof StaleExecutor) {
+      await deps.holds.releaseClose(intent.id, token);
+      await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, detail: "executor_stale" });
+      return refuse(409, "executor_stale", "the close took too long to reach GitHub; call again");
+    }
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
     if (definitiveFailure(error)) {
       // GitHub said no: the intent is over, and a new call starts a new one.

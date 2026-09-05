@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, memoryStorage, TERMINAL_RETENTION_MS } from "./holds.js";
+import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, UNKNOWN_GRACE_MS, memoryStorage, TERMINAL_RETENTION_MS } from "./holds.js";
 
 const T0 = "2026-09-05T10:00:00.000Z";
 const later = (ms: number) => new Date(Date.parse(T0) + ms).toISOString();
@@ -147,8 +147,10 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(resumed.intent.workToken).not.toBe(intent.workToken);
     expect(await s.closeStep(intent.id, "closed", intent.workToken)).toBe(false);
     expect(await s.resolveClose(intent.id, "closed", later(2500), undefined, intent.workToken)).toBe(false);
-    // A door that crashed while working ages out of the way.
-    const again = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) });
+    // A door that crashed while working ages out of the way, past the
+    // stale bound plus the grace (its last request is over by then).
+    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) })).status).toBe("busy");
+    const again = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + UNKNOWN_GRACE_MS + 3000) });
     expect(again.status).toBe("resumed");
     expect(await s.closeStep(intent.id, "closed", again.intent.workToken)).toBe(true);
     expect(await s.resolveClose(intent.id, "closed", later(INTENT_STALE_MS + 4000), undefined, again.intent.workToken)).toBe(true);

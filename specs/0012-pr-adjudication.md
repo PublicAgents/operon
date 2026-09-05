@@ -319,7 +319,10 @@ by its begin or resume, presented on every step and the resolve, so
 an executor that went stale and was resumed by another stops at its
 next step instead of acting twice, and a resume takes what is left to
 do from GitHub's truth (the marker, the state), never from the stored
-steps. No rejection ever
+steps. The close executor's calls end at the stale bound like the
+merge executor's (`executor_stale` past it), and a resume waits the
+stale bound plus the grace, so nothing of the old executor is still in
+flight when the new one reads the marker: the reason is posted once. No rejection ever
 lands over an open intent: the store's one-turn reject answers
 `approval_in_flight` for a young pending one and `unresolved` for any
 other, and the door reconciles first, with the agent's credential, or

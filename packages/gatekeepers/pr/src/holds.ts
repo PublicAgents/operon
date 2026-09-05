@@ -365,8 +365,13 @@ export class HoldStore {
   ): Promise<{ status: "created" | "resumed" | "busy"; intent: CloseIntent }> {
     const open = await this.openCloseIntent(input.repo, input.number);
     if (open) {
+      // A resume waits the stale bound plus the grace: the working
+      // executor's calls are bounded by the stale bound (it aborts them
+      // there at the latest), and GitHub finishes an accepted request
+      // within ten seconds, so nothing of the old executor is still in
+      // flight when the new one reads the marker and the state.
       const age = open.workingSince === undefined ? Infinity : Date.parse(input.at) - Date.parse(open.workingSince);
-      if (Number.isFinite(age) && age < INTENT_STALE_MS) return { status: "busy", intent: open };
+      if (Number.isFinite(age) && age < INTENT_STALE_MS + UNKNOWN_GRACE_MS) return { status: "busy", intent: open };
       // A resume mints a new work token: the executor that went stale
       // may still be alive, and its next step or resolve refuses.
       const resumed = { ...open, workingSince: input.at, workToken: this.newId() };
