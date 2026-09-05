@@ -55,12 +55,15 @@ const GROUPS = rotationGroups(project.agentIds);
  * group is rotated DIRECTLY whenever a host exists: this tool mints
  * the value and writes all four members.
  */
-const hostPair = project.host
-  ? {
-      workerName: `${project.host.workerPrefix}-gatekeeper-ops`,
-      secretName: `WAKE_TRIGGER_TOKEN_${project.manifest.project.toUpperCase().replace(/-/g, "_")}`
-    }
-  : undefined;
+const hostPairs = project.hosts.map(host => ({
+  project: host.project,
+  // The host's plane may live in ANOTHER Cloudflare account: the write
+  // selects it explicitly, or wrangler would target the active context.
+  accountId: host.accountId,
+  workerName: `${host.workerPrefix}-gatekeeper-ops`,
+  secretName: `WAKE_TRIGGER_TOKEN_${project.manifest.project.toUpperCase().replace(/-/g, "_")}`
+}));
+const hostPair = hostPairs.length > 0 ? hostPairs : undefined;
 
 const onlyArg = process.argv.indexOf("--only");
 const direct = process.argv.includes("--direct");
@@ -150,8 +153,8 @@ const viaGateway = selected.filter(name => !(name === "wake-trigger" && hostPair
 const directOnly = selected.filter(name => name === "wake-trigger" && hostPair);
 if (directOnly.length > 0) {
   console.log(
-    `wake-trigger is rotated directly: ${project.host.project} enrolls this project and holds ` +
-      `${hostPair.secretName} on ${hostPair.workerName}, which only a direct write reaches`
+    `wake-trigger is rotated directly: ${hostPairs.map(pair => pair.project).join(", ")} enroll(s) this project and hold(s) ` +
+      `${hostPairs[0].secretName} on ${hostPairs.map(pair => pair.workerName).join(", ")}, which only a direct write reaches`
   );
 }
 
@@ -169,7 +172,7 @@ const toRotate = direct ? selected : directOnly;
 
 for (const name of toRotate) {
   const value = randomBytes(32).toString("hex");
-  const extra = name === "wake-trigger" && hostPair ? [hostPair] : [];
+  const extra = name === "wake-trigger" && hostPair ? hostPairs : [];
   console.log(`\n→ rotating "${name}" across ${GROUPS[name].length + extra.length} worker(s) (direct)`);
   const written = [];
   try {
@@ -179,10 +182,11 @@ for (const name of toRotate) {
       written.push(`${project.workerName(workerKey)}:${secretName}`);
     }
     for (const pair of extra) {
-      console.log(`  ${pair.workerName} · ${pair.secretName} (the host's copy)`);
+      console.log(`  ${pair.workerName} · ${pair.secretName} (${pair.project}'s copy, account ${pair.accountId})`);
       execFileSync("npx", ["wrangler", "secret", "put", pair.secretName, "--name", pair.workerName], {
         cwd: ROOT,
         input: value,
+        env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: pair.accountId },
         stdio: ["pipe", "inherit", "inherit"]
       });
       written.push(`${pair.workerName}:${pair.secretName}`);

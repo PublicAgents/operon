@@ -80,13 +80,14 @@ export async function loadProject(root = process.cwd(), onlyProject = undefined)
     /** Every project in the repo, for the tools that must see across projects. */
     all: manifests.map(entry => entry.manifest),
     /**
-     * The project whose control plane enrolls this one (spec 0006 §9),
-     * or undefined: it holds the WAKE_TRIGGER_TOKEN_<PROJECT> copy that
-     * a wake-trigger rotation must write too.
+     * Every project whose control plane enrolls this one (spec 0006 §9):
+     * each holds a WAKE_TRIGGER_TOKEN_<PROJECT> copy that a wake-trigger
+     * rotation must write too. Usually one; a repository may host two
+     * planes, and every one of them must follow the rotation.
      */
-    host: manifests
+    hosts: manifests
       .map(entry => entry.manifest)
-      .find(other => other.project !== manifest.project && (other.control?.enrolled ?? []).some(e => e.project === manifest.project)),
+      .filter(other => other.project !== manifest.project && (other.control?.enrolled ?? []).some(e => e.project === manifest.project)),
     /** "gatekeeper-x" -> the deployed Worker name for this project. */
     workerName: key => `${manifest.workerPrefix}-${key}`,
     /** The ops gateway's own hostname, as the templates route it. */

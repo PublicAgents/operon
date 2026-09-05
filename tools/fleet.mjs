@@ -558,7 +558,11 @@ for (const manifest of manifests) {
       for (const key of DEPLOY_ORDER) {
         const worker = workersByKey.get(key);
         if (!worker) continue;
-        const { services: _services, ...stripped } = worker.config;
+        // A stub must also be UNREACHABLE: no routes, no custom domains,
+        // no cron, so nothing runs against a Worker whose bindings are
+        // missing between the two passes. Durable Objects and their
+        // migrations stay, so pass two applies nothing twice.
+        const { services: _services, routes: _routes, triggers: _triggers, ...stripped } = worker.config;
         const stubPath = join(stubDir, `${key}.json`);
         writeFileSync(stubPath, JSON.stringify(stripped, null, 2) + "\n");
         console.log(`  ${manifest.project}/${key} (stub)`);

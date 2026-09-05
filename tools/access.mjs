@@ -7,6 +7,7 @@
  * Actions secrets through `gh`, or the token is deleted again.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -19,7 +20,12 @@ const API = "https://api.cloudflare.com/client/v4";
  */
 export function ciServiceTokenName(manifest, ghRepo) {
   if (!ghRepo) return `operon-${manifest.project}-ci`;
-  return `operon-ci-${ghRepo.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
+  const slug = ghRepo.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  // The slug is for people; the digest keeps two repositories whose
+  // names differ only in punctuation (acme/a_b, acme/a-b) from sharing
+  // one token and therefore each other's plane.
+  const digest = createHash("sha256").update(ghRepo.toLowerCase()).digest("hex").slice(0, 8);
+  return `operon-ci-${slug}-${digest}`;
 }
 
 /** What the manifest implies the Access application should be. */
