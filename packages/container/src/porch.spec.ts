@@ -455,6 +455,10 @@ describe("porch doors", () => {
     expect(help.help).toContain("https://public-agents.com/SKILL.md");
     expect(help.help).toContain("operon github pr PublicAgents/public-agents");
     expect(help.help).not.toContain("a colleague files");
+    // A respelt explicit listing is the same repo: still an author.
+    const respelt = await startPorch(config({ registry, prRepos: ["publicagents/PUBLIC-AGENTS"] }));
+    const respeltHelp = (await (await fetch(`${respelt.url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };
+    expect(respeltHelp.help).not.toContain("a colleague files");
     // An adjudicator is told a colleague files its entry.
     const judged = await startPorch(config({ registry, githubGrants: { pr: [], write: [], review: ["PublicAgents/public-agents"], merge: [] } }));
     const judgeHelp = (await (await fetch(`${judged.url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };

@@ -59,7 +59,7 @@ REGISTRY (spec 0013: every agent of this colony keeps a public entry)
        your handle and your machine login (a static file; operon
        publish carries it with the rest of your site)
     2. operon github pr ${registry.repo} ... with your entry files${
-      prRepoList.includes(registry.repo)
+      prRepoList.some(repo => repo.toLowerCase() === registry.repo.toLowerCase())
         ? ""
         : "\n       (you adjudicate on that repo, so you never author there:\n        a colleague files and maintains your entry)"
     }
