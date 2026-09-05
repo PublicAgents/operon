@@ -12,7 +12,7 @@ import {
   type AdjudicationDeps,
   type Identities
 } from "./adjudication.js";
-import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, memoryStorage } from "./holds.js";
+import { CLAIM_AGE_MS, HoldStore, INTENT_STALE_MS, UNKNOWN_GRACE_MS, memoryStorage } from "./holds.js";
 
 const HEAD = "head1111111111111111111111111111111111111";
 const HEAD2 = "head2222222222222222222222222222222222222";
@@ -253,6 +253,9 @@ describe("mergeDoor (spec 0012 §6)", () => {
     h.gh.state.merged = true;
     h.gh.state.state = "closed";
     h.gh.state.mergeCommitSha = "merge-sha";
+    // Within the grace the door waits; GitHub may still be finishing the request.
+    expect(await mergeDoor(h.deps, h.mergeInput)).toMatchObject({ status: 503, body: { error: "outcome_unknown" } });
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const second = await mergeDoor(h.deps, h.mergeInput);
     expect(second.body).toMatchObject({ status: "merged", mergeSha: "merge-sha", reconciled: true });
     expect(h.kinds()).toEqual(["merge_outcome_unknown", "pr_merged"]);
@@ -267,6 +270,7 @@ describe("mergeDoor (spec 0012 §6)", () => {
     const h = harness();
     h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
     await mergeDoor(h.deps, h.mergeInput);
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const second = await mergeDoor(h.deps, h.mergeInput);
     expect(second.body).toMatchObject({ status: "merged", mode: "auto" });
     expect(h.kinds()).toEqual(["merge_outcome_unknown", "merge_failed", "pr_merged"]);
@@ -281,6 +285,7 @@ describe("mergeDoor (spec 0012 §6)", () => {
     h.gh.state.merged = true;
     h.gh.state.state = "closed";
     h.gh.state.headSha = HEAD2;
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const second = await mergeDoor(h.deps, h.mergeInput);
     expect(second).toMatchObject({ status: 409, body: { error: "already_merged" } });
     expect(h.kinds()).toEqual(["merge_outcome_unknown", "merge_superseded", "merge_denied"]);
@@ -299,6 +304,7 @@ describe("mergeDoor (spec 0012 §6)", () => {
     const h = harness();
     h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
     await mergeDoor(h.deps, h.mergeInput);
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     h.gh.state.fail[`GET /repos/${REPO}/pulls/7`] = "lost";
     expect(await mergeDoor(h.deps, h.mergeInput)).toMatchObject({ status: 503, body: { error: "outcome_unknown" } });
     expect(await h.holds.openMergeIntent(REPO, 7)).toMatchObject({ state: "unknown" });
@@ -389,6 +395,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
     h.gh.state.merged = true;
     h.gh.state.state = "closed";
     h.gh.state.mergeCommitSha = "merge-sha";
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const listing = await listHeld(operatorDeps, () => h.deps.api);
     expect(listing.body).toMatchObject({ held: [], unknown: [], reconciled: 1 });
     expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "merged", heldId: "hold-1" });
@@ -400,6 +407,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
     const { h, approve, operatorDeps } = await held();
     h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
     await approve();
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const listing = await listHeld(operatorDeps, () => h.deps.api);
     expect(listing.body).toMatchObject({ held: [expect.objectContaining({ id: "hold-1", claimed: false })], reconciled: 1 });
     expect((await approve()).body).toMatchObject({ status: "merged" });
@@ -486,6 +494,20 @@ describe("the operator's surface (spec 0012 §8)", () => {
     h.advance(CLAIM_AGE_MS + 1000);
     await h.holds.beginMerge({ repo: REPO, number: 7, headSha: HEAD, agentId: "cto", mode: "operator", heldId: "hold-1", claimToken: claimed?.claimToken, at: h.deps.now() });
     expect(await reject()).toMatchObject({ status: 409, body: { error: "approval_in_flight" } });
+  });
+
+  it("a rejection never lands over an unknown intent it cannot reconcile", async () => {
+    const { h, approve, operatorDeps } = await held();
+    h.gh.state.fail[`PUT /repos/${REPO}/pulls/7/merge`] = "lost";
+    await approve();
+    h.advance(CLAIM_AGE_MS + 1000);
+    // No credential for the agent: the intent cannot be reconciled, so the hold stays.
+    const noApi = await rejectHeld(operatorDeps, { heldId: "hold-1", apiFor: () => undefined });
+    expect(noApi).toMatchObject({ status: 503, body: { error: "outcome_unknown" } });
+    expect(await h.holds.getHeld("hold-1")).toBeDefined();
+    // With one, the intent reconciles (not merged) and the rejection lands.
+    const withApi = await rejectHeld(operatorDeps, { heldId: "hold-1", reason: "no", apiFor: () => h.deps.api });
+    expect(withApi.body).toMatchObject({ status: "rejected" });
   });
 
   it("a stale claim whose approval merged concedes", async () => {

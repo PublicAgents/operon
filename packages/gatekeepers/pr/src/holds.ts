@@ -52,6 +52,8 @@ export interface MergeIntent {
   mergeSha?: string;
   detail?: string;
   resolvedAt?: string;
+  /** When the outcome became unknown (a lost response): reconciliation waits a grace after it. */
+  unknownAt?: string;
 }
 
 export interface CloseIntent {
@@ -89,6 +91,21 @@ export interface TerminalRecord {
 export const CLAIM_AGE_MS = 5 * 60 * 1000;
 /** A pending intent older than this belongs to a door that crashed mid-flight, not one still working. */
 export const INTENT_STALE_MS = 5 * 60 * 1000;
+/**
+ * After a lost response, the server may still be finishing the request
+ * the client gave up on; reconciliation waits this long before reading
+ * GitHub as the truth, so a straggling merge cannot land after a
+ * reconciliation that said "not merged".
+ */
+export const UNKNOWN_GRACE_MS = 60 * 1000;
+
+/** Whether an open intent may be reconciled now, or must still be waited for. */
+export function reconcilable(intent: MergeIntent, now: string): boolean {
+  const t = Date.parse(now);
+  if (intent.state === "pending") return t - Date.parse(intent.at) >= INTENT_STALE_MS;
+  if (intent.state === "unknown") return t - Date.parse(intent.unknownAt ?? intent.at) >= UNKNOWN_GRACE_MS;
+  return false;
+}
 /** Terminal records outlive their usefulness after this. */
 export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -234,10 +251,14 @@ export class HoldStore {
     held: HeldMerge,
     record: TerminalRecord,
     at: string
-  ): Promise<{ status: "rejected" } | { status: "approval_in_flight"; intent: MergeIntent }> {
+  ): Promise<{ status: "rejected" } | { status: "approval_in_flight" | "unresolved"; intent: MergeIntent }> {
+    // No rejection ever lands over an OPEN intent: a young pending one is
+    // an act in flight, and an older or unknown one must be reconciled
+    // (by the caller, with a credential) before this turn runs again.
     const open = await this.openMergeIntent(held.repo, held.number);
-    if (open && open.state === "pending" && Date.parse(at) - Date.parse(open.at) < INTENT_STALE_MS) {
-      return { status: "approval_in_flight", intent: open };
+    if (open) {
+      const inFlight = open.state === "pending" && Date.parse(at) - Date.parse(open.at) < INTENT_STALE_MS;
+      return { status: inFlight ? "approval_in_flight" : "unresolved", intent: open };
     }
     await this.recordTerminal(record);
     await this.deleteHeld(held.id);
@@ -256,7 +277,7 @@ export class HoldStore {
       state: result.state,
       ...(result.state === "merged" ? { mergeSha: result.mergeSha } : {}),
       ...("detail" in result && result.detail !== undefined ? { detail: result.detail } : {}),
-      ...(result.state === "unknown" ? {} : { resolvedAt: at })
+      ...(result.state === "unknown" ? { unknownAt: intent.unknownAt ?? at } : { resolvedAt: at })
     };
     await this.storage.put(intentKey(id), resolved);
     return resolved;

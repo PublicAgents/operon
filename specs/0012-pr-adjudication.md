@@ -295,9 +295,16 @@ hold; the begin is one turn too, so the two cannot interleave, and a
 slow approval that wakes up afterwards stops before GitHub. The
 executor has a deadline too: no merge call starts once its intent is
 older than the stale bound, and the call carries the time that
-remains, so an attempt that began before a stale-override rejection
-cannot land after it; past the bound the attempt answers
-`executor_stale` and is over.
+remains; past the bound the attempt answers `executor_stale` and is
+over. A call the client gave up on is a lost response (the intent goes
+`unknown`), and because the server may still be finishing it,
+reconciliation of an unknown intent waits a grace (one minute after
+it became unknown) before reading GitHub as the truth; a pending
+intent is reconciled only past the stale bound. No rejection ever
+lands over an open intent: the store's one-turn reject answers
+`approval_in_flight` for a young pending one and `unresolved` for any
+other, and the door reconciles first, with the agent's credential, or
+answers `outcome_unknown` when it has none.
 
 ## 7. The close door
 

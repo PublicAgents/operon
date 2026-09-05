@@ -21,7 +21,7 @@ import {
   updateIssue,
   type PullSnapshot
 } from "./github.js";
-import { INTENT_STALE_MS, type HoldStore, type HeldMerge, type MergeIntent, type TerminalRecord } from "./holds.js";
+import { INTENT_STALE_MS, reconcilable, type HoldStore, type HeldMerge, type MergeIntent, type TerminalRecord } from "./holds.js";
 import { mergeDecision, mergePreconditions, reviewDecision, type MergeContext } from "./merge-policy.js";
 
 /** The hold store's surface, so the DO stub and the in-memory store both fit. */
@@ -175,6 +175,9 @@ function definitiveFailure(error: unknown): boolean {
  * else's merge), or not merged. Unreachable GitHub leaves it unknown.
  */
 export async function reconcileIntent(deps: AdjudicationDeps, intent: MergeIntent): Promise<MergeIntent> {
+  // Too early to read GitHub as the truth: a pending executor may still
+  // be working, a lost request may still be finishing server-side.
+  if (!reconcilable(intent, deps.now())) return intent;
   let state;
   try {
     state = await getPullMergeState(deps.api, intent.repo, intent.number);
@@ -231,7 +234,7 @@ export async function reconcileOpenIntents(
 ): Promise<MergeIntent[]> {
   const out: MergeIntent[] = [];
   for (const intent of await deps.holds.listOpenMergeIntents()) {
-    if (intent.state === "pending" && !stalePending(intent, deps.now())) continue;
+    if (!reconcilable(intent, deps.now())) continue;
     const api = apiFor(intent.agentId);
     if (!api) continue;
     out.push(await reconcileIntent({ ...deps, api }, intent));
@@ -374,8 +377,8 @@ export async function mergeDoor(deps: AdjudicationDeps, input: MergeInput): Prom
   }
   if (open) {
     const reconciled = await reconcileIntent(deps, open);
-    if (reconciled.state === "unknown") {
-      return refuse(503, "outcome_unknown", "an earlier merge attempt has no known outcome yet and GitHub is unreachable");
+    if (reconciled.state === "unknown" || reconciled.state === "pending") {
+      return refuse(503, "outcome_unknown", "an earlier merge attempt has no known outcome yet; call again shortly");
     }
     if (reconciled.state === "merged") {
       return ok({ status: "merged", mergeSha: reconciled.mergeSha, headSha: reconciled.headSha, mode: reconciled.mode, reconciled: true });
@@ -668,13 +671,16 @@ export async function rejectHeld(
     if (open && open.state === "pending" && !stalePending(open, at)) {
       return refuse(409, "approval_in_flight", `intent ${open.id} began at ${open.at}; wait for its outcome`);
     }
-    if (open && api) {
+    if (open) {
+      // An open intent is never rejected over: it is reconciled with the
+      // agent's credential first, and without one it stays unresolved.
+      if (!api) return refuse(503, "outcome_unknown", `intent ${open.id} is ${open.state} and no credential can reconcile it`);
       const reconciled = await reconcileIntent({ ...deps, api }, open);
       if (reconciled.state === "merged" || reconciled.state === "superseded") {
         return refuse(409, "already_merged", "the approval that claimed this hold merged it");
       }
-      if (reconciled.state === "unknown") {
-        return refuse(503, "outcome_unknown", "a stale approval claim exists and GitHub is unreachable");
+      if (reconciled.state === "unknown" || reconciled.state === "pending") {
+        return refuse(503, "outcome_unknown", `intent ${open.id} has no known outcome yet; call again shortly`);
       }
     }
     if (api) {
@@ -716,6 +722,9 @@ export async function rejectHeld(
   );
   if (rejected.status === "approval_in_flight") {
     return refuse(409, "approval_in_flight", `intent ${rejected.intent.id} began at ${rejected.intent.at}; wait for its outcome`);
+  }
+  if (rejected.status === "unresolved") {
+    return refuse(503, "outcome_unknown", `intent ${rejected.intent.id} is ${rejected.intent.state}; call again shortly`);
   }
   await deps.ledger.append("merge_rejected", {
     agentId: held.agentId,
