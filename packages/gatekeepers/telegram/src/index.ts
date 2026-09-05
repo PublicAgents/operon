@@ -26,9 +26,10 @@ interface Env {
   WAKE_TRIGGER_TOKEN?: string;
   OPERATOR_CHAT_ID?: string;
   ROSTER?: string;
-  /** email + spend Gatekeepers over service bindings (their Ops entrypoints). */
+  /** email, spend and pr Gatekeepers over service bindings (their Ops entrypoints). */
   EMAIL?: Fetcher;
   SPEND?: Fetcher;
+  PR?: Fetcher;
   LEDGER: DurableObjectNamespace<Ledger>;
   CHANNEL: DurableObjectNamespace<Channel>;
   SCHEDULER?: Fetcher;
@@ -64,6 +65,7 @@ const OPERATOR_HELP =
   "/wake <agent-id> — wake an agent now\n" +
   "/tell <agent-id> <message> — message one agent (delivered on its next wake)\n" +
   "/approve <agent-id> <held-id> — release a held first-contact email (buttons on the hold message do this too)\n" +
+  "Held spends and merges: the buttons on the hold message decide them; a held CODE merge also needs your review on GitHub first\n" +
   "/reject <agent-id> <held-id> — discard a held email\n" +
   "/disable <agent-id> — KILL SWITCH: refuse all wakes (cron and manual) and kill a wake in flight\n" +
   "/enable <agent-id> — lift the kill switch\n" +
@@ -82,13 +84,34 @@ const ACTION_PREFIXES: Record<string, string> = {
   email_approve: "ea",
   email_reject: "er",
   spend_approve: "sa",
-  spend_reject: "sr"
+  spend_reject: "sr",
+  merge_approve: "ma",
+  merge_reject: "mr"
+};
+
+/** Which Gatekeeper a decision prefix reaches, and where its Ops doors live. */
+type HeldGate = "email" | "spend" | "merge";
+const GATES: Record<HeldGate, { binding: (env: Env) => Fetcher | undefined; base: string }> = {
+  email: { binding: env => env.EMAIL, base: "/gatekeeper/email" },
+  spend: { binding: env => env.SPEND, base: "/gatekeeper/spend" },
+  merge: { binding: env => env.PR, base: "/gatekeeper/pr" }
+};
+const GATE_BY_PREFIX: Record<string, { gate: HeldGate; approve: boolean }> = {
+  ea: { gate: "email", approve: true },
+  er: { gate: "email", approve: false },
+  sa: { gate: "spend", approve: true },
+  sr: { gate: "spend", approve: false },
+  ma: { gate: "merge", approve: true },
+  mr: { gate: "merge", approve: false }
 };
 
 function callbackData(action: NotifyAction): string | null {
   const prefix = ACTION_PREFIXES[action.kind];
   if (!prefix) return null;
-  const data = `${prefix}:${action.agentId}:${action.id}`;
+  // A merge decision is addressed by its hold alone (the pr Gatekeeper's
+  // Ops doors take heldId only), so the agent id stays out of the
+  // payload and a long roster id can never push it past Telegram's cap.
+  const data = prefix === "ma" || prefix === "mr" ? `${prefix}:${action.id}` : `${prefix}:${action.agentId}:${action.id}`;
   return data.length <= 64 ? data : null;
 }
 
@@ -128,28 +151,55 @@ async function answerCallback(env: Env, callbackId: string, text: string): Promi
   }).catch(() => undefined);
 }
 
-/** Execute an approve/reject against the email or spend Gatekeeper. */
+/** Execute an approve/reject against the email, spend or pr Gatekeeper. */
 async function heldDecision(
   env: Env,
-  gate: "email" | "spend",
+  gate: HeldGate,
   approve: boolean,
-  agentId: string,
+  agentId: string | undefined,
   heldId: string
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; agentId?: string; pr?: { repo: string; number: number } }> {
   const verb = approve ? "approve" : "reject";
   // The decision goes over a private service binding to the Gatekeeper's
   // binding-only Ops entrypoint: no bearer on the wire, and only workers
   // with the binding (this one and the ops gateway) can execute it.
-  const binding = gate === "email" ? env.EMAIL : env.SPEND;
-  if (!binding) return { ok: false, detail: `${gate} gatekeeper not bound` };
-  const response = await binding.fetch(`https://internal/gatekeeper/${gate}/${verb}`, {
+  const binding = GATES[gate].binding(env);
+  if (!binding) return { ok: false, detail: `${gate} gatekeeper not bound`, agentId };
+  const response = await binding.fetch(`https://internal${GATES[gate].base}/${verb}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentId, heldId })
+    // A merge hold names its agent itself; the others are addressed per agent.
+    body: JSON.stringify(gate === "merge" ? { heldId } : { agentId, heldId })
   });
-  const detail = (await response.text()).slice(0, 200);
-  await ledger(env).append(`${gate}_decision`, { verb, agentId, heldId, status: response.status });
-  return { ok: response.ok, detail };
+  const text = await response.text();
+  const detail = text.slice(0, 200);
+  // A merge callback carries no agent; the Gatekeeper's answer names the
+  // holding agent and the pull request, and the audit row carries each
+  // in its own field (the agent id stays the bare roster id, so the
+  // chronicle's exact-match queries find it).
+  // A hold nobody remembers any more (no hold, no terminal record) is
+  // ledgered without an agent rather than under a placeholder that a
+  // roster-scoped query would never match.
+  let named: string | undefined = agentId;
+  let pr: { repo: string; number: number } | undefined;
+  if (gate === "merge") {
+    named = undefined;
+    try {
+      const body = JSON.parse(text) as { agentId?: string; repo?: string; number?: number };
+      if (typeof body.agentId === "string") named = body.agentId;
+      if (typeof body.repo === "string" && typeof body.number === "number") pr = { repo: body.repo, number: body.number };
+    } catch {
+      /* the detail carries what came back */
+    }
+  }
+  await ledger(env).append(`${gate}_decision`, {
+    verb,
+    ...(named !== undefined ? { agentId: named } : {}),
+    heldId,
+    status: response.status,
+    ...(pr ?? {})
+  });
+  return { ok: response.ok, detail, agentId: named, pr };
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -275,24 +325,27 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "callback": {
-      const match = /^(ea|er|sa|sr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
+      const match =
+        /^(ea|er|sa|sr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data) ??
+        /^(ma|mr):()([a-f0-9-]{8,64})$/.exec(action.data);
       if (!match) {
         await answerCallback(env, action.callbackId, "unknown action");
         return json({ ok: true });
       }
-      const approve = match[1] === "ea" || match[1] === "sa";
-      const gate = match[1].startsWith("e") ? ("email" as const) : ("spend" as const);
+      const { gate, approve } = GATE_BY_PREFIX[match[1]];
       const result = await heldDecision(env, gate, approve, match[2], match[3]);
+      const agent = result.agentId ?? "an agent no longer on record";
+      const who = result.pr ? `${agent} (${result.pr.repo}#${result.pr.number})` : agent;
       await answerCallback(
         env,
         action.callbackId,
-        result.ok ? (approve ? "Approved, sending" : "Rejected") : `Failed: ${result.detail.slice(0, 100)}`
+        result.ok ? (approve ? `Approved, executing for ${who}` : `Rejected for ${who}`) : `Failed: ${result.detail.slice(0, 100)}`
       );
       await sendToOperator(
         env,
         result.ok
-          ? `${approve ? "approved and sent" : "rejected"}: ${match[2]} held ${match[3].slice(0, 8)}`
-          : `${approve ? "approve" : "reject"} failed: ${result.detail}`
+          ? `${approve ? "approved and sent" : "rejected"}: ${who} held ${match[3].slice(0, 8)}`
+          : `${approve ? "approve" : "reject"} failed for ${who}: ${result.detail}`
       );
       return json({ ok: true });
     }

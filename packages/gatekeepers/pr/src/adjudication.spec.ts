@@ -311,7 +311,7 @@ describe("mergeDoor (spec 0012 §6)", () => {
     const second = await mergeDoor(h.deps, h.mergeInput);
     expect(second).toMatchObject({ status: 409, body: { error: "already_merged" } });
     expect(h.kinds()).toEqual(["merge_outcome_unknown", "merge_superseded", "merge_denied"]);
-    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded" });
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded", by: "unknown", agentId: "cto" });
   });
 
   it("GitHub saying no is a failed intent, not an unknown one", async () => {
@@ -409,7 +409,15 @@ describe("the operator's surface (spec 0012 §8)", () => {
       held: [],
       terminals: [expect.objectContaining({ outcome: "merged" })]
     });
-    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable" } });
+    // A refusal about a decided hold still names the agent and the PR it concerned.
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+  });
+
+  it("a refusal over a live hold names the agent and the pull request it concerns", async () => {
+    const { h, approve, reject } = await held();
+    await h.holds.claimHeld("hold-1", h.deps.now());
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+    expect(await reject("no")).toMatchObject({ status: 409, body: { error: "approval_in_flight", agentId: "cto", repo: REPO, number: 7 } });
   });
 
   it("an approval whose response was lost is reconciled by the held listing, and the hold is cleared", async () => {
@@ -456,9 +464,12 @@ describe("the operator's surface (spec 0012 §8)", () => {
   it("refuses a hold whose head moved and invalidates it", async () => {
     const { h, approve } = await held();
     h.gh.state.headSha = HEAD2;
-    expect(await approve()).toMatchObject({ status: 409, body: { error: "head_moved" } });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "head_moved", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
     expect(h.kinds()).toEqual(["merge_held", "merge_hold_invalidated"]);
+    // The held head's record survives the hold: a late answer about it still names the agent.
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded", agentId: "cto", heldId: "hold-1" });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
     expect(h.gh.state.mergePayload).toBeUndefined();
   });
 
@@ -487,7 +498,7 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "rejected", reason: "no", by: "operator" });
     expect(h.kinds()).toEqual(["merge_held", "merge_rejected"]);
     // A retry of a lost rejection answers rejected without a second ledger row.
-    expect((await reject("no")).body).toMatchObject({ status: "rejected", repeated: true });
+    expect((await reject("no")).body).toMatchObject({ status: "rejected", repeated: true, agentId: "cto", repo: REPO, number: 7 });
     expect(h.kinds()).toEqual(["merge_held", "merge_rejected"]);
   });
 
@@ -579,8 +590,22 @@ describe("the operator's surface (spec 0012 §8)", () => {
     await h.holds.claimHeld("hold-1", h.deps.now());
     h.advance(CLAIM_AGE_MS + 1000);
     h.gh.state.merged = true;
-    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged" } });
+    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged", agentId: "cto", repo: REPO, number: 7 } });
+    // The merged head's record outlives the hold: a retry still names the agent.
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "merged", agentId: "cto", heldId: "hold-1" });
+    expect(await reject()).toMatchObject({ status: 409, body: { error: "already_merged", agentId: "cto", repo: REPO, number: 7 } });
     expect(await h.holds.listHeld()).toEqual([]);
+  });
+
+  it("a merged record written before the agent field still names the merging agent", async () => {
+    const { h, approve } = await held();
+    await h.holds.deleteHeld("hold-1");
+    await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "merged", at: h.deps.now(), by: "cto", heldId: "hold-1" });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+    await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "superseded", at: h.deps.now(), by: "unknown", heldId: "hold-1" });
+    const late = await approve();
+    expect(late.body).toMatchObject({ error: "held_unavailable", repo: REPO, number: 7 });
+    expect(late.body.agentId).toBeUndefined();
   });
 
   it("rejecting an unknown hold is not found", async () => {

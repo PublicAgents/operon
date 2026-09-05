@@ -270,6 +270,7 @@ function terminalBase(intent: MergeIntent, at: string): Omit<TerminalRecord, "ou
     number: intent.number,
     headSha: intent.headSha,
     at,
+    agentId: intent.agentId,
     ...(intent.heldId !== undefined ? { heldId: intent.heldId } : {})
   };
 }
@@ -347,6 +348,7 @@ async function executeMerge(
           outcome: "merged",
           at,
           by: agentId,
+          agentId,
           mergeSha: result.mergeSha,
           ...(heldId !== undefined ? { heldId } : {})
         },
@@ -366,7 +368,7 @@ async function executeMerge(
       ...(heldId !== undefined ? { heldId } : {})
     });
     await deps.notify(`[${agentId}] merged ${repo}#${number} "${input.title}" (${mode}, approved by ${input.approvedBy.join(", ") || "the operator"})`);
-    return ok({ status: "merged", mergeSha: result.mergeSha, headSha, mode });
+    return ok({ status: "merged", agentId, repo, number, mergeSha: result.mergeSha, headSha, mode });
   } catch (error) {
     const detail = clip(error instanceof GitDataError ? error.message : String(error));
     if (definitiveFailure(error)) {
@@ -622,7 +624,51 @@ export interface ApproveInput {
   identities: Identities;
 }
 
+/**
+ * Every answer about a hold names the agent it concerns, on success and
+ * on refusal alike: an operator surface that carries only the hold id
+ * (Telegram's compact callbacks) attributes the decision from the
+ * answer. The hold itself, or the terminal record that closed it, is
+ * the source; an answer that already names the agent is left alone.
+ */
+async function attributed(
+  deps: Omit<AdjudicationDeps, "api">,
+  heldId: string,
+  decide: () => Promise<DoorResult>
+): Promise<DoorResult> {
+  // Read the hold before deciding: a decision may delete it (head_moved,
+  // a conceded already_merged) without leaving a terminal record.
+  const before = await deps.holds.getHeld(heldId);
+  const result = await decide();
+  if (result.body.agentId !== undefined) return result;
+  const held = before ?? (await deps.holds.getHeld(heldId));
+  if (held) return { ...result, body: { ...result.body, agentId: held.agentId, repo: held.repo, number: held.number } };
+  const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
+  if (!terminal) return result;
+  // `by` is who decided: the merging agent on a merged record, the
+  // operator on a rejection, nobody known on a superseded one. The
+  // agent field ships with the first deployed release of these doors
+  // (no colony has run an earlier build, so no store holds a record
+  // without it); reading the decider on a merge is belt and braces, and
+  // on a rejection or a superseded record the decider is not the agent,
+  // so nothing is invented there.
+  const agentId = terminal.agentId ?? (terminal.outcome === "merged" ? terminal.by : undefined);
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      ...(agentId !== undefined ? { agentId } : {}),
+      repo: terminal.repo,
+      number: terminal.number
+    }
+  };
+}
+
 export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
+  return attributed(deps, input.heldId, () => approveHeldUnattributed(deps, input));
+}
+
+async function approveHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {
   const at = deps.now();
   const held = await deps.holds.claimHeld(input.heldId, at);
   if (!held) return refuse(409, "held_unavailable", "already claimed, decided, or not found");
@@ -633,7 +679,7 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
   const giveBack = async (error: string, detail?: string) => {
     await deps.holds.unclaimHeld(held.id);
     await deps.ledger.append("merge_approve_failed", { agentId, repo, number, heldId: held.id, reason: error, detail });
-    return refuse(409, error, detail);
+    return { status: 409, body: { ok: false, error, ...(detail !== undefined ? { detail } : {}), agentId, repo, number } };
   };
   if (!api || login === undefined) return giveBack("no_longer_qualifies", "credential_unconfigured");
   if (!grant) return giveBack("no_longer_qualifies", "merge_not_granted");
@@ -648,8 +694,21 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
   if (snapshot.headSha !== held.headSha) {
     // The operator approved a revision that no longer exists: the hold
     // is void, and the next merge request makes a fresh one with fresh
-    // evidence. Nothing is silently refreshed.
+    // evidence. Nothing is silently refreshed. The held head's terminal
+    // record says it was superseded, so a late answer about this hold
+    // still names the agent and the pull request.
     await deps.holds.deleteHeld(held.id);
+    await deps.holds.recordTerminal({
+      repo,
+      number,
+      headSha: held.headSha,
+      outcome: "superseded",
+      at,
+      by: "operator",
+      agentId,
+      heldId: held.id,
+      reason: `head_moved to ${snapshot.headSha}`
+    });
     await deps.ledger.append("merge_hold_invalidated", {
       agentId,
       repo,
@@ -691,10 +750,17 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
   return result;
 }
 
-export async function rejectHeld(
-  deps: Omit<AdjudicationDeps, "api">,
-  input: { heldId: string; reason?: string; apiFor: (agentId: string) => GithubApi | undefined }
-): Promise<DoorResult> {
+export interface RejectInput {
+  heldId: string;
+  reason?: string;
+  apiFor: (agentId: string) => GithubApi | undefined;
+}
+
+export async function rejectHeld(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {
+  return attributed(deps, input.heldId, () => rejectHeldUnattributed(deps, input));
+}
+
+async function rejectHeldUnattributed(deps: Omit<AdjudicationDeps, "api">, input: RejectInput): Promise<DoorResult> {
   const at = deps.now();
   const verdict = await deps.holds.rejectVerdict(input.heldId, at);
   if (verdict.status === "not_found") {
@@ -733,7 +799,22 @@ export async function rejectHeld(
       try {
         const state = await getPullMergeState(api, held.repo, held.number);
         if (state.merged) {
+          // The merged head's record outlives the hold, so a retry of
+          // this rejection still names the agent and the pull request.
           await deps.holds.deleteHeld(held.id);
+          if (!(await deps.holds.terminal(held.repo, held.number, held.headSha))) {
+            await deps.holds.recordTerminal({
+              repo: held.repo,
+              number: held.number,
+              headSha: held.headSha,
+              outcome: "merged",
+              at,
+              by: held.agentId,
+              agentId: held.agentId,
+              heldId: held.id,
+              ...(state.mergeCommitSha ? { mergeSha: state.mergeCommitSha } : {})
+            });
+          }
           await deps.ledger.append("merge_rejected", {
             agentId: held.agentId,
             repo: held.repo,
@@ -761,6 +842,7 @@ export async function rejectHeld(
       outcome: "rejected",
       at,
       by: "operator",
+      agentId: held.agentId,
       heldId: held.id,
       ...(input.reason !== undefined ? { reason: input.reason } : {})
     },
@@ -783,7 +865,7 @@ export async function rejectHeld(
     headSha: held.headSha,
     ...(input.reason !== undefined ? { reason: input.reason } : {})
   });
-  return ok({ status: "rejected", heldId: held.id });
+  return ok({ status: "rejected", heldId: held.id, agentId: held.agentId, repo: held.repo, number: held.number });
 }
 
 export type { HeldMerge };

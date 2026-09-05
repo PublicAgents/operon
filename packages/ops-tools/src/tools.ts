@@ -698,6 +698,41 @@ const REGISTRY: readonly ToolDefinition[] = [
       context.ops("EMAIL", "POST", "/gatekeeper/email/reject", { body: input })
   },
 
+  // ---- merges held for the operator (spec 0012 §8) --------------------
+  {
+    name: "merge_held",
+    title: "List merges awaiting approval",
+    description:
+      `Every pull-request merge held for the operator across agents (spec 0012): id (the heldId merge_approve and merge_reject take), agentId, repo, number, the paths outside the data directories, the approving agents, the head sha; plus the terminal records of the last thirty days (merged, superseded, rejected). A held CODE change also needs your review on GitHub before approval merges it. ${UNTRUSTED}`,
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) =>
+      context.ops("PR", "POST", "/gatekeeper/pr/held", { body: {} })
+  },
+  {
+    name: "merge_approve",
+    title: "Approve a held merge",
+    description:
+      "Approve one held merge by heldId (from merge_held). The Gatekeeper re-reads the pull request: the head must still be the held head, checks must be green, and for a code change your GitHub review must already be on it (branch protection). Merges as the holding agent's decision, ledgered.",
+    input: z.object({ heldId: z.string().min(1) }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) =>
+      context.ops("PR", "POST", "/gatekeeper/pr/approve", { body: input })
+  },
+  {
+    name: "merge_reject",
+    title: "Reject a held merge",
+    description:
+      "Reject one held merge by heldId, with an optional reason the agent will read. That head never holds again; a new push makes a new head.",
+    input: z.object({ heldId: z.string().min(1), reason: z.string().max(500).optional() }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) =>
+      context.ops("PR", "POST", "/gatekeeper/pr/reject", { body: input })
+  },
+
   // ---- the web door -------------------------------------------------
   {
     name: "web_sessions",

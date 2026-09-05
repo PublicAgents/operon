@@ -60,6 +60,118 @@ interface HeldEmail {
   queuedAt: string;
 }
 
+interface HeldMerge {
+  id: string;
+  agentId: string;
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  headSha: string;
+  outside: string[];
+  approvedBy: string[];
+  queuedAt: string;
+  claimed?: boolean;
+}
+
+interface MergeTerminal {
+  repo: string;
+  number: number;
+  headSha: string;
+  outcome: string;
+  at: string;
+  by: string;
+  reason?: string;
+  mergeSha?: string;
+}
+
+/**
+ * Merges held by the pr Gatekeeper (spec 0012 §8). The facts (repo,
+ * number, head, paths, approvers) are the Gatekeeper's; the title is
+ * the author's words and renders untrusted. Approval merges as the
+ * holding agent's decision; a held CODE change also needs the
+ * operator's own review on GitHub first, which the card says.
+ */
+function MergeApprovals() {
+  const state = useTool<{ held: HeldMerge[]; terminals: MergeTerminal[] }>("merge_held", {}, { pollMs: 20_000 });
+  const held = state.data?.held ?? [];
+  const terminals = (state.data?.terminals ?? []).slice(0, 10);
+  return (
+    <div className="approval-block">
+      <h2>Merges</h2>
+      <span className="sub">
+        a pull request outside the data directories waits here; approve it on GitHub first, then here
+      </span>
+      <ErrorNote error={state.error} />
+      <LoadingGate loading={state.loading} hasData={state.data !== undefined}>
+        {held.length === 0 && !state.loading ? <Empty>no merges held</Empty> : null}
+        {held.map(row => (
+          <div key={row.id} className="held-card held-merge">
+            <div className="held-facts">
+              <span className="tag">{row.agentId}</span>
+              <strong>
+                {row.repo}#{row.number}
+              </strong>
+              <span>by {row.author}</span>
+              <code>{row.headSha.slice(0, 7)}</code>
+              <span>approved by {row.approvedBy.join(", ") || "nobody"}</span>
+              {row.claimed ? <span className="tag">deciding</span> : null}
+              <TimeStamp at={row.queuedAt} />
+            </div>
+            <UntrustedText text={row.title} className="held-reason" />
+            <ul className="held-paths">
+              {row.outside.slice(0, 20).map(path => (
+                <li key={path}>
+                  <code>{path}</code>
+                </li>
+              ))}
+              {row.outside.length > 20 ? <li>and {row.outside.length - 20} more</li> : null}
+            </ul>
+            <div className="held-actions">
+              <ConfirmButton
+                label="approve"
+                detail={
+                  <span className="confirm-note">
+                    merge {row.repo}#{row.number} at {row.headSha.slice(0, 7)} as {row.agentId}
+                  </span>
+                }
+                onConfirm={async () => {
+                  await callTool("merge_approve", { heldId: row.id });
+                  state.refresh();
+                }}
+              />
+              <ConfirmButton
+                label="reject"
+                danger
+                onConfirm={async () => {
+                  await callTool("merge_reject", { heldId: row.id });
+                  state.refresh();
+                }}
+              />
+            </div>
+          </div>
+        ))}
+        {terminals.length > 0 ? (
+          <div className="held-history">
+            {terminals.map(row => (
+              <div key={`${row.repo}#${row.number}@${row.headSha}`} className="held-facts">
+                <span className="tag">{row.outcome}</span>
+                <span>
+                  {row.repo}#{row.number}
+                </span>
+                <code>{row.headSha.slice(0, 7)}</code>
+                <span>by {row.by}</span>
+                {row.reason ? <UntrustedText text={row.reason} className="held-reason" /> : null}
+                <TimeStamp at={row.at} />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </LoadingGate>
+    </div>
+  );
+}
+
 function AllowanceList() {
   const allowances = useTool<{ allowances: Allowance[] }>("spend_allowances", {}, { pollMs: 30_000 });
   const rows = allowances.data?.allowances ?? [];
@@ -256,6 +368,7 @@ export function ApprovalsPage() {
       </header>
       <SpendApprovals />
       <AllowanceList />
+      <MergeApprovals />
       <div className="approval-block">
         <h2>Email</h2>
         {(agents.data?.agents ?? []).length === 0 && !agents.loading ? (
