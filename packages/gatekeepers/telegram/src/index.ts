@@ -158,7 +158,7 @@ async function heldDecision(
   approve: boolean,
   agentId: string,
   heldId: string
-): Promise<{ ok: boolean; detail: string; agentId: string }> {
+): Promise<{ ok: boolean; detail: string; agentId: string; pr?: { repo: string; number: number } }> {
   const verb = approve ? "approve" : "reject";
   // The decision goes over a private service binding to the Gatekeeper's
   // binding-only Ops entrypoint: no bearer on the wire, and only workers
@@ -174,19 +174,22 @@ async function heldDecision(
   const text = await response.text();
   const detail = text.slice(0, 200);
   // A merge callback carries no agent; the Gatekeeper's answer names the
-  // holding agent, and the audit row and the confirmation say it.
+  // holding agent and the pull request, and the audit row carries each
+  // in its own field (the agent id stays the bare roster id, so the
+  // chronicle's exact-match queries find it).
   let named = agentId;
+  let pr: { repo: string; number: number } | undefined;
   if (gate === "merge") {
     try {
       const body = JSON.parse(text) as { agentId?: string; repo?: string; number?: number };
       if (typeof body.agentId === "string") named = body.agentId;
-      if (body.repo && body.number !== undefined) named = `${named} (${body.repo}#${body.number})`;
+      if (typeof body.repo === "string" && typeof body.number === "number") pr = { repo: body.repo, number: body.number };
     } catch {
       /* the detail carries what came back */
     }
   }
-  await ledger(env).append(`${gate}_decision`, { verb, agentId: named, heldId, status: response.status });
-  return { ok: response.ok, detail, agentId: named };
+  await ledger(env).append(`${gate}_decision`, { verb, agentId: named, heldId, status: response.status, ...(pr ?? {}) });
+  return { ok: response.ok, detail, agentId: named, pr };
 }
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -321,16 +324,17 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       }
       const { gate, approve } = GATE_BY_PREFIX[match[1]];
       const result = await heldDecision(env, gate, approve, match[2] || "(hold)", match[3]);
+      const who = result.pr ? `${result.agentId} (${result.pr.repo}#${result.pr.number})` : result.agentId;
       await answerCallback(
         env,
         action.callbackId,
-        result.ok ? (approve ? `Approved, executing for ${result.agentId}` : `Rejected for ${result.agentId}`) : `Failed: ${result.detail.slice(0, 100)}`
+        result.ok ? (approve ? `Approved, executing for ${who}` : `Rejected for ${who}`) : `Failed: ${result.detail.slice(0, 100)}`
       );
       await sendToOperator(
         env,
         result.ok
-          ? `${approve ? "approved and sent" : "rejected"}: ${result.agentId} held ${match[3].slice(0, 8)}`
-          : `${approve ? "approve" : "reject"} failed: ${result.detail}`
+          ? `${approve ? "approved and sent" : "rejected"}: ${who} held ${match[3].slice(0, 8)}`
+          : `${approve ? "approve" : "reject"} failed for ${who}: ${result.detail}`
       );
       return json({ ok: true });
     }
