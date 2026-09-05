@@ -108,7 +108,10 @@ const GATE_BY_PREFIX: Record<string, { gate: HeldGate; approve: boolean }> = {
 function callbackData(action: NotifyAction): string | null {
   const prefix = ACTION_PREFIXES[action.kind];
   if (!prefix) return null;
-  const data = `${prefix}:${action.agentId}:${action.id}`;
+  // A merge decision is addressed by its hold alone (the pr Gatekeeper's
+  // Ops doors take heldId only), so the agent id stays out of the
+  // payload and a long roster id can never push it past Telegram's cap.
+  const data = prefix === "ma" || prefix === "mr" ? `${prefix}:${action.id}` : `${prefix}:${action.agentId}:${action.id}`;
   return data.length <= 64 ? data : null;
 }
 
@@ -165,7 +168,8 @@ async function heldDecision(
   const response = await binding.fetch(`https://internal${GATES[gate].base}/${verb}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentId, heldId })
+    // A merge hold names its agent itself; the others are addressed per agent.
+    body: JSON.stringify(gate === "merge" ? { heldId } : { agentId, heldId })
   });
   const detail = (await response.text()).slice(0, 200);
   await ledger(env).append(`${gate}_decision`, { verb, agentId, heldId, status: response.status });
@@ -295,7 +299,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
     case "callback": {
-      const match = /^(ea|er|sa|sr|ma|mr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data);
+      const match =
+        /^(ea|er|sa|sr):([a-z0-9-]+):([a-f0-9-]{8,64})$/.exec(action.data) ??
+        /^(ma|mr):()([a-f0-9-]{8,64})$/.exec(action.data);
       if (!match) {
         await answerCallback(env, action.callbackId, "unknown action");
         return json({ ok: true });
