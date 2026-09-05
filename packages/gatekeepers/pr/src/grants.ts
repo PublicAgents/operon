@@ -3,6 +3,8 @@ import {
   parseRoster,
   reachableGithubRepos,
   registryPrRepo,
+  sameRepo,
+  withRepo,
   type MergeGrant,
   type Roster,
   type RosterAgent
@@ -54,7 +56,7 @@ export function grantedRepos(env: GrantSource, agentId: string): string[] {
   // No block at all: this agent predates grants, so the fleet list
   // still binds. An unknown agent gets the fleet list too, and nothing
   // from it because it has no PAT either.
-  return registry && !base.includes(registry) ? [...base, registry] : base;
+  return withRepo(base, registry);
 }
 
 function loadRoster(env: GrantSource): Roster | undefined {
@@ -107,7 +109,7 @@ export function reachableRepos(env: GrantSource, agentId: string): string[] {
   // Reading the registry follows from authoring on it; an adjudicator
   // reaches it through its review or merge grant already.
   const registry = roster && agent ? registryPrRepo(roster, agent) : undefined;
-  return registry && !base.includes(registry) ? [...base, registry] : base;
+  return withRepo(base, registry);
 }
 
 /** The repos this agent may post reviews on (spec 0012 §5). Nothing without a roster grant. */
@@ -117,7 +119,7 @@ export function reviewRepos(env: GrantSource, agentId: string): string[] {
 
 /** This agent's merge grant on a repo (spec 0012 §6), or undefined when it has none. */
 export function mergeGrant(env: GrantSource, agentId: string, repo: string): MergeGrant | undefined {
-  return (rosterAgent(env, agentId)?.github?.merge ?? []).find(grant => grant.repo === repo);
+  return (rosterAgent(env, agentId)?.github?.merge ?? []).find(grant => sameRepo(grant.repo, repo));
 }
 
 /**

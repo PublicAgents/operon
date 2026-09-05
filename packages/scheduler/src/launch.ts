@@ -19,7 +19,7 @@ import {
   type WakeTrigger,
   type WakeSecrets,
   type WakeOptions,
-  type Door, registryPrRepo, type RegistryPin } from "@operon/core";
+  type Door, registryPrRepo, withRepo, type RegistryPin } from "@operon/core";
 
 /**
  * Pure assembly of a wake launch: which secret variable a harness draws its
@@ -285,8 +285,7 @@ export async function prepareLaunch(
   // every agent that does not adjudicate there: the explicit list when
   // the agent has a github block, the fleet list otherwise.
   const registryRepo = open("github") ? registryPrRepo({ registry: context.registry }, agent) : undefined;
-  const withRegistry = (repos: readonly string[]): string[] =>
-    registryRepo && !repos.includes(registryRepo) ? [...repos, registryRepo] : [...repos];
+  const withRegistry = (repos: readonly string[]): string[] => withRepo(repos, registryRepo);
   const githubGrants = agent.github
     ? {
         // Repo names only: the merge grant's auto globs and check names

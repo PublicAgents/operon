@@ -10,6 +10,8 @@ export {
   type RegistryPin,
   reachableGithubRepos,
   registryPrRepo,
+  sameRepo,
+  withRepo,
   type HarnessPin,
   RESERVED_MCP_NAMES
 } from "./roster.js";

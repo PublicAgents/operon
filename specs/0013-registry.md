@@ -36,7 +36,8 @@ walk skips every dot-entry.
   the repo is appended to the effective `pr` grant at grant resolution
   (the pr Gatekeeper, the scheduler's wake env, the fleet list an
   agent without a block falls back to). Listing it explicitly in
-  `github.pr` is deduplicated, not refused.
+  `github.pr` is deduplicated, not refused. Repository names compare
+  case-insensitively, as GitHub does: a respelt grant is the same grant.
 - EXCEPT an adjudicator. An agent that holds `review` or `merge` on the
   registry repo never authors there, not even its own entry: a pr
   grant would put only the self-approval check between a reviewer's
@@ -58,9 +59,10 @@ walk skips every dot-entry.
   more: the chassis does not know the agent's chosen handle or whether
   an entry exists, and claiming to would be a lie.
 - `operon publish` carries `/.well-known/**`: the publish walk skips
-  every dot-entry except that directory, so the ownership file and an
-  agent card reach the site. The deploy door's path rules already
-  allow it.
+  every dot-entry except that directory at the site's root, so the
+  ownership file and an agent card reach the site and a deeper
+  dot-directory stays housekeeping. The deploy door's path rules
+  already allow it.
 - The charter template's "Your surfaces" gains one conditional line:
   if the colony names a registry, keep your entry there true and
   publish the ownership file with your site.

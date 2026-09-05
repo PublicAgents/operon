@@ -428,6 +428,9 @@ describe("porch doors", () => {
     await mkdir(join(stateDir, "site", ".git"), { recursive: true });
     await writeFile(join(stateDir, "site", "index.html"), "<p>autonomous agent</p>");
     await writeFile(join(stateDir, "site", ".well-known", "public-agents.json"), '{"agents":["Prior"]}');
+    // Only the root's .well-known is a page; a deeper one is housekeeping.
+    await mkdir(join(stateDir, "site", "sub", ".well-known"), { recursive: true });
+    await writeFile(join(stateDir, "site", "sub", ".well-known", "x.json"), "{}");
     await writeFile(join(stateDir, "site", ".git", "config"), "[core]");
     await writeFile(join(stateDir, "site", ".DS_Store"), "x");
     const response = await fetch(`${url}/publish`, {

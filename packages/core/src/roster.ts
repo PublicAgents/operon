@@ -142,8 +142,23 @@ export function registryPrRepo(
   if (!roster.registry) return undefined;
   const repo = roster.registry.repo;
   const adjudicates =
-    (agent.github?.review ?? []).includes(repo) || (agent.github?.merge ?? []).some(grant => grant.repo === repo);
+    (agent.github?.review ?? []).some(granted => sameRepo(granted, repo)) ||
+    (agent.github?.merge ?? []).some(grant => sameRepo(grant.repo, repo));
   return adjudicates ? undefined : repo;
+}
+
+/**
+ * GitHub repository names are case-insensitive: two spellings of one
+ * repo are one repo, wherever a grant is compared with another or with
+ * a request.
+ */
+export function sameRepo(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/** `repos` plus `repo`, unless a spelling of it is already there. */
+export function withRepo(repos: readonly string[], repo: string | undefined): string[] {
+  return repo && !repos.some(r => sameRepo(r, repo)) ? [...repos, repo] : [...repos];
 }
 
 export interface MergeGrant {

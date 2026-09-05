@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAgent, parseRoster, RosterError, reachableGithubRepos, registryPrRepo } from "./roster.js";
+import { findAgent, parseRoster, RosterError, reachableGithubRepos, registryPrRepo, withRepo } from "./roster.js";
 
 const valid = {
   zone: "example-colony.com",
@@ -234,6 +234,11 @@ describe("capability grants (spec 0008)", () => {
     expect(registryPrRepo(parsed, { github: undefined })).toBe("PublicAgents/public-agents");
     expect(registryPrRepo(parsed, { github: { review: ["PublicAgents/public-agents"] } })).toBeUndefined();
     expect(registryPrRepo(parsed, { github: { merge: [{ repo: "PublicAgents/public-agents" }] } })).toBeUndefined();
+    // GitHub repo names are case-insensitive: a respelt grant still adjudicates.
+    expect(registryPrRepo(parsed, { github: { review: ["publicagents/PUBLIC-AGENTS"] } })).toBeUndefined();
+    expect(registryPrRepo(parsed, { github: { merge: [{ repo: "publicagents/public-agents" }] } })).toBeUndefined();
+    expect(withRepo(["publicagents/public-agents"], "PublicAgents/public-agents")).toEqual(["publicagents/public-agents"]);
+    expect(withRepo(["org/other"], "PublicAgents/public-agents")).toEqual(["org/other", "PublicAgents/public-agents"]);
     expect(registryPrRepo({ registry: undefined }, parsed.agents[0])).toBeUndefined();
     const off = granted();
     off.registry = false;
