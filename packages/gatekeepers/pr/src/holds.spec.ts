@@ -140,8 +140,10 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     // first releases (a lost response) the second resumes.
     expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(1000) })).status).toBe("busy");
     expect(await s.closeStep(intent.id, "commented", intent.workToken)).toBe(true);
-    await s.releaseClose(intent.id, intent.workToken);
-    const resumed = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(2000) });
+    await s.releaseClose(intent.id, intent.workToken, later(1500));
+    // A release after a lost response: the resume waits the grace from it.
+    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(2000) })).status).toBe("busy");
+    const resumed = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(UNKNOWN_GRACE_MS + 2000) });
     expect(resumed).toMatchObject({ status: "resumed", intent: { id: intent.id, steps: { commented: true } } });
     // The resume minted a new token: the first executor's steps and resolve refuse from here on.
     expect(resumed.intent.workToken).not.toBe(intent.workToken);
@@ -149,8 +151,8 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(await s.resolveClose(intent.id, "closed", later(2500), undefined, intent.workToken)).toBe(false);
     // A door that crashed while working ages out of the way, past the
     // stale bound plus the grace (its last request is over by then).
-    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + 3000) })).status).toBe("busy");
-    const again = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(INTENT_STALE_MS + UNKNOWN_GRACE_MS + 3000) });
+    expect((await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(UNKNOWN_GRACE_MS + INTENT_STALE_MS + 1000) })).status).toBe("busy");
+    const again = await s.beginClose({ repo: "org/registry", number: 8, agentId: "cto", reason: "spam", at: later(2 * UNKNOWN_GRACE_MS + INTENT_STALE_MS + 3000) });
     expect(again.status).toBe("resumed");
     expect(await s.closeStep(intent.id, "closed", again.intent.workToken)).toBe(true);
     expect(await s.resolveClose(intent.id, "closed", later(INTENT_STALE_MS + 4000), undefined, again.intent.workToken)).toBe(true);

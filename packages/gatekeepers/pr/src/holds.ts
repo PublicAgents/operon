@@ -69,6 +69,8 @@ export interface CloseIntent {
   workingSince?: string;
   /** Minted per begin or resume; every step and the resolve must present it, so a superseded executor's writes refuse. */
   workToken?: string;
+  /** When the working executor gave the intent up after a lost response: a resume waits the grace from here. */
+  releasedAt?: string;
   detail?: string;
   resolvedAt?: string;
 }
@@ -372,6 +374,10 @@ export class HoldStore {
       // flight when the new one reads the marker and the state.
       const age = open.workingSince === undefined ? Infinity : Date.parse(input.at) - Date.parse(open.workingSince);
       if (Number.isFinite(age) && age < INTENT_STALE_MS + UNKNOWN_GRACE_MS) return { status: "busy", intent: open };
+      // Released after a lost response: the request that was lost may
+      // still be finishing, so the resume waits the grace from the release.
+      const sinceRelease = open.releasedAt === undefined ? Infinity : Date.parse(input.at) - Date.parse(open.releasedAt);
+      if (Number.isFinite(sinceRelease) && sinceRelease < UNKNOWN_GRACE_MS) return { status: "busy", intent: open };
       // A resume mints a new work token: the executor that went stale
       // may still be alive, and its next step or resolve refuses.
       const resumed = { ...open, workingSince: input.at, workToken: this.newId() };
@@ -384,10 +390,10 @@ export class HoldStore {
   }
 
   /** The door is done with a still-pending close intent (a lost response): release it for a retry. */
-  async releaseClose(id: string, workToken?: string): Promise<void> {
+  async releaseClose(id: string, workToken: string | undefined, at: string): Promise<void> {
     const intent = await this.storage.get<CloseIntent>(closeKey(id));
     if (intent && intent.state === "pending" && (workToken === undefined || intent.workToken === workToken)) {
-      const released = { ...intent };
+      const released = { ...intent, releasedAt: at };
       delete released.workingSince;
       await this.storage.put(closeKey(id), released);
     }

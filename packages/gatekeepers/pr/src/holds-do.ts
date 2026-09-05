@@ -74,8 +74,8 @@ export class PrHolds extends DurableObject {
   beginClose(input: Parameters<HoldStore["beginClose"]>[0]): ReturnType<HoldStore["beginClose"]> {
     return this.store.beginClose(input);
   }
-  releaseClose(id: string, workToken?: string): Promise<void> {
-    return this.store.releaseClose(id, workToken);
+  releaseClose(id: string, workToken: string | undefined, at: string): Promise<void> {
+    return this.store.releaseClose(id, workToken, at);
   }
   closeStep(id: string, step: "commented" | "closed", workToken?: string): Promise<boolean> {
     return this.store.closeStep(id, step, workToken);

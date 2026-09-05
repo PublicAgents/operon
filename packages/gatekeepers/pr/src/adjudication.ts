@@ -576,7 +576,7 @@ export async function closeDoor(
     return ok({ status: "closed", ...(commentUrl !== undefined ? { commentUrl } : {}) });
   } catch (error) {
     if (error instanceof StaleExecutor) {
-      await deps.holds.releaseClose(intent.id, token);
+      await deps.holds.releaseClose(intent.id, token, deps.now());
       await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, detail: "executor_stale" });
       return refuse(409, "executor_stale", "the close took too long to reach GitHub; call again");
     }
@@ -593,7 +593,7 @@ export async function closeDoor(
     // have happened is never reported as failed. The step claimed
     // before the act stays claimed: the resume checks GitHub's truth
     // (the marker, the state), never the flag alone.
-    await deps.holds.releaseClose(intent.id, token);
+    await deps.holds.releaseClose(intent.id, token, deps.now());
     const current = (await deps.holds.openCloseIntent(repo, number)) ?? intent;
     await deps.ledger.append("close_outcome_unknown", { agentId, repo, number, intentId: intent.id, steps: current.steps, detail });
     return { status: 503, body: { ok: false, error: "outcome_unknown", intentId: intent.id, steps: current.steps, detail } };

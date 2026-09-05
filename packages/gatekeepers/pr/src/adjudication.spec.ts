@@ -635,6 +635,9 @@ describe("closeDoor (spec 0012 §7)", () => {
     });
     expect(h.gh.state.comments).toHaveLength(1);
     expect(await h.holds.openCloseIntent(REPO, 7)).toMatchObject({ steps: { commented: true } });
+    // Too soon: the lost request may still be finishing.
+    expect(await closeDoor(h.deps, input)).toMatchObject({ status: 409, body: { error: "close_in_progress" } });
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     const retry = await closeDoor(h.deps, input);
     expect(retry.body).toMatchObject({ status: "closed" });
     expect(h.gh.state.comments).toHaveLength(1);
@@ -656,7 +659,8 @@ describe("closeDoor (spec 0012 §7)", () => {
     // The comment was posted but the response never arrived: simulate by
     // recording the marker on GitHub's side before the retry.
     const { intent } = await h.holds.beginClose({ repo: REPO, number: 7, agentId: "cto", reason: input.reason, at: h.deps.now() });
-    await h.holds.releaseClose(intent.id);
+    await h.holds.releaseClose(intent.id, intent.workToken, h.deps.now());
+    h.advance(UNKNOWN_GRACE_MS + 1000);
     h.gh.state.comments.push({ body: `${input.reason}\n\n${closeMarker(intent.id)}`, html_url: "https://github.com/org/registry/pull/7#c0" });
     expect((await closeDoor(h.deps, input)).body).toMatchObject({ status: "closed", commentUrl: "https://github.com/org/registry/pull/7#c0" });
     expect(h.gh.state.comments).toHaveLength(1);
