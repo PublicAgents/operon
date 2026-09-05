@@ -316,6 +316,22 @@ describe("mergeDoor (spec 0012 §6)", () => {
     expect(h.kinds()).toEqual(["merge_denied", "merge_failed", "pr_merged"]);
   });
 
+  it("an executor whose intent aged past the bound never calls GitHub", async () => {
+    const h = harness();
+    const holds = h.holds;
+    const slowBegin: typeof holds.beginMerge = async input => {
+      const begun = await holds.beginMerge(input);
+      if (begun.created) await holds.resolveMerge(begun.intent.id, { state: "unknown" }, input.at);
+      // The intent is on record, then the executor stalls past the bound.
+      h.advance(INTENT_STALE_MS + 1000);
+      return begun.created ? { created: true, intent: { ...begun.intent, state: "pending" } } : begun;
+    };
+    const deps = { ...h.deps, holds: new Proxy(holds, { get: (target, key) => (key === "beginMerge" ? slowBegin : Reflect.get(target, key)) }) };
+    expect(await mergeDoor(deps, h.mergeInput)).toMatchObject({ status: 409, body: { error: "executor_stale" } });
+    expect(h.gh.state.mergePayload).toBeUndefined();
+    expect(h.kinds()).toEqual(["merge_failed"]);
+  });
+
   it("a head the operator rejected never holds again", async () => {
     const h = harness({ files: [{ filename: "site/index.ts" }] });
     await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "rejected", at: "2026-09-05T09:00:00Z", by: "operator", reason: "not now" });

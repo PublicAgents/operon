@@ -154,6 +154,16 @@ export interface MergeInput {
   identities: Identities;
 }
 
+/** The same credential, with every request bounded by a deadline. */
+function withDeadline(api: GithubApi, ms: number): GithubApi {
+  const inner = api.fetch ?? fetch;
+  return {
+    ...api,
+    fetch: ((input: string | URL | Request, init?: RequestInit) =>
+      inner(input, { ...init, signal: AbortSignal.timeout(Math.max(1, ms)) })) as typeof fetch
+  };
+}
+
 /** Whether a GitHub error is GitHub SAYING no (terminal) or the wire failing (unknown). */
 function definitiveFailure(error: unknown): boolean {
   return error instanceof GitDataError && error.status >= 400 && error.status < 500;
@@ -287,8 +297,18 @@ async function executeMerge(
     return refuse(409, "merge_in_progress", `intent ${begun.intent.id} is ${begun.intent.state}; call again to reconcile`);
   }
   const intent = begun.intent;
+  // The executor's deadline (spec 0012 §6): no merge call starts once
+  // the intent is stale, and the call carries the remaining time, so a
+  // rejection that overrides a stale intent cannot be raced by a merge
+  // that began before it. Past the bound the intent is over.
+  const remainingMs = INTENT_STALE_MS - (Date.parse(deps.now()) - Date.parse(intent.at));
+  if (remainingMs <= 0) {
+    await deps.holds.settleMerge(intent.id, { state: "failed", detail: "executor_stale" }, deps.now(), { hold: "unclaim" });
+    await deps.ledger.append("merge_failed", { agentId, repo, number, headSha, mode, detail: "executor_stale: the intent aged past its bound before the merge call" });
+    return refuse(409, "executor_stale", "the attempt took too long to reach GitHub; call again");
+  }
   try {
-    const result = await mergePullRequest(deps.api, repo, number, headSha);
+    const result = await mergePullRequest(withDeadline(deps.api, remainingMs), repo, number, headSha);
     const at = deps.now();
     await deps.holds.settleMerge(
       intent.id,

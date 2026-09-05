@@ -292,7 +292,12 @@ reconciles an older intent first, and then, in ONE store turn with no
 network read between them, checks again for an intent in flight
 (`approval_in_flight`), writes the terminal record and deletes the
 hold; the begin is one turn too, so the two cannot interleave, and a
-slow approval that wakes up afterwards stops before GitHub.
+slow approval that wakes up afterwards stops before GitHub. The
+executor has a deadline too: no merge call starts once its intent is
+older than the stale bound, and the call carries the time that
+remains, so an attempt that began before a stale-override rejection
+cannot land after it; past the bound the attempt answers
+`executor_stale` and is over.
 
 ## 7. The close door
 
