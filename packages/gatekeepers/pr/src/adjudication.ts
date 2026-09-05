@@ -270,6 +270,7 @@ function terminalBase(intent: MergeIntent, at: string): Omit<TerminalRecord, "ou
     number: intent.number,
     headSha: intent.headSha,
     at,
+    agentId: intent.agentId,
     ...(intent.heldId !== undefined ? { heldId: intent.heldId } : {})
   };
 }
@@ -347,6 +348,7 @@ async function executeMerge(
           outcome: "merged",
           at,
           by: agentId,
+          agentId,
           mergeSha: result.mergeSha,
           ...(heldId !== undefined ? { heldId } : {})
         },
@@ -643,7 +645,16 @@ async function attributed(
   if (held) return { ...result, body: { ...result.body, agentId: held.agentId, repo: held.repo, number: held.number } };
   const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
   if (!terminal) return result;
-  return { ...result, body: { ...result.body, agentId: terminal.agentId ?? terminal.by, repo: terminal.repo, number: terminal.number } };
+  // `by` is who decided (an operator, or nobody known), never the agent.
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      ...(terminal.agentId !== undefined ? { agentId: terminal.agentId } : {}),
+      repo: terminal.repo,
+      number: terminal.number
+    }
+  };
 }
 
 export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: ApproveInput): Promise<DoorResult> {

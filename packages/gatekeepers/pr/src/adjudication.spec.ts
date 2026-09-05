@@ -311,7 +311,7 @@ describe("mergeDoor (spec 0012 §6)", () => {
     const second = await mergeDoor(h.deps, h.mergeInput);
     expect(second).toMatchObject({ status: 409, body: { error: "already_merged" } });
     expect(h.kinds()).toEqual(["merge_outcome_unknown", "merge_superseded", "merge_denied"]);
-    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded" });
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "superseded", by: "unknown", agentId: "cto" });
   });
 
   it("GitHub saying no is a failed intent, not an unknown one", async () => {
