@@ -48,7 +48,7 @@ my-colony/
 ```bash
 git init my-colony && cd my-colony
 git submodule add https://github.com/PublicAgents/operon operon
-cp operon/examples/operon.yaml .operon/operon.yaml   # then edit it
+mkdir .operon && cp operon/examples/operon.yaml .operon/operon.yaml   # then edit it
 mkdir charters && cp operon/charters/TEMPLATE.md charters/scout.md
 ```
 
@@ -127,13 +127,14 @@ hand, then rerun bootstrap until the checklist is empty.
 
 ## 5. Push, deploy, first wake
 
-Commit the manifest (bootstrap wrote the Access block into it), push,
-and let the workflow deploy. Then wake one agent by hand from the
-console (`https://ops.<zone>`) or the Telegram chat, and read the wake
-log end to end: the container cloned, the model probe answered, the
-journal entry landed, state pushed. Only then set `enabled: true` and
-let cron carry it. Headless failures are silent by default; the hand
-run is the gate.
+Set one agent to `enabled: true` (a disabled agent refuses every wake,
+cron and manual alike), commit the manifest (bootstrap wrote the Access
+block into it), push, and let the workflow deploy. Then wake that agent
+by hand from the console (`https://ops.<zone>`) or the Telegram chat,
+and read the wake log end to end: the container cloned, the model probe
+answered, the journal entry landed, state pushed. Only then let cron
+carry it: its cadence is already in the manifest, and the hand run is
+the gate. Headless failures are silent by default.
 
 ## What to read next
 
