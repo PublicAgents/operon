@@ -325,7 +325,8 @@ rule is "this agent's account authored the item", which is only
 knowable from GitHub; pre-checking a repo list there would refuse the
 legitimate case the rule exists for, an agent's own pull request on a
 repo nobody granted it. The Gatekeeper remains authoritative for all
-eight.
+of them: eight here, eleven once spec 0012 adds review, merge and
+close.
 
 ### Why not the GitHub MCP server
 

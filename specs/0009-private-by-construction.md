@@ -65,7 +65,11 @@ by hand and its AUD pasted into the manifest. Now the tools own it:
 - **Bootstrap** (spec 0006 §4) ensures the Zero Trust organization is
   known (its team domain), that a self-hosted Access application exists
   for `ops.<zone>` with an Allow policy for `operatorEmail` and a
-  Service Auth policy for a service token named `operon-<project>-ci`,
+  Service Auth policy for the repository's CI service token, named
+  `operon-ci-<owner>-<repo>` (one token per repository, shared by every
+  project the repository deploys; spec 0012 §10 explains why a
+  per-project name overwrote the first project's token and how a
+  legacy `operon-<project>-ci` token is renamed in place),
   creates the token when it is missing and writes its id and secret
   straight into the repository's GitHub Actions secrets
   (`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`) through `gh`,
