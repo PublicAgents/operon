@@ -645,12 +645,16 @@ async function attributed(
   if (held) return { ...result, body: { ...result.body, agentId: held.agentId, repo: held.repo, number: held.number } };
   const terminal = (await deps.holds.listTerminals()).find(record => record.heldId === heldId);
   if (!terminal) return result;
-  // `by` is who decided (an operator, or nobody known), never the agent.
+  // `by` is who decided: the merging agent on a merged record, the
+  // operator on a rejection, nobody known on a superseded one. A record
+  // written before the agent field existed still names the agent on a
+  // merge, and on nothing else.
+  const agentId = terminal.agentId ?? (terminal.outcome === "merged" ? terminal.by : undefined);
   return {
     ...result,
     body: {
       ...result.body,
-      ...(terminal.agentId !== undefined ? { agentId: terminal.agentId } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
       repo: terminal.repo,
       number: terminal.number
     }

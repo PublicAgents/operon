@@ -597,6 +597,17 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(await h.holds.listHeld()).toEqual([]);
   });
 
+  it("a merged record written before the agent field still names the merging agent", async () => {
+    const { h, approve } = await held();
+    await h.holds.deleteHeld("hold-1");
+    await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "merged", at: h.deps.now(), by: "cto", heldId: "hold-1" });
+    expect(await approve()).toMatchObject({ status: 409, body: { error: "held_unavailable", agentId: "cto", repo: REPO, number: 7 } });
+    await h.holds.recordTerminal({ repo: REPO, number: 7, headSha: HEAD, outcome: "superseded", at: h.deps.now(), by: "unknown", heldId: "hold-1" });
+    const late = await approve();
+    expect(late.body).toMatchObject({ error: "held_unavailable", repo: REPO, number: 7 });
+    expect(late.body.agentId).toBeUndefined();
+  });
+
   it("rejecting an unknown hold is not found", async () => {
     const { reject } = await held();
     const h2 = harness();
