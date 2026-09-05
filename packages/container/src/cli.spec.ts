@@ -89,6 +89,34 @@ describe("operon CLI parsing", () => {
     });
   });
 
+  it("parses the adjudication verbs (spec 0012 §9)", () => {
+    expect(parseArgs(["github", "review", "org/repo", "59", "--approve"])).toEqual({
+      path: "/github/review",
+      payload: { repo: "org/repo", number: 59, verdict: "approve" }
+    });
+    expect(parseArgs(["github", "review", "org/repo", "59", "--request-changes", "--body-file", "review.md"])).toEqual({
+      path: "/github/review",
+      payload: { repo: "org/repo", number: 59, verdict: "request_changes", bodyFile: "review.md" }
+    });
+    expect(parseArgs(["github", "review", "org/repo", "59", "--comment", "--body", "one thought"])).toEqual({
+      path: "/github/review",
+      payload: { repo: "org/repo", number: 59, verdict: "comment", body: "one thought" }
+    });
+    // Exactly one verdict flag, or the usage line.
+    expect(() => parseArgs(["github", "review", "org/repo", "59"])).toThrow(/usage: operon github review/);
+    expect(() => parseArgs(["github", "review", "org/repo", "59", "--approve", "--comment"])).toThrow(/usage/);
+    expect(parseArgs(["github", "merge", "org/repo", "59"])).toEqual({
+      path: "/github/merge",
+      payload: { repo: "org/repo", number: 59 }
+    });
+    expect(() => parseArgs(["github", "merge", "org/repo"])).toThrow(/usage: operon github merge/);
+    expect(parseArgs(["github", "close", "org/repo", "59", "--reason", "spam"])).toEqual({
+      path: "/github/close",
+      payload: { repo: "org/repo", number: 59, reason: "spam" }
+    });
+    expect(() => parseArgs(["github", "close", "org/repo", "59"])).toThrow(/usage: operon github close/);
+  });
+
   it("parses the till doors", () => {
     expect(
       parseArgs([

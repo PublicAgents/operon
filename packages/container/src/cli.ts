@@ -170,6 +170,22 @@ allowlisted repos = you may read and comment on anything in them.
                                          open an issue on an allowlisted repo; the
                                          body is read from bodyfile (a markdown file
                                          in your repo). Swept before it leaves.
+  operon github review <owner/repo> <n> --approve | --request-changes | --comment [--body <t> | --body-file <f>]
+                                         post a review on a PR of a repo you hold a
+                                         REVIEW grant on. Never your own PR. The
+                                         review binds to the head you read; a body
+                                         is required unless you approve.
+  operon github merge <owner/repo> <n>   merge a PR of a repo you hold a MERGE
+                                         grant on, only if it qualifies: open,
+                                         green on the named checks, approved by
+                                         another agent on the current head, and
+                                         inside the data paths. Anything else is
+                                         HELD for the operator: held means wait,
+                                         do not retry the same head.
+  operon github close <owner/repo> <n> --reason <text>
+                                         close another party's PR (spam, or one
+                                         that will never qualify) with the reason
+                                         on the record. Merge-granted repos only.
 
 Doors answer with named errors when something is wrong; an error names
 what to fix. A door that is not wired yet answers *_not_wired.`;
@@ -590,9 +606,46 @@ function parseGithub(args: string[]): CliCall {
       }
       return { path: "/github/issue", payload: { repo, bodyFile, title } };
     }
+    case "review": {
+      const [repo, num] = positionals(rest);
+      const verdicts = (["--approve", "--request-changes", "--comment"] as const).filter(flag => rest.includes(flag));
+      const body = flagValue(rest, "--body");
+      const bodyFile = flagValue(rest, "--body-file");
+      if (!repo || !repo.includes("/") || !num || verdicts.length !== 1) {
+        throw new CliUsageError(
+          "usage: operon github review <owner/repo> <number> --approve | --request-changes | --comment [--body <t> | --body-file <f>]"
+        );
+      }
+      const verdict = verdicts[0] === "--approve" ? "approve" : verdicts[0] === "--request-changes" ? "request_changes" : "comment";
+      return {
+        path: "/github/review",
+        payload: {
+          repo,
+          number: intNumber(num),
+          verdict,
+          ...(body ? { body } : {}),
+          ...(bodyFile ? { bodyFile } : {})
+        }
+      };
+    }
+    case "merge": {
+      const [repo, num] = positionals(rest);
+      if (!repo || !repo.includes("/") || !num) {
+        throw new CliUsageError("usage: operon github merge <owner/repo> <number>");
+      }
+      return { path: "/github/merge", payload: { repo, number: intNumber(num) } };
+    }
+    case "close": {
+      const [repo, num] = positionals(rest);
+      const reason = flagValue(rest, "--reason");
+      if (!repo || !repo.includes("/") || !num || !reason) {
+        throw new CliUsageError("usage: operon github close <owner/repo> <number> --reason <text>");
+      }
+      return { path: "/github/close", payload: { repo, number: intNumber(num), reason } };
+    }
     default:
       throw new CliUsageError(
-        "unknown github subcommand; expected one of: status, thread, comment, pr, push, update, issue, branch"
+        "unknown github subcommand; expected one of: status, thread, comment, pr, push, update, issue, branch, review, merge, close"
       );
   }
 }

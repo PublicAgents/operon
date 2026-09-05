@@ -43,6 +43,8 @@ export function renderSkills(
 ): string {
   void config; // reserved: future per-colony guidance (hosts, PR targets)
   const writeRepos = Array.isArray(caps.githubWrite) ? (caps.githubWrite as string[]) : [];
+  const reviewRepos = Array.isArray(caps.githubReview) ? (caps.githubReview as string[]) : [];
+  const mergeRepos = Array.isArray(caps.githubMerge) ? (caps.githubMerge as string[]) : [];
   const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
   const door = doorMarker(new Set(Array.isArray(caps.disabledDoors) ? (caps.disabledDoors as string[]) : []));
   const localBrowserNote = caps.localBrowser === false ? " [switched off for this agent]" : "";
@@ -212,6 +214,24 @@ GITHUB (a Gatekeeper acts as your account; you submit the content)
                                            writeRepos.length > 0 ? ` (${writeRepos.join(", ")})` : ""
                                          }; the default branch is refused,
                                          because review happens on a PR${mark(writeRepos.length > 0)}
+  operon github review <owner/repo> <n> --approve | --request-changes | --comment [--body <t> | --body-file <f>]
+                                         post a review on a PR of a repo you hold
+                                         a REVIEW grant on${reviewRepos.length > 0 ? ` (${reviewRepos.join(", ")})` : ""}.
+                                         NEVER your own PR. The review binds to
+                                         the head you read. A body is required
+                                         unless you approve${mark(reviewRepos.length > 0)}
+  operon github merge <owner/repo> <n>   merge a PR of a repo you hold a MERGE
+                                         grant on${mergeRepos.length > 0 ? ` (${mergeRepos.join(", ")})` : ""}, only if it
+                                         qualifies: open, green on the named
+                                         checks, approved by ANOTHER agent on the
+                                         current head, inside the data paths.
+                                         Anything else is HELD for the operator:
+                                         held means wait, do not retry the same
+                                         head. Never your own authorship${mark(mergeRepos.length > 0)}
+  operon github close <owner/repo> <n> --reason <text>
+                                         close another party's PR (spam, or one
+                                         that will never qualify), reason on the
+                                         record; merge-granted repos only${mark(mergeRepos.length > 0)}
 
 Doors answer with named errors; the error names what to fix. A door
 that is not wired answers *_not_wired. This guide is rendered live by
