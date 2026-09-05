@@ -7,11 +7,29 @@
  * Actions secrets through `gh`, or the token is deleted again.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const API = "https://api.cloudflare.com/client/v4";
 
+/**
+ * The CI service token is ONE PER REPOSITORY (spec 0012 §10, amending
+ * spec 0009 §3): every project a repository deploys shares it, because
+ * the repository has one pair of Actions secrets. Named from the
+ * repository, slugged; without a resolvable repository the legacy
+ * per-project name stands and the caller says so.
+ */
+export function ciServiceTokenName(manifest, ghRepo) {
+  if (!ghRepo) return `operon-${manifest.project}-ci`;
+  const slug = ghRepo.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  // The slug is for people; the digest keeps two repositories whose
+  // names differ only in punctuation (acme/a_b, acme/a-b) from sharing
+  // one token and therefore each other's plane.
+  const digest = createHash("sha256").update(ghRepo.toLowerCase()).digest("hex").slice(0, 8);
+  return `operon-ci-${slug}-${digest}`;
+}
+
 /** What the manifest implies the Access application should be. */
-export function desiredOpsAccess(manifest) {
+export function desiredOpsAccess(manifest, ghRepo) {
   return {
     appName: `operon ${manifest.project} ops`,
     domain: `ops.${manifest.roster.zone}`,
@@ -19,7 +37,8 @@ export function desiredOpsAccess(manifest) {
     allowPolicyName: "operator",
     operatorEmail: manifest.operatorEmail,
     serviceAuthPolicyName: "ci service token",
-    serviceTokenName: `operon-${manifest.project}-ci`
+    serviceTokenName: ciServiceTokenName(manifest, ghRepo),
+    legacyServiceTokenName: `operon-${manifest.project}-ci`
   };
 }
 
@@ -49,7 +68,7 @@ async function api(apiToken, method, path, body) {
  * operator can do.
  */
 export async function ensureOpsAccess(manifest, { apiToken, accountId, createServiceToken, ghRepo }) {
-  const want = desiredOpsAccess(manifest);
+  const want = desiredOpsAccess(manifest, ghRepo);
   const lines = [];
   const needs = [];
   const call = (method, path, body) => api(apiToken, method, path, body);
@@ -129,9 +148,28 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
     needs.push("the manifest has no operatorEmail: no one can sign in to the plane until it names one");
   }
 
-  // The CI service token, by name.
+  // The CI service token, by name. A legacy per-project token is
+  // renamed in place: its client id and secret do not change, so the
+  // repository's Actions secrets keep working, and every project in the
+  // repository now names the same token.
   const tokens = await call("GET", `/accounts/${accountId}/access/service_tokens`);
   let token = (tokens ?? []).find(candidate => candidate.name === want.serviceTokenName);
+  if (!token && want.legacyServiceTokenName !== want.serviceTokenName) {
+    const legacy = (tokens ?? []).find(candidate => candidate.name === want.legacyServiceTokenName);
+    if (legacy) {
+      token = await call("PUT", `/accounts/${accountId}/access/service_tokens/${legacy.id}`, {
+        name: want.serviceTokenName
+      });
+      token = { ...legacy, ...token, name: want.serviceTokenName };
+      lines.push(`~ service token ${want.legacyServiceTokenName} renamed to ${want.serviceTokenName} (same id and secret)`);
+    }
+  }
+  if (!token && !ghRepo) {
+    needs.push(
+      `no GitHub repository could be resolved (set GITHUB_REPOSITORY or run from a checkout with an origin): ` +
+        `the CI service token is named per repository, and only the legacy name ${want.legacyServiceTokenName} was looked for`
+    );
+  }
   if (!token) {
     if (!createServiceToken) {
       needs.push(

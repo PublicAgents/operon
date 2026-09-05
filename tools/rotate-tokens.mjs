@@ -46,6 +46,25 @@ try {
 }
 const GROUPS = rotationGroups(project.agentIds);
 
+/**
+ * The control plane that enrolls this project holds a copy of its wake
+ * trigger as WAKE_TRIGGER_TOKEN_<PROJECT> (spec 0006 §9). A rotation of
+ * that group must write the copy too, or the fleet console's wake
+ * button for this project breaks silently. The copy lives on ANOTHER
+ * project's Worker, which the gateway rotation cannot reach, so the
+ * group is rotated DIRECTLY whenever a host exists: this tool mints
+ * the value and writes all four members.
+ */
+const hostPairs = project.hosts.map(host => ({
+  project: host.project,
+  // The host's plane may live in ANOTHER Cloudflare account: the write
+  // selects it explicitly, or wrangler would target the active context.
+  accountId: host.accountId,
+  workerName: `${host.workerPrefix}-gatekeeper-ops`,
+  secretName: `WAKE_TRIGGER_TOKEN_${project.manifest.project.toUpperCase().replace(/-/g, "_")}`
+}));
+const hostPair = hostPairs.length > 0 ? hostPairs : undefined;
+
 const onlyArg = process.argv.indexOf("--only");
 const direct = process.argv.includes("--direct");
 const selected =
@@ -130,17 +149,56 @@ function putDirect(workerKey, secretName, value) {
   );
 }
 
-if (!direct && (await rotateViaGateway(selected))) {
-  console.log(`\n✓ rotated: ${selected.join(", ")} (values never printed; secrets survive deploys)`);
-  process.exit(0);
+const viaGateway = selected.filter(name => !(name === "wake-trigger" && hostPair));
+const directOnly = selected.filter(name => name === "wake-trigger" && hostPair);
+if (directOnly.length > 0) {
+  console.log(
+    `wake-trigger is rotated directly: ${hostPairs.map(pair => pair.project).join(", ")} enroll(s) this project and hold(s) ` +
+      `${hostPairs[0].secretName} on ${hostPairs.map(pair => pair.workerName).join(", ")}, which only a direct write reaches`
+  );
 }
 
-for (const name of selected) {
+if (!direct && viaGateway.length > 0 && !(await rotateViaGateway(viaGateway))) {
+  // The gateway is unconfigured: everything goes direct below.
+  directOnly.push(...viaGateway.filter(name => !directOnly.includes(name)));
+} else if (!direct) {
+  if (viaGateway.length > 0) console.log(`\n✓ rotated via the gateway: ${viaGateway.join(", ")}`);
+  if (directOnly.length === 0) {
+    console.log(`\n✓ rotated: ${selected.join(", ")} (values never printed; secrets survive deploys)`);
+    process.exit(0);
+  }
+}
+const toRotate = direct ? selected : directOnly;
+
+for (const name of toRotate) {
   const value = randomBytes(32).toString("hex");
-  console.log(`\n→ rotating "${name}" across ${GROUPS[name].length} worker(s) (direct)`);
-  for (const [workerKey, secretName] of GROUPS[name]) {
-    console.log(`  ${project.workerName(workerKey)} · ${secretName}`);
-    putDirect(workerKey, secretName, value);
+  const extra = name === "wake-trigger" && hostPair ? hostPairs : [];
+  console.log(`\n→ rotating "${name}" across ${GROUPS[name].length + extra.length} worker(s) (direct)`);
+  const written = [];
+  try {
+    for (const [workerKey, secretName] of GROUPS[name]) {
+      console.log(`  ${project.workerName(workerKey)} · ${secretName}`);
+      putDirect(workerKey, secretName, value);
+      written.push(`${project.workerName(workerKey)}:${secretName}`);
+    }
+    for (const pair of extra) {
+      console.log(`  ${pair.workerName} · ${pair.secretName} (${pair.project}'s copy, account ${pair.accountId})`);
+      execFileSync("npx", ["wrangler", "secret", "put", pair.secretName, "--name", pair.workerName], {
+        cwd: ROOT,
+        input: value,
+        env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: pair.accountId },
+        stdio: ["pipe", "inherit", "inherit"]
+      });
+      written.push(`${pair.workerName}:${pair.secretName}`);
+    }
+  } catch (error) {
+    // A partial write is named member by member so a retry finishes it
+    // (the retry mints a new value and writes every member again).
+    console.error(
+      `✗ "${name}" partially rotated: written ${written.join(", ") || "nothing"}; ` +
+        `the rest still hold the old value. Re-run --only ${name} --direct. (${String(error.message ?? error).slice(0, 200)})`
+    );
+    process.exit(1);
   }
 }
 

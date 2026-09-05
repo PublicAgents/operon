@@ -43,7 +43,7 @@ try {
   console.error(`✗ ${error.message}`);
   process.exit(2);
 }
-const { manifest, workerName } = project;
+const { manifest, workerName, manifestPath } = project;
 const { requiredSecrets, secretsByWorker } = await import(
   join(CHASSIS_ROOT, "packages/fleet/dist/index.js")
 );
@@ -168,10 +168,14 @@ if (flag("--skip-repos")) {
 } else {
   for (const agent of manifest.roster.agents) {
     const repo = agent.stateRepo;
-    const charter = [
+    // Spec 0006 §1: a project in the multi-project layout keeps its
+    // charters beside its manifest; the single-layout locations follow.
+    const charterPaths = [
+      join(ROOT, ".operon/projects", manifest.project, "charters", `${agent.id}.md`),
       join(ROOT, ".operon/charters", `${agent.id}.md`),
       join(ROOT, "charters", `${agent.id}.md`)
-    ].find(existsSync);
+    ];
+    const charter = charterPaths.find(existsSync);
     const exists = spawnSync("gh", ["repo", "view", repo, "--json", "name"], { encoding: "utf8" }).status === 0;
     if (!exists) {
       const made = spawnSync("gh", ["repo", "create", repo, "--private"], { encoding: "utf8" });
@@ -187,7 +191,9 @@ if (flag("--skip-repos")) {
       spawnSync("gh", ["api", `repos/${repo}/contents/${path}`], { encoding: "utf8" }).status === 0;
     if (!has("CHARTER.md")) {
       if (!charter) {
-        needYou(`seed ${repo} with CHARTER.md: no charter found at .operon/charters/${agent.id}.md or charters/${agent.id}.md`);
+        needYou(
+          `seed ${repo} with CHARTER.md: no charter found at ${charterPaths.map(path => path.replace(ROOT + "/", "")).join(", ")}`
+        );
       } else {
         putFile(repo, "CHARTER.md", readFileSync(charter), `Seed the charter for ${agent.id}`);
         created(`${repo}/CHARTER.md from ${charter.replace(ROOT + "/", "")}`);
@@ -230,7 +236,7 @@ if (!apiToken) {
     if (access.aud && access.teamDomain) {
       if (manifest.access?.aud !== access.aud || manifest.access?.teamDomain !== access.teamDomain) {
         writeAccessBlock(access.teamDomain, access.aud);
-        created(`manifest access block written (teamDomain, aud); commit .operon/operon.yaml`);
+        created(`manifest access block written (teamDomain, aud); commit ${manifestPath.replace(ROOT + "/", "")}`);
         manifest.access = { teamDomain: access.teamDomain, aud: access.aud };
       } else {
         present("manifest access block matches the application");
@@ -241,11 +247,14 @@ if (!apiToken) {
   }
 }
 
-/** Write access.teamDomain / access.aud into the project's manifest, replacing an existing block. */
+/**
+ * Write access.teamDomain / access.aud into THE MANIFEST THAT WAS LOADED,
+ * replacing an existing block. With both layouts present (spec 0006 §1)
+ * a guessed path would write the second project's block into the first
+ * project's file.
+ */
 function writeAccessBlock(teamDomain, aud) {
-  const path = existsSync(join(ROOT, ".operon/operon.yaml"))
-    ? join(ROOT, ".operon/operon.yaml")
-    : join(ROOT, ".operon/projects", manifest.project, "operon.yaml");
+  const path = manifestPath;
   let text = readFileSync(path, "utf8");
   const block = `access:\n  teamDomain: ${teamDomain}\n  aud: "${aud}"\n`;
   if (/^access:\n(?:[ \t]+.*\n?)*/m.test(text)) {
@@ -301,7 +310,16 @@ if (flag("--skip-deploy")) {
       ? { status: 1 }
       : spawnSync(
           "node",
-          [join(CHASSIS_ROOT, "tools/fleet.mjs"), "deploy", "--project", manifest.project, ...(first ? ["--no-drain"] : [])],
+          [
+            join(CHASSIS_ROOT, "tools/fleet.mjs"),
+            "deploy",
+            "--project",
+            manifest.project,
+            // A first deploy has no plane to drain and no Workers to bind:
+            // pass one deploys every Worker without its service bindings,
+            // pass two the real configs (spec 0012 §10).
+            ...(first ? ["--no-drain", "--bootstrap"] : [])
+          ],
           { cwd: ROOT, stdio: "inherit" }
         );
   if (existence === "unknown") {
