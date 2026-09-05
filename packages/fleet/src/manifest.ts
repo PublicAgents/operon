@@ -323,20 +323,22 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     }
   }
 
-  // A merge grant with auto paths on a repo where no OTHER agent may
-  // review is a policy that can never fire (spec 0012 §3): the operator
-  // believes it is in force and it is dead. A grant with no auto paths
-  // holds every merge for the operator and needs no reviewer.
+  // A merge grant with auto paths on a repo where no OTHER, ENABLED
+  // agent may review is a policy that can never fire (spec 0012 §3):
+  // the operator believes it is in force and it is dead. A disabled
+  // reviewer never wakes (cron skips it, a manual wake refuses it), so
+  // it counts for nothing here. A grant with no auto paths holds every
+  // merge for the operator and needs no reviewer.
   for (const agent of roster.agents) {
     for (const grant of agent.github?.merge ?? []) {
       if (!grant.auto?.length) continue;
       const reviewer = roster.agents.find(
-        other => other.id !== agent.id && (other.github?.review ?? []).includes(grant.repo)
+        other => other.id !== agent.id && other.enabled && (other.github?.review ?? []).includes(grant.repo)
       );
       if (!reviewer) {
         fail(
           `agents.${agent.id}.github.merge`,
-          `merge_without_reviewer: no other agent holds github.review on ${grant.repo}`
+          `merge_without_reviewer: no other enabled agent holds github.review on ${grant.repo}`
         );
       }
     }

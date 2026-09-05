@@ -214,7 +214,7 @@ describe("capability grants through the manifest (spec 0008)", () => {
   it("refuses a merge grant nobody else can satisfy, and accepts one with a reviewer", () => {
     const lonely = withGrants();
     lonely.agents[0].github = { merge: [{ repo: "demo/registry", auto: ["registry/agents/**"] }] };
-    expect(() => validateManifest(lonely)).toThrow(/merge_without_reviewer: no other agent holds github.review on demo\/registry/);
+    expect(() => validateManifest(lonely)).toThrow(/merge_without_reviewer: no other enabled agent holds github.review on demo\/registry/);
     // No auto paths: every merge is held for the operator, so no
     // reviewer is required.
     const heldOnly = withGrants();
@@ -232,6 +232,10 @@ describe("capability grants through the manifest (spec 0008)", () => {
       }
     ];
     expect(validateManifest(paired).roster.agents[1].github?.review).toEqual(["demo/registry"]);
+    // A disabled reviewer never wakes, so it satisfies nothing.
+    const dormant = structuredClone(paired);
+    dormant.agents[1].enabled = false;
+    expect(() => validateManifest(dormant)).toThrow(/merge_without_reviewer/);
   });
 
   it("keeps PR_REPOS working for agents without a github block", () => {
