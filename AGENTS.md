@@ -24,13 +24,24 @@ packages/
   container/    Wake container image + entrypoint + harness adapters +
                 presleep verifier (self-contained: no cross-package runtime
                 imports; config.spec.ts pins its env names to core's)
-  gatekeepers/  One small Worker per capability (telegram, github, deploy
-                today; spend and post-office per the spec). The agent-facing
+  gatekeepers/  One small Worker per capability: telegram, github, pr,
+                deploy, email, spend, till, vault, x, browser, asks,
+                chronicle, mcp, google-analytics, ops. The agent-facing
                 side is the container's loopback porch + `operon` CLI.
+  fleet/        The manifest parser and the chassis-owned worker templates
+  ops-tools/    The one registry that is the console, the API and the MCP
+  console/      The operator console (a single-page app the ops Worker serves)
+  chronicle/    The durable record's schema and writers
+tools/          Operator CLIs run from a colony checkout (bootstrap, fleet,
+                rotate-tokens, tail-wake, authorize)
 charters/       Charter template only. Per-tenant charters, rosters, and
                 tenant specs live in each colony's own deployment repo,
                 never here: this repo stays generic and clonable.
+examples/       An annotated manifest to copy from.
 ```
+
+`QUICKSTART.md` and `DEPLOY.md` are the third-party path; `CONTRIBUTING.md`
+restates the rules below for contributors.
 
 ## Hard rules
 

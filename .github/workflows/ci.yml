@@ -49,7 +49,7 @@ jobs:
 
       # Cross-package imports resolve through each package's dist, so the
       # bundle is meaningless without a build first (same reason the colony
-      # deploy script requires build:chassis).
+      # deploy script requires the chassis built: cd operon && npm ci && npx nx run-many -t build).
       - name: Build packages
         run: npx nx run-many -t build
 

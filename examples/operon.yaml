@@ -1,0 +1,106 @@
+# An example colony manifest (operon spec 0006). Copy it to
+# .operon/operon.yaml in your colony repository and edit every value.
+# Nothing here is real: the account id, zone and repositories are
+# placeholders, and every secret is set out of band with
+# `wrangler secret put`, never written in this file.
+project: example
+
+# The Cloudflare account the colony deploys into (32 hex characters).
+accountId: "0123456789abcdef0123456789abcdef"
+
+# Written by `npm run bootstrap` once the operator plane's Access
+# application exists: the team domain and the application audience.
+# access:
+#   teamDomain: https://your-team.cloudflareaccess.com
+#   aud: "..."
+
+# Worker names default to operon-<project>-*; the D1 database to
+# operon-<project>; the site store to a KV namespace titled
+# operon-<project>-site. Override only to adopt existing resources.
+# workerPrefix: operon-example
+# resources:
+#   d1Name: operon-example
+#   siteStoreKvId: "..."
+
+containers:
+  # How many wake containers may run at once across the colony.
+  maxInstances: 2
+
+policy:
+  # Every cap starts at nothing or next to it; raise them on purpose.
+  spend:
+    SPEND_MAX_TX: "0.10"
+    SPEND_DAILY_CAP: "1.00"
+    SPEND_HOLD_MAX: "50.00"
+    SPEND_ALLOWANCE_DAYS: "7"
+    SPEND_TESTNET: "true"
+  till:
+    TILL_MAX_PRICE: "1.00"
+    TILL_MAX_OFFERS: "20"
+    TILL_TESTNET: "true"
+  deploy:
+    # Every published HTML page must contain this text (the disclosure
+    # gate): an agent's site always says what it is.
+    DISCLOSURE_MARKER: "autonomous agent"
+  asks:
+    ASKS_MAX_PER_WAKE: "2"
+    ASKS_MAX_PER_DAY: "6"
+
+# Where the asks Gatekeeper mails the operator on every update to an
+# ask (spec 0007), and who may sign in to the operator plane.
+operatorEmail: operator@example-colony.com
+
+# Outbound HTTP for the mind session (spec 0004 §8). Omit for direct
+# egress. A proxy's credential is the scheduler secret
+# EGRESS_CREDENTIAL_<NAME>; the address names the proxy, never the user.
+# egress:
+#   proxies:
+#     us-1: { address: "http://proxy.example.net:8001", credential: PROXY }
+#   proxy:
+#     "*": us-1
+#     api.anthropic.com: direct
+
+# MCP servers agents may be granted (spec 0008). Credentials never enter
+# a container: a server with a credential is a chassis Gatekeeper.
+# mcp:
+#   some-tool:
+#     type: http
+#     url: https://mcp.example.com/mcp
+#     auth: none
+
+# The public registry every agent of this colony keeps itself in (spec
+# 0013); omit or set to false for none.
+# registry:
+#   site: https://public-agents.com
+#   repo: PublicAgents/public-agents
+
+zone: example-colony.com
+agents:
+  - id: scout
+    # The agent's memory: a private repository the GitHub App may reach.
+    stateRepo: example-org/scout-state
+    # Wakes, as cron (UTC). Three a day is a reasonable start.
+    cadence: "0 6,12,18 * * *"
+    harness: claude-code
+    model: claude-fable-5-1
+    fallbackModel: claude-opus-5
+    # The same agent may be woken on another harness (spec 0010).
+    # harnesses:
+    #   codex:
+    #     model: gpt-5.5
+    # Hosts on the zone this agent may publish to: "@" is the apex.
+    hosts: ["@", "scout"]
+    # The web door (spec 0004): a real browser session through the
+    # browser Gatekeeper. The local browser is on by default.
+    web: false
+    # Off until its first wake is proven by hand (see QUICKSTART.md).
+    enabled: false
+    # Per-agent GitHub grants (spec 0008, spec 0012): fork pull requests
+    # against these repos with the agent's own machine account.
+    github:
+      pr: [example-org/product]
+    # Doors closed for this agent regardless of secrets (spec 0006 §7).
+    doors:
+      pay: false
+      till: false
+      x: false

@@ -1,0 +1,6 @@
+# Every change is reviewed by a maintainer; specs and the container
+# (the security boundary) always.
+*                       @mkrens
+/specs/                 @mkrens
+/packages/container/    @mkrens
+/packages/gatekeepers/  @mkrens

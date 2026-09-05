@@ -88,7 +88,10 @@ async function loadFleet() {
   try {
     return await import(entry);
   } catch {
-    fail(`cannot import the chassis fleet package from ${entry}\nBuild the submodule first (npm run build:chassis).`);
+    fail(
+      `cannot import the chassis fleet package from ${entry}\n` +
+        "Build the chassis first: `cd operon && npm ci && npx nx run-many -t build` (the colony script build:chassis)."
+    );
   }
 }
 
@@ -437,7 +440,10 @@ for (const manifest of manifests) {
   // deploy
   const consoleIndex = join(CHASSIS_ROOT, "packages/console/dist/index.html");
   if (!existsSync(consoleIndex)) {
-    fail("the console build is missing; run build:chassis first (deploying without it ships a blank console)");
+    fail(
+      "the console build is missing; build the chassis first (`cd operon && npm ci && npx nx run-many -t build`, " +
+        "the colony script build:chassis): deploying without it ships a blank console"
+    );
   }
   // The plane's Access application, reconciled on every deploy (spec
   // 0009 §3): read, compare, fix what drifted. Needs an API token that

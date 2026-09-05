@@ -24,7 +24,7 @@ async function loadFleet() {
   } catch {
     throw new Error(
       `cannot import the chassis fleet package from ${entry}\n` +
-        "Build the submodule first (npm run build:chassis)."
+        "Build the chassis first: `cd operon && npm ci && npx nx run-many -t build` (the colony script build:chassis)."
     );
   }
 }
