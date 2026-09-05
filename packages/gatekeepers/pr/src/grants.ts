@@ -1,4 +1,4 @@
-import { findAgent, parseRoster } from "@operon/core";
+import { findAgent, parseRoster, reachableGithubRepos, type MergeGrant, type RosterAgent } from "@operon/core";
 
 /**
  * Which repos an agent may reach through this Gatekeeper (spec 0008 §3).
@@ -70,5 +70,49 @@ export function rosterVerdict(
     return findAgent(parseRoster(env.ROSTER), agentId) ? "known" : "unknown";
   } catch {
     return "no-roster";
+  }
+}
+
+function rosterAgent(env: GrantSource, agentId: string): RosterAgent | undefined {
+  if (typeof env.ROSTER !== "string" || env.ROSTER.length === 0) return undefined;
+  try {
+    return findAgent(parseRoster(env.ROSTER), agentId);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The repos an agent may READ and discuss (spec 0012 §3): everything it
+ * may author on, review on, or merge on. A reviewer with no pr grant
+ * still reads the pull requests it adjudicates. An agent with no
+ * github block keeps the fleet list, exactly as grantedRepos does.
+ */
+export function reachableRepos(env: GrantSource, agentId: string): string[] {
+  const agent = rosterAgent(env, agentId);
+  if (agent?.github) return reachableGithubRepos(agent.github);
+  return fleetRepos(env);
+}
+
+/** The repos this agent may post reviews on (spec 0012 §5). Nothing without a roster grant. */
+export function reviewRepos(env: GrantSource, agentId: string): string[] {
+  return rosterAgent(env, agentId)?.github?.review ?? [];
+}
+
+/** This agent's merge grant on a repo (spec 0012 §6), or undefined when it has none. */
+export function mergeGrant(env: GrantSource, agentId: string, repo: string): MergeGrant | undefined {
+  return (rosterAgent(env, agentId)?.github?.merge ?? []).find(grant => grant.repo === repo);
+}
+
+/**
+ * Every roster agent id, for resolving which logins are colleagues
+ * (spec 0012 §4). Empty without a roster: nobody counts as a colleague.
+ */
+export function rosterAgentIds(env: GrantSource): string[] {
+  if (typeof env.ROSTER !== "string" || env.ROSTER.length === 0) return [];
+  try {
+    return parseRoster(env.ROSTER).agents.map(agent => agent.id);
+  } catch {
+    return [];
   }
 }

@@ -195,8 +195,14 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
       config: {
         ...common("gatekeeper-pr"),
         ...chronicleD1,
-        durable_objects: { bindings: [ledger] },
-        migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
+        // Holds and intents (spec 0012 §8) live beside the ledger; the
+        // operator's channel is a binding so a held merge can ask.
+        durable_objects: { bindings: [ledger, { name: "HOLDS", class_name: "PrHolds" }] },
+        migrations: [
+          { tag: "v1", new_sqlite_classes: ["Ledger"] },
+          { tag: "v2", new_sqlite_classes: ["PrHolds"] }
+        ],
+        services: [service("TELEGRAM", "gatekeeper-telegram", "TelegramGateway")],
         vars: policyVars(manifest, "pr")
       }
     },

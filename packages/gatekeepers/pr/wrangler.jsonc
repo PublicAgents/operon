@@ -7,9 +7,15 @@
   // PR_SERVICE_TOKEN. The GitHub credential never leaves this Worker.
   "workers_dev": false,
   "durable_objects": {
-    "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }]
+    "bindings": [
+      { "name": "LEDGER", "class_name": "Ledger" },
+      { "name": "HOLDS", "class_name": "PrHolds" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Ledger"] },
+    { "tag": "v2", "new_sqlite_classes": ["PrHolds"] }
+  ],
   "vars": {
     // Deployments set the "owner/repo" allowlist (or per-agent grants,
     // spec 0008 §3); re-checked here so this Worker trusts no caller.

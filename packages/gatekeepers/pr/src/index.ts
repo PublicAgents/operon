@@ -1,11 +1,29 @@
-import { grantedRepos, rosterVerdict } from "./grants.js";
+import { grantedRepos, mergeGrant, reachableRepos, reviewRepos, rosterAgentIds, rosterVerdict } from "./grants.js";
+import {
+  approveHeld,
+  closeDoor,
+  listHeld,
+  mergeDoor,
+  rejectHeld,
+  resolveIdentities,
+  reviewDoor,
+  type AdjudicationDeps,
+  type DoorResult,
+  type Identities
+} from "./adjudication.js";
+import { PrHolds } from "./holds-do.js";
 import {
   errorResponse,
   json,
   readJson,
   requireBearer,
   Ledger,
-  GitDataError, OpsEntrypoint } from "@operon/worker-kit";
+  notifyOperator,
+  GitDataError,
+  OpsEntrypoint,
+  type OperatorAction,
+  type TelegramGatewayBinding
+} from "@operon/worker-kit";
 import {
   authenticatedLogin,
   getIssueRef,
@@ -21,12 +39,25 @@ import {
   type PrRequest
 } from "./github.js";
 
-export { Ledger };
+export { Ledger, PrHolds };
 
-/** The operator's binding-only view of the pr ledger (spec 0003 step 3). */
+/**
+ * The operator's binding-only view (spec 0003 step 3, spec 0012 §8):
+ * the ledger, the merges held for a decision, and the decisions.
+ */
 export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === "/gatekeeper/pr/ledger") return json(await ledger(this.env).recent());
+    const path = new URL(request.url).pathname;
+    if (path === "/gatekeeper/pr/ledger") return json(await ledger(this.env).recent());
+    if (path === "/gatekeeper/pr/held" && request.method === "POST") {
+      return toResponse(await listHeld(operatorDeps(this.env), apiFor(this.env)));
+    }
+    if (path === "/gatekeeper/pr/approve" && request.method === "POST") {
+      return handleApprove(request, this.env);
+    }
+    if (path === "/gatekeeper/pr/reject" && request.method === "POST") {
+      return handleReject(request, this.env);
+    }
     return errorResponse(404, "not_found");
   }
 }
@@ -47,6 +78,10 @@ interface Env {
   PR_SERVICE_TOKEN?: string;
   PR_REPOS?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
+  /** Holds, intents and terminal records (spec 0012 §8). */
+  HOLDS: DurableObjectNamespace<PrHolds>;
+  /** The operator's channel, over a service binding (spec 0009). */
+  TELEGRAM?: TelegramGatewayBinding;
   [secret: string]: unknown;
 }
 
@@ -75,6 +110,192 @@ function patForAgent(env: Env, agentId: string): { token: string; shared: boolea
 
 function ledger(env: Env) {
   return env.LEDGER.get(env.LEDGER.idFromName("pr"));
+}
+
+function holds(env: Env) {
+  return env.HOLDS.get(env.HOLDS.idFromName("pr"));
+}
+
+const UA = "operon-gatekeeper-pr";
+
+function toResponse(result: DoorResult): Response {
+  // Door bodies already carry ok, error and detail; refusals may add
+  // the operator's reason and the head beside the error name.
+  return json(result.body, result.status);
+}
+
+/**
+ * Who each roster agent's credential authenticates as (spec 0012 §4),
+ * resolved from the credentials and cached briefly per isolate. The
+ * shared PAT resolves two agents to one login, which the merge door
+ * refuses by name.
+ */
+const IDENTITY_TTL_MS = 5 * 60 * 1000;
+let identityCache: { at: number; fingerprint: string; identities: Identities } | undefined;
+
+async function identities(env: Env): Promise<Identities> {
+  const agents = rosterAgentIds(env)
+    .map(agentId => ({ agentId, pat: patForAgent(env, agentId) }))
+    .filter((entry): entry is { agentId: string; pat: { token: string; shared: boolean } } => entry.pat !== undefined);
+  // The fingerprint is a digest of which agent uses which credential,
+  // so a rotation to ANY new value invalidates the cache (a restart
+  // does too); no token is held by the cache.
+  const fingerprint = await digest(
+    agents.map(entry => `${entry.agentId}:${entry.pat.shared ? "shared" : "own"}:${entry.pat.token}`).join("\n")
+  );
+  if (identityCache && identityCache.fingerprint === fingerprint && Date.now() - identityCache.at < IDENTITY_TTL_MS) {
+    return identityCache.identities;
+  }
+  const resolved = await resolveIdentities(
+    agents.map(entry => ({
+      agentId: entry.agentId,
+      login: () => authenticatedLogin({ token: entry.pat.token, userAgent: UA })
+    }))
+  );
+  identityCache = { at: Date.now(), fingerprint, identities: resolved };
+  return resolved;
+}
+
+async function digest(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function operatorDeps(env: Env): Omit<AdjudicationDeps, "api"> {
+  return {
+    holds: holds(env),
+    ledger: ledger(env),
+    notify: (text: string, actions?: OperatorAction[]) => notifyOperator(env, text, actions ? { actions } : {}),
+    now: () => new Date().toISOString()
+  };
+}
+
+function deps(env: Env, token: string): AdjudicationDeps {
+  return {
+    api: { token, userAgent: UA },
+    holds: holds(env),
+    ledger: ledger(env),
+    notify: (text: string, actions?: OperatorAction[]) => notifyOperator(env, text, actions ? { actions } : {}),
+    now: () => new Date().toISOString()
+  };
+}
+
+async function handleReview(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; repo?: string; number?: number; verdict?: string; body?: string }>(
+    request
+  );
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number, verdict, body: text } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
+  const login = await authenticatedLogin({ token: pat.token, userAgent: UA });
+  return toResponse(
+    await reviewDoor(deps(env, pat.token), {
+      agentId: agentId as string,
+      login,
+      repo,
+      number,
+      verdict,
+      ...(typeof text === "string" ? { body: text } : {}),
+      granted: reviewRepos(env, agentId as string).includes(repo)
+    })
+  );
+}
+
+async function handleMerge(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; repo?: string; number?: number }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
+  const login = await authenticatedLogin({ token: pat.token, userAgent: UA });
+  return toResponse(
+    await mergeDoor(deps(env, pat.token), {
+      agentId: agentId as string,
+      login,
+      repo,
+      number,
+      grant: mergeGrant(env, agentId as string, repo),
+      identities: await identities(env)
+    })
+  );
+}
+
+async function handleClose(request: Request, env: Env): Promise<Response> {
+  const denied = requireBearer(request, env.PR_SERVICE_TOKEN);
+  if (denied) return denied;
+  const body = await readJson<{ agentId?: string; repo?: string; number?: number; reason?: string }>(request);
+  if (!body.ok) return errorResponse(400, "malformed_json");
+  const { agentId, repo, number, reason } = body.value;
+  if (typeof repo !== "string" || !REPO.test(repo) || typeof number !== "number") {
+    return errorResponse(400, "invalid_request");
+  }
+  const pat = identify(env, agentId);
+  if (pat instanceof Response) return pat;
+  return toResponse(
+    await closeDoor(deps(env, pat.token), {
+      agentId: agentId as string,
+      repo,
+      number,
+      reason: typeof reason === "string" ? reason : "",
+      granted: mergeGrant(env, agentId as string, repo) !== undefined
+    })
+  );
+}
+
+/** The merger's credential for a hold, or nothing: the hold names the agent, the roster names the PAT. */
+function apiFor(env: Env): (agentId: string) => { token: string; userAgent: string } | undefined {
+  return agentId => {
+    if (rosterVerdict(env, agentId) !== "known") return undefined;
+    const pat = patForAgent(env, agentId);
+    return pat ? { token: pat.token, userAgent: UA } : undefined;
+  };
+}
+
+async function handleApprove(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ heldId?: string }>(request);
+  if (!body.ok || typeof body.value.heldId !== "string") return errorResponse(400, "invalid_request");
+  const api = apiFor(env);
+  return toResponse(
+    await approveHeld(
+      operatorDeps(env),
+      {
+        heldId: body.value.heldId,
+        grantFor: (agentId, repo) => mergeGrant(env, agentId, repo),
+        apiFor: api,
+        loginFor: async agentId => {
+          const credential = api(agentId);
+          return credential ? authenticatedLogin(credential) : undefined;
+        },
+        identities: await identities(env)
+      }
+    )
+  );
+}
+
+async function handleReject(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ heldId?: string; reason?: string }>(request);
+  if (!body.ok || typeof body.value.heldId !== "string") return errorResponse(400, "invalid_request");
+  return toResponse(
+    await rejectHeld(
+      operatorDeps(env),
+      {
+        heldId: body.value.heldId,
+        ...(typeof body.value.reason === "string" ? { reason: body.value.reason } : {}),
+        apiFor: apiFor(env)
+      }
+    )
+  );
 }
 
 /**
@@ -273,9 +494,11 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   const pat = identify(env, body.value.agentId);
   if (pat instanceof Response) return pat;
   try {
+    // Watched repos are everything the agent may read (spec 0012 §3):
+    // a reviewer with no authoring grant still sees what it adjudicates.
     const activity = await listActivity(
       { token: pat.token, userAgent: "operon-gatekeeper-pr" },
-      grantedRepos(env, body.value.agentId as string)
+      reachableRepos(env, body.value.agentId as string)
     );
     return json({ ok: true, ...activity });
   } catch (error) {
@@ -305,7 +528,7 @@ async function conversationAccess(
   const login = await authenticatedLogin({ token: pat, userAgent: "operon-gatekeeper-pr" });
   const ref = await getIssueRef({ token: pat, userAgent: "operon-gatekeeper-pr" }, repo, number);
   const own = ref.author === login;
-  if (!own && !grantedRepos(env, agentId).includes(repo)) {
+  if (!own && !reachableRepos(env, agentId).includes(repo)) {
     return errorResponse(403, "not_own_and_not_granted", `${repo}#${number}`);
   }
   return { ref, own };
@@ -498,7 +721,7 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   const body = await readJson<{ agentId?: string; repo?: string; path?: string }>(request);
   if (!body.ok) return errorResponse(400, "malformed_json");
   const { agentId, repo, path } = body.value;
-  const grantedForFile = typeof agentId === "string" ? grantedRepos(env, agentId) : [];
+  const grantedForFile = typeof agentId === "string" ? reachableRepos(env, agentId) : [];
   if (typeof repo !== "string" || !REPO.test(repo) || !grantedForFile.includes(repo)) {
     return errorResponse(
       403,
@@ -550,6 +773,15 @@ export default {
     }
     if (url.pathname === "/gatekeeper/push" && request.method === "POST") {
       return handlePush(request, env);
+    }
+    if (url.pathname === "/gatekeeper/review" && request.method === "POST") {
+      return handleReview(request, env);
+    }
+    if (url.pathname === "/gatekeeper/merge" && request.method === "POST") {
+      return handleMerge(request, env);
+    }
+    if (url.pathname === "/gatekeeper/close" && request.method === "POST") {
+      return handleClose(request, env);
     }
     return errorResponse(404, "not_found");
   }

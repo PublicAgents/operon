@@ -272,6 +272,64 @@ results for its merge-granted repos.
 409 with the reason as the error name. GitHub errors answer
 `merge_failed` 502 after the intent row says failed.
 
+**Concurrency.** Beginning an intent is one serialized turn in the
+store: the check for an open intent and the write happen together, so
+two overlapping merge calls for one pull request cannot both start an
+irreversible act; the loser answers 409 `merge_in_progress`. A pending
+intent younger than the stale bound (five minutes) is a door still
+working; an older one belongs to a door that crashed and is reconciled
+like an unknown one. The same rule closes the close door
+(`close_in_progress`): a close intent carries `workingSince` while a
+door works it and is released on a lost response. The operator's held
+listing reconciles every open intent first, with the credential of the
+agent that made it, so a lost response never leaves a claimed hold in
+the queue: a reconciled merge deletes its hold, a reconciled
+not-merged attempt unclaims it for another decision. The claim itself
+is a fence: it mints a token the approval must present when it begins
+its intent, and the begin refuses `hold_gone` when the hold is no
+longer there with that token. A rejection that overrides a stale claim
+reconciles an older intent first, and then, in ONE store turn with no
+network read between them, checks again for an intent in flight
+(`approval_in_flight`), writes the terminal record and deletes the
+hold; the begin is one turn too, so the two cannot interleave, and a
+slow approval that wakes up afterwards stops before GitHub. The
+executor has a deadline too: no merge call starts once its intent is
+older than the stale bound, and the call carries the time that
+remains; past the bound the attempt answers `executor_stale` and is
+over. A call the client gave up on is a lost response (the intent goes
+`unknown`), and because the server may still be finishing it (GitHub
+answers or times out an API request within ten seconds of receiving
+it), reconciliation of an unknown intent waits a grace of one minute
+after it became unknown before reading GitHub as the truth; a pending
+intent, whose request was aborted at the stale bound at the latest, is
+reconciled only past the stale bound plus that grace. So by the time
+a reconciliation says "not merged" and a rejection is recorded on
+that reading, no merge request of that intent can still be in
+flight. Should GitHub ever finish a request past every bound anyway,
+the record corrects itself rather than lying: the next reconciliation
+of that head finds it merged, flips the terminal record from rejected
+to merged, and ledgers `merge_after_rejection` with the rejection's
+time and reason, so the operator learns of the anomaly from the
+ledger and the registry never shows a merged head as rejected. Three
+more single-winner rules close the remaining races: an intent settles
+once (a second reconciliation of the same intent writes and ledgers
+nothing); a rejection never lands on a head whose terminal record
+already says merged; and a close executor holds a work token minted
+by its begin or resume, presented on every step and the resolve, so
+an executor that went stale and was resumed by another stops at its
+next step instead of acting twice, and a resume takes what is left to
+do from GitHub's truth (the marker, the state), never from the stored
+steps. The close executor's calls end at the stale bound like the
+merge executor's (`executor_stale` past it), and a resume waits the
+stale bound plus the grace after the executor started, or the grace
+after it released the intent on a lost response, so nothing of the old
+executor is still in flight when the new one reads the marker: the
+reason is posted once. No rejection ever
+lands over an open intent: the store's one-turn reject answers
+`approval_in_flight` for a young pending one and `unresolved` for any
+other, and the door reconciles first, with the agent's credential, or
+answers `outcome_unknown` when it has none.
+
 ## 7. The close door
 
 `POST /gatekeeper/close {agentId, repo, number, reason}`: for spam and
