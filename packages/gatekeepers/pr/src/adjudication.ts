@@ -254,6 +254,7 @@ async function executeMerge(
     headSha: string;
     mode: "auto" | "operator";
     heldId?: string;
+    claimToken?: string;
     approvedBy: string[];
     files: string[];
     title: string;
@@ -266,9 +267,15 @@ async function executeMerge(
     headSha,
     agentId,
     mode,
-    ...(heldId !== undefined ? { heldId } : {}),
+    ...(heldId !== undefined ? { heldId, claimToken: input.claimToken } : {}),
     at: deps.now()
   });
+  if (!begun.created && begun.reason === "hold_gone") {
+    // The operator rejected this head while the approval was running:
+    // the hold and its claim are gone, and so is this act.
+    await deps.ledger.append("merge_denied", { agentId, repo, number, headSha, reason: "hold_gone", heldId });
+    return refuse(409, "hold_gone", "the hold was decided while this approval ran; nothing was merged");
+  }
   if (!begun.created) {
     // Another call started an irreversible act for this pull request
     // between our read and our write: the store refused a second one.
@@ -604,6 +611,7 @@ export async function approveHeld(deps: Omit<AdjudicationDeps, "api">, input: Ap
     headSha: held.headSha,
     mode: "operator",
     heldId: held.id,
+    ...(held.claimToken !== undefined ? { claimToken: held.claimToken } : {}),
     approvedBy: held.approvedBy,
     files: snapshot.files.map(file => file.filename),
     title: held.title
@@ -631,8 +639,24 @@ export async function rejectHeld(
   }
   const held = verdict.held;
   if (verdict.status === "stale_claim") {
-    // A crashed approval: GitHub is the ground truth before overriding it.
+    // The claim is old, but the approval behind it may still be alive:
+    // an intent it began says so. A young pending intent is an act in
+    // flight; an unknown or stale one is reconciled first, and a
+    // reconciled merge concedes.
     const api = input.apiFor(held.agentId);
+    const open = await deps.holds.openMergeIntent(held.repo, held.number);
+    if (open && open.state === "pending" && !stalePending(open, at)) {
+      return refuse(409, "approval_in_flight", `intent ${open.id} began at ${open.at}; wait for its outcome`);
+    }
+    if (open && api) {
+      const reconciled = await reconcileIntent({ ...deps, api }, open);
+      if (reconciled.state === "merged" || reconciled.state === "superseded") {
+        return refuse(409, "already_merged", "the approval that claimed this hold merged it");
+      }
+      if (reconciled.state === "unknown") {
+        return refuse(503, "outcome_unknown", "a stale approval claim exists and GitHub is unreachable");
+      }
+    }
     if (api) {
       try {
         const state = await getPullMergeState(api, held.repo, held.number);
@@ -652,7 +676,10 @@ export async function rejectHeld(
       }
     }
   }
-  await deps.holds.recordTerminal({
+  // The terminal record and the hold's deletion land in one turn: a
+  // stale approval that reaches beginMerge afterwards finds no hold and
+  // stops before GitHub.
+  await deps.holds.rejectAndRecord(held, {
     repo: held.repo,
     number: held.number,
     headSha: held.headSha,
@@ -662,7 +689,6 @@ export async function rejectHeld(
     heldId: held.id,
     ...(input.reason !== undefined ? { reason: input.reason } : {})
   });
-  await deps.holds.deleteHeld(held.id);
   await deps.ledger.append("merge_rejected", {
     agentId: held.agentId,
     repo: held.repo,

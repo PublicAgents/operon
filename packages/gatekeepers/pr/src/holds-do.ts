@@ -54,6 +54,9 @@ export class PrHolds extends DurableObject {
   ): Promise<MergeIntent | undefined> {
     return this.store.resolveMerge(id, result, at);
   }
+  rejectAndRecord(held: HeldMerge, record: TerminalRecord): Promise<void> {
+    return this.store.rejectAndRecord(held, record);
+  }
   settleMerge(
     id: string,
     result: Parameters<HoldStore["settleMerge"]>[1],

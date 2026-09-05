@@ -28,9 +28,10 @@ describe("HoldStore holds (spec 0012 §8)", () => {
     expect(await s.hold(merge, later(1000))).toMatchObject({ deduped: true, held: { id: "id-1" } });
     expect(await s.claimHeld("id-1", later(2000))).toMatchObject({ claimed: true, claimedAt: later(2000) });
     expect(await s.hold(merge, later(3000))).toMatchObject({ deduped: true, held: { id: "id-1" } });
+    // The claim minted id-2 as its token; the next hold is id-3.
     const other = await s.hold({ ...merge, headSha: "head2" }, later(4000));
-    expect(other.held.id).toBe("id-2");
-    expect((await s.listHeld()).map(h => h.id)).toEqual(["id-1", "id-2"]);
+    expect(other.held.id).toBe("id-3");
+    expect((await s.listHeld()).map(h => h.id)).toEqual(["id-1", "id-3"]);
   });
 
   it("claims exactly once until unclaimed, and deletes", async () => {
@@ -78,11 +79,27 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(await s.resolveMerge("ghost", { state: "failed" }, T0)).toBeUndefined();
   });
 
+  it("begins an intent for a hold only with the claim it carries", async () => {
+    const s = store();
+    const { held } = await s.hold(merge, T0);
+    const base = { repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "operator" as const, heldId: held.id, at: T0 };
+    expect(await s.beginMerge(base)).toEqual({ created: false, reason: "hold_gone" });
+    const claimed = await s.claimHeld(held.id, T0);
+    expect(claimed?.claimToken).toBeDefined();
+    expect(await s.beginMerge({ ...base, claimToken: "wrong" })).toEqual({ created: false, reason: "hold_gone" });
+    await s.rejectAndRecord(claimed!, { repo: "org/registry", number: 7, headSha: "head1", outcome: "rejected", at: T0, by: "operator", heldId: held.id });
+    expect(await s.beginMerge({ ...base, claimToken: claimed?.claimToken })).toEqual({ created: false, reason: "hold_gone" });
+    expect(await s.getHeld(held.id)).toBeUndefined();
+    expect(await s.terminal("org/registry", 7, "head1")).toMatchObject({ outcome: "rejected" });
+  });
+
   it("settles an intent, its terminal record and its hold in one turn", async () => {
     const s = store();
     const { held } = await s.hold(merge, T0);
-    await s.claimHeld(held.id, T0);
-    const { intent } = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "operator", heldId: held.id, at: T0 });
+    const claimed = await s.claimHeld(held.id, T0);
+    const begun = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head1", agentId: "cto", mode: "operator", heldId: held.id, claimToken: claimed?.claimToken, at: T0 });
+    if (!begun.created) throw new Error("expected an intent");
+    const { intent } = begun;
     const settled = await s.settleMerge(intent.id, { state: "merged", mergeSha: "m1" }, later(1000), {
       terminal: { repo: "org/registry", number: 7, headSha: "head1", outcome: "merged", at: later(1000), by: "cto", heldId: held.id, mergeSha: "m1" },
       hold: "delete"
@@ -93,8 +110,9 @@ describe("HoldStore intents and terminals (spec 0012 §6, §7)", () => {
     expect(await s.listOpenMergeIntents()).toEqual([]);
     // A failed attempt gives a claimed hold back instead of deleting it.
     const second = await s.hold({ ...merge, headSha: "head2" }, later(2000));
-    await s.claimHeld(second.held.id, later(2000));
-    const again = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head2", agentId: "cto", mode: "operator", heldId: second.held.id, at: later(2000) });
+    const secondClaim = await s.claimHeld(second.held.id, later(2000));
+    const again = await s.beginMerge({ repo: "org/registry", number: 7, headSha: "head2", agentId: "cto", mode: "operator", heldId: second.held.id, claimToken: secondClaim?.claimToken, at: later(2000) });
+    if (!again.created) throw new Error("expected an intent");
     await s.settleMerge(again.intent.id, { state: "failed", detail: "no" }, later(3000), { hold: "unclaim" });
     expect(await s.getHeld(second.held.id)).toMatchObject({ claimed: false });
     expect(await s.settleMerge("ghost", { state: "failed" }, T0)).toBeUndefined();

@@ -33,6 +33,8 @@ export interface HeldMerge {
   approvedBy: string[];
   claimed?: boolean;
   claimedAt?: string;
+  /** Minted by the claim; the intent begun for this hold must present it (the fence against a stale approval). */
+  claimToken?: string;
 }
 
 export type MergeIntentState = "pending" | "unknown" | "merged" | "superseded" | "failed";
@@ -130,7 +132,7 @@ export class HoldStore {
   async claimHeld(id: string, at: string): Promise<HeldMerge | undefined> {
     const held = await this.storage.get<HeldMerge>(heldKey(id));
     if (!held || held.claimed) return undefined;
-    const claimed = { ...held, claimed: true, claimedAt: at };
+    const claimed = { ...held, claimed: true, claimedAt: at, claimToken: this.newId() };
     await this.storage.put(heldKey(id), claimed);
     return claimed;
   }
@@ -197,13 +199,33 @@ export class HoldStore {
    * loser gets the open intent back and decides what to do with it.
    */
   async beginMerge(
-    input: Omit<MergeIntent, "id" | "state">
-  ): Promise<{ created: true; intent: MergeIntent } | { created: false; intent: MergeIntent }> {
-    const open = await this.openMergeIntent(input.repo, input.number);
-    if (open) return { created: false, intent: open };
-    const intent: MergeIntent = { id: this.newId(), state: "pending", ...input };
+    input: Omit<MergeIntent, "id" | "state"> & { claimToken?: string }
+  ): Promise<
+    | { created: true; intent: MergeIntent }
+    | { created: false; reason: "open_intent"; intent: MergeIntent }
+    | { created: false; reason: "hold_gone" }
+  > {
+    const { claimToken, ...fields } = input;
+    // The fence: an operator's approval begins its intent only while
+    // its hold still exists and still carries the claim it took. A
+    // rejection that overrode a stale claim deleted the hold (with the
+    // terminal record, in one turn), so the slow approval stops here
+    // and never reaches GitHub.
+    if (fields.heldId !== undefined) {
+      const held = await this.storage.get<HeldMerge>(heldKey(fields.heldId));
+      if (!held || !held.claimed || held.claimToken !== claimToken) return { created: false, reason: "hold_gone" };
+    }
+    const open = await this.openMergeIntent(fields.repo, fields.number);
+    if (open) return { created: false, reason: "open_intent", intent: open };
+    const intent: MergeIntent = { id: this.newId(), state: "pending", ...fields };
     await this.storage.put(intentKey(intent.id), intent);
     return { created: true, intent };
+  }
+
+  /** Reject in ONE turn: the terminal record and the hold's deletion together. */
+  async rejectAndRecord(held: HeldMerge, record: TerminalRecord): Promise<void> {
+    await this.recordTerminal(record);
+    await this.deleteHeld(held.id);
   }
 
   async resolveMerge(

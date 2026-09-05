@@ -441,6 +441,37 @@ describe("the operator's surface (spec 0012 §8)", () => {
     expect(h.kinds()).toEqual(["merge_held", "merge_rejected"]);
   });
 
+  it("a rejection under a stale claim fences the slow approval out of GitHub", async () => {
+    const { h, approve, reject } = await held();
+    // The approval claims, then stalls before beginning its intent (a
+    // slow snapshot); the operator rejects under the stale claim.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const originalFetch = h.deps.api.fetch as typeof fetch;
+    h.deps.api.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/pulls/7/reviews")) await gate;
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const approval = approve();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    h.advance(CLAIM_AGE_MS + 1000);
+    expect((await reject("changed my mind")).body).toMatchObject({ status: "rejected" });
+    release();
+    expect(await approval).toMatchObject({ status: 409, body: { error: "hold_gone" } });
+    expect(h.gh.state.mergePayload).toBeUndefined();
+    expect(await h.holds.terminal(REPO, 7, HEAD)).toMatchObject({ outcome: "rejected" });
+    expect(h.kinds()).toEqual(["merge_held", "merge_rejected", "merge_denied"]);
+  });
+
+  it("a rejection under a stale claim yields to an intent that is in flight", async () => {
+    const { h, reject } = await held();
+    const claimed = await h.holds.claimHeld("hold-1", h.deps.now());
+    h.advance(CLAIM_AGE_MS + 1000);
+    await h.holds.beginMerge({ repo: REPO, number: 7, headSha: HEAD, agentId: "cto", mode: "operator", heldId: "hold-1", claimToken: claimed?.claimToken, at: h.deps.now() });
+    expect(await reject()).toMatchObject({ status: 409, body: { error: "approval_in_flight" } });
+  });
+
   it("a stale claim whose approval merged concedes", async () => {
     const { h, reject } = await held();
     await h.holds.claimHeld("hold-1", h.deps.now());

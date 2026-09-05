@@ -284,7 +284,14 @@ door works it and is released on a lost response. The operator's held
 listing reconciles every open intent first, with the credential of the
 agent that made it, so a lost response never leaves a claimed hold in
 the queue: a reconciled merge deletes its hold, a reconciled
-not-merged attempt unclaims it for another decision.
+not-merged attempt unclaims it for another decision. The claim itself
+is a fence: it mints a token the approval must present when it begins
+its intent, and the begin refuses `hold_gone` when the hold is no
+longer there with that token. A rejection that overrides a stale claim
+first yields to a pending intent (`approval_in_flight`) or reconciles
+an older one, then deletes the hold and writes the terminal record in
+one turn; a slow approval that wakes up afterwards stops before
+GitHub.
 
 ## 7. The close door
 
