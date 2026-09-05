@@ -383,6 +383,44 @@ describe("porch doors", () => {
     expect(((await response.json()) as { error: string }).error).toBe("pr_not_wired");
   });
 
+  it("pre-checks the review and merge grants and forwards what passes (spec 0012 §9)", async () => {
+    const stub = await startStub(() => ({ status: 200, body: '{"ok":true,"status":"reviewed"}' }));
+    const { url } = await startPorch(
+      config({
+        prUrl: `${stub.url}/gatekeeper/pr`,
+        prToken: "b",
+        githubGrants: { pr: [], write: [], review: ["org/registry"], merge: ["org/registry"] }
+      })
+    );
+    const post = (door: string, body: Record<string, unknown>) =>
+      fetch(`${url}/github/${door}`, { method: "POST", headers: { "x-operon-porch": "1" }, body: JSON.stringify(body) });
+
+    const notReviewable = await post("review", { repo: "org/other", number: 3, verdict: "approve" });
+    expect(notReviewable.status).toBe(403);
+    expect(((await notReviewable.json()) as { error: string }).error).toBe("review_not_granted");
+    const badVerdict = await post("review", { repo: "org/registry", number: 3, verdict: "lgtm" });
+    expect(((await badVerdict.json()) as { error: string }).error).toBe("invalid_verdict");
+    const notMergeable = await post("merge", { repo: "org/other", number: 3 });
+    expect(((await notMergeable.json()) as { error: string }).error).toBe("merge_not_granted");
+    const noReason = await post("close", { repo: "org/registry", number: 3, reason: " " });
+    expect(((await noReason.json()) as { error: string }).error).toBe("missing_reason");
+    const noBody = await post("review", { repo: "org/registry", number: 3, verdict: "request_changes" });
+    expect(((await noBody.json()) as { error: string }).error).toBe("missing_body");
+    const blank = await post("review", { repo: "org/registry", number: 3, verdict: "comment", body: "  \n " });
+    expect(((await blank.json()) as { error: string }).error).toBe("missing_body");
+    const twoBodies = await post("review", { repo: "org/registry", number: 3, verdict: "comment", body: "a", bodyFile: "b.md" });
+    expect(((await twoBodies.json()) as { error: string }).error).toBe("ambiguous_body");
+    expect(stub.requests).toHaveLength(0);
+
+    const approved = await post("review", { repo: "org/registry", number: 3, verdict: "approve" });
+    expect(approved.status).toBe(200);
+    expect(JSON.parse(stub.requests[0])).toEqual({ agentId: "growth", repo: "org/registry", number: 3, verdict: "approve" });
+    await post("merge", { repo: "org/registry", number: 3 });
+    expect(JSON.parse(stub.requests[1])).toEqual({ agentId: "growth", repo: "org/registry", number: 3 });
+    await post("close", { repo: "org/registry", number: 3, reason: "spam" });
+    expect(JSON.parse(stub.requests[2])).toEqual({ agentId: "growth", repo: "org/registry", number: 3, reason: "spam" });
+  });
+
   it("refuses a branch commit to a repo with no write grant, without a round trip", async () => {
     const { url } = await startPorch(
       config({

@@ -157,6 +157,8 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     hosts: config.hosts,
     prRepos: prRepos(config),
     githubWrite: config.githubGrants?.write ?? [],
+    githubReview: config.githubGrants?.review ?? [],
+    githubMerge: config.githubGrants?.merge ?? [],
     mcp: config.mcpServers.map(server => server.name),
     disabledDoors: config.disabledDoors
   };
@@ -310,6 +312,9 @@ export class Porch {
       if (request.method === "POST" && url.pathname === "/github/update") return await this.update(body);
       if (request.method === "POST" && url.pathname === "/github/push") return await this.push(body);
       if (request.method === "POST" && url.pathname === "/github/branch") return await this.branch(body);
+      if (request.method === "POST" && url.pathname === "/github/review") return await this.review(body);
+      if (request.method === "POST" && url.pathname === "/github/merge") return await this.merge(body);
+      if (request.method === "POST" && url.pathname === "/github/close") return await this.closePullRequest(body);
       if (request.method === "POST" && url.pathname === "/email") return await this.email(body);
       if (request.method === "POST" && url.pathname === "/email/original") return await this.emailOriginal(body);
       if (request.method === "POST" && url.pathname === "/till/offer") return await this.tillOffer(body);
@@ -746,6 +751,75 @@ export class Porch {
     if (!payload.title && !payload.body && !payload.state) return fail(400, "empty_patch");
     this.context.log(`updating ${repo}#${number}`);
     return this.githubGatekeeper("update", payload);
+  }
+
+  /**
+   * The adjudication doors (spec 0012 §9). The grants are pre-checked
+   * here so a refusal costs no round trip and every door says the same
+   * thing; the Gatekeeper decides authoritatively, reading GitHub
+   * itself. The rule to the mind is in the living help: never approve
+   * your own pull request; merge only what qualifies; held means the
+   * operator decides; close is for spam, with a reason on the record.
+   */
+  private async review(body: Record<string, unknown>): Promise<JsonResult> {
+    const { config } = this.context;
+    const { repo, number, verdict } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    if (verdict !== "approve" && verdict !== "request_changes" && verdict !== "comment") {
+      return fail(400, "invalid_verdict", "one of approve, request_changes, comment");
+    }
+    const reviewable = config.githubGrants?.review ?? [];
+    if (!reviewable.includes(repo)) {
+      return fail(403, "review_not_granted", `granted: ${reviewable.join(", ") || "nothing"}`);
+    }
+    const payload: Record<string, unknown> = { repo, number, verdict };
+    const hasBody = body.bodyFile !== undefined || typeof body.body === "string";
+    if (body.bodyFile !== undefined && typeof body.body === "string") {
+      return fail(400, "ambiguous_body", "one of body or bodyFile, not both");
+    }
+    // The Gatekeeper's rule (spec 0012 §5): request_changes and comment
+    // carry a body. Refused here by the same name, before any round trip.
+    if (verdict !== "approve" && !hasBody) return fail(400, "missing_body", `${verdict} needs a body`);
+    if (hasBody) {
+      const { text, error } = await this.sweptText(body.body, body.bodyFile, "body");
+      if (error) return error;
+      // Blank text is no body either, inline or from the file.
+      if (text === undefined || text.trim().length === 0) return fail(400, "missing_body", `${verdict} needs a body`);
+      payload.body = text;
+    }
+    this.context.log(`reviewing ${repo}#${number}: ${verdict}`);
+    return this.githubGatekeeper("review", payload);
+  }
+
+  private mergeGranted(repo: string): JsonResult | null {
+    const mergeable = this.context.config.githubGrants?.merge ?? [];
+    if (!mergeable.includes(repo)) {
+      return fail(403, "merge_not_granted", `granted: ${mergeable.join(", ") || "nothing"}`);
+    }
+    return null;
+  }
+
+  private async merge(body: Record<string, unknown>): Promise<JsonResult> {
+    const { repo, number } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    const refused = this.mergeGranted(repo);
+    if (refused) return refused;
+    this.context.log(`requesting merge of ${repo}#${number}`);
+    return this.githubGatekeeper("merge", { repo, number }, 60000);
+  }
+
+  private async closePullRequest(body: Record<string, unknown>): Promise<JsonResult> {
+    const { repo, number, reason } = body;
+    if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
+    if (typeof reason !== "string" || reason.trim().length === 0) return fail(400, "missing_reason");
+    const refused = this.mergeGranted(repo);
+    if (refused) return refused;
+    {
+      const blocked = this.sweepFields({ reason });
+      if (blocked) return blocked;
+    }
+    this.context.log(`closing ${repo}#${number}`);
+    return this.githubGatekeeper("close", { repo, number, reason });
   }
 
   private async push(body: Record<string, unknown>): Promise<JsonResult> {
