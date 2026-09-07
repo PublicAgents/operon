@@ -558,8 +558,6 @@ for (const manifest of manifests) {
   try {
     if (paused) await waitForQuiet(manifest);
     if (bootstrapMode) {
-      const stubDir = join(buildDir, "bootstrap");
-      mkdirSync(stubDir, { recursive: true });
       console.log(`\n→ bootstrap pass one: every worker without its service bindings`);
       for (const key of DEPLOY_ORDER) {
         const worker = workersByKey.get(key);
@@ -569,7 +567,10 @@ for (const manifest of manifests) {
         // missing between the two passes. Durable Objects and their
         // migrations stay, so pass two applies nothing twice.
         const { services: _services, routes: _routes, triggers: _triggers, ...stripped } = worker.config;
-        const stubPath = join(stubDir, `${key}.json`);
+        // Beside the real config, not below it: every path in a config
+        // (the entry point, the schema, the migrations, the image) is
+        // relative to the config's own directory.
+        const stubPath = join(buildDir, `${key}.bootstrap.json`);
         writeFileSync(stubPath, JSON.stringify(stripped, null, 2) + "\n");
         console.log(`  ${manifest.project}/${key} (stub)`);
         execFileSync("npx", ["wrangler", "deploy", "-c", stubPath, "--var", `ROSTER:${rosterVar}`], {
