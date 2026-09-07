@@ -83,7 +83,11 @@ async function api(method, path, body) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.success === false) {
-    const detail = (payload.errors ?? []).map(error => error.message).join("; ") || `${response.status}`;
+    // Code and message both: callers tell "absent" (10007) from "unknown"
+    // by the code, and the message alone does not carry it.
+    const detail =
+      (payload.errors ?? []).map(error => `${error.code ?? response.status}: ${error.message}`).join("; ") ||
+      `${response.status}`;
     throw new Error(`${method} ${path}: ${detail}`);
   }
   return payload.result;
@@ -344,7 +348,7 @@ async function workerExists(name) {
       await api("GET", `/accounts/${manifest.accountId}/workers/scripts/${name}`);
       return true;
     } catch (error) {
-      return /not found|10007|\b404\b/i.test(String(error.message)) ? false : "unknown";
+      return /not found|does not exist|\b10007\b|\b404\b/i.test(String(error.message)) ? false : "unknown";
     }
   }
   // Without the API, ask wrangler by way of the rendered config (rendered
