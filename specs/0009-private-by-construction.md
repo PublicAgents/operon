@@ -64,8 +64,9 @@ by hand and its AUD pasted into the manifest. Now the tools own it:
 
 - **Bootstrap** (spec 0006 §4) ensures the Zero Trust organization is
   known (its team domain), that a self-hosted Access application exists
-  for `ops.<zone>` with an Allow policy for `operatorEmail` (plus any
-  `operatorEmails`, further sign-ins that receive no mail) and a
+  for `ops.<zone>` with an Allow policy for every address in
+  `operatorEmails` (sign-ins; agent mail goes to `forwardAgentEmailsTo`
+  instead) and a
   Service Auth policy for the repository's CI service token, named
   `operon-ci-<owner>-<repo>` (one token per repository, shared by every
   project the repository deploys; spec 0012 §10 explains why a

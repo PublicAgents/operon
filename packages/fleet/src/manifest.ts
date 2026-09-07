@@ -74,9 +74,9 @@ export interface FleetManifest {
    */
   control: { defaultProject: string; enrolled: EnrolledProject[] };
   accountId: string;
-  /** Where the operator is reachable: asks and mail copies land here. */
-  operatorEmail?: string;
-  /** Further addresses that may sign in to the operator plane. No mail goes to them. */
+  /** Where every agent mail is copied or forwarded to (asks, copies of sent and inbound mail). */
+  forwardAgentEmailsTo?: string[];
+  /** Who may sign in to the operator plane. No mail goes to them for being listed here. */
   operatorEmails?: string[];
   /** Worker name prefix; workers are `<prefix>-gatekeeper-*` and `<prefix>-scheduler`. */
   workerPrefix: string;
@@ -211,32 +211,33 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
   const accountId = requireString(root.accountId, "accountId");
   if (!HEX32.test(accountId)) fail("accountId", "must be the 32-hex Cloudflare account id");
 
-  // The operator's own address: asks (spec 0007) and outbound mail
-  // copies land here. Optional, because a colony can run headless,
-  // but an asks Gatekeeper without it can only reach the console.
-  let operatorEmail: string | undefined;
+  // Two lists of addresses, two meanings. forwardAgentEmailsTo: where
+  // every agent mail lands for the operator (asks per spec 0007, copies
+  // of sent and inbound mail). operatorEmails: who may sign in to the
+  // plane. Either is optional; a colony can run headless. The old
+  // single operatorEmail is refused by name so nobody keeps a key that
+  // no longer does anything.
   if (root.operatorEmail !== undefined) {
-    operatorEmail = requireString(root.operatorEmail, "operatorEmail");
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(operatorEmail)) {
-      fail("operatorEmail", `"${operatorEmail}" is not an email address`);
-    }
+    fail("operatorEmail", "was split: forwardAgentEmailsTo (a list, where agent mail goes) and operatorEmails (a list, who signs in to the plane)");
   }
-  // More sign-ins to the plane (a second identity provider account, a
-  // co-operator). Deduplicated against each other and the operator's
-  // own address, case-insensitively, as identity providers compare.
-  let operatorEmails: string[] | undefined;
-  if (root.operatorEmails !== undefined) {
-    if (!Array.isArray(root.operatorEmails)) fail("operatorEmails", "must be a list of email addresses");
-    const seen = new Set(operatorEmail ? [operatorEmail.toLowerCase()] : []);
-    operatorEmails = [];
-    for (const [index, value] of root.operatorEmails.entries()) {
-      const email = requireString(value, `operatorEmails[${index}]`);
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(`operatorEmails[${index}]`, `"${email}" is not an email address`);
+  const emailList = (key: "forwardAgentEmailsTo" | "operatorEmails"): string[] | undefined => {
+    const value = root[key];
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) fail(key, "must be a list of email addresses");
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const [index, entry] of value.entries()) {
+      const email = requireString(entry, `${key}[${index}]`);
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(`${key}[${index}]`, `"${email}" is not an email address`);
+      // Deduplicated case-insensitively, as identity providers and mailboxes compare.
       if (seen.has(email.toLowerCase())) continue;
       seen.add(email.toLowerCase());
-      operatorEmails.push(email);
+      out.push(email);
     }
-  }
+    return out;
+  };
+  const forwardAgentEmailsTo = emailList("forwardAgentEmailsTo");
+  const operatorEmails = emailList("operatorEmails");
 
   const workerPrefix =
     root.workerPrefix === undefined ? `operon-${project}` : requireString(root.workerPrefix, "workerPrefix");
@@ -367,7 +368,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     project,
     control: { defaultProject, enrolled },
     accountId,
-    ...(operatorEmail !== undefined ? { operatorEmail } : {}),
+    ...(forwardAgentEmailsTo?.length ? { forwardAgentEmailsTo } : {}),
     ...(operatorEmails?.length ? { operatorEmails } : {}),
     workerPrefix,
     ...(accessBlock ? { access: accessBlock } : {}),

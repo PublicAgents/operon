@@ -35,9 +35,8 @@ export function desiredOpsAccess(manifest, ghRepo) {
     domain: `ops.${manifest.roster.zone}`,
     sessionDuration: "24h",
     allowPolicyName: "operator",
-    // Everyone who may sign in: the operator's address first, then the
-    // manifest's further sign-ins (operatorEmails).
-    operatorEmails: [manifest.operatorEmail, ...(manifest.operatorEmails ?? [])].filter(Boolean),
+    // Everyone who may sign in to the plane (the manifest's operatorEmails).
+    operatorEmails: manifest.operatorEmails ?? [],
     serviceAuthPolicyName: "ci service token",
     serviceTokenName: ciServiceTokenName(manifest, ghRepo),
     legacyServiceTokenName: `operon-${manifest.project}-ci`
@@ -148,7 +147,7 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
       lines.push(`✓ policy "${want.allowPolicyName}": allow ${allowed}`);
     }
   } else {
-    needs.push("the manifest has no operatorEmail: no one can sign in to the plane until it names one");
+    needs.push("the manifest has no operatorEmails: no one can sign in to the plane until it names one");
   }
 
   // The CI service token, by name. A legacy per-project token is

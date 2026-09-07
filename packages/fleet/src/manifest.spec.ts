@@ -132,15 +132,19 @@ describe("validateManifest", () => {
     ).toThrow(/duplicate agent id/);
   });
 
-  it("accepts further plane sign-ins, deduplicated against the operator's address", () => {
+  it("keeps two address lists apart: where agent mail goes, and who signs in to the plane", () => {
     const parsed = validateManifest({
       ...BASE,
-      operatorEmail: "op@example-colony.com",
-      operatorEmails: ["Second@example-colony.com", "OP@example-colony.com", "second@example-colony.com"]
+      forwardAgentEmailsTo: ["op@example-colony.com", "OP@example-colony.com"],
+      operatorEmails: ["op@example-colony.com", "Second@example-colony.com", "second@example-colony.com"]
     });
-    expect(parsed.operatorEmails).toEqual(["Second@example-colony.com"]);
+    expect(parsed.forwardAgentEmailsTo).toEqual(["op@example-colony.com"]);
+    expect(parsed.operatorEmails).toEqual(["op@example-colony.com", "Second@example-colony.com"]);
+    expect(validateManifest(BASE).forwardAgentEmailsTo).toBeUndefined();
     expect(() => validateManifest({ ...BASE, operatorEmails: ["not-an-address"] })).toThrowError(/operatorEmails\[0\]/);
-    expect(() => validateManifest({ ...BASE, operatorEmails: "x@example-colony.com" })).toThrowError(/list/);
+    expect(() => validateManifest({ ...BASE, forwardAgentEmailsTo: "x@example-colony.com" })).toThrowError(/list/);
+    // The old single key is refused by name, never silently ignored.
+    expect(() => validateManifest({ ...BASE, operatorEmail: "x@example-colony.com" })).toThrowError(/forwardAgentEmailsTo/);
   });
 
   it("validates identity fields precisely", () => {

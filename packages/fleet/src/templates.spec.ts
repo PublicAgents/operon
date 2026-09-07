@@ -13,7 +13,8 @@ const RAW = {
   project: "example",
   accountId: "0123456789abcdef0123456789abcdef",
   workerPrefix: "operon",
-  operatorEmail: "operator@example-colony.com",
+  forwardAgentEmailsTo: ["operator@example-colony.com"],
+  operatorEmails: ["operator@example-colony.com"],
   access: {
     teamDomain: "https://example-colony.cloudflareaccess.com",
     aud: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -279,7 +280,7 @@ describe("renderWorkers reproduces the example colony", () => {
     expect(byKey["gatekeeper-spend"].vars.NOTIFY_URL).toBeUndefined();
     expect(byKey["gatekeeper-email"].vars).toEqual({
       EMAIL_DOMAIN: "example-colony.com",
-      OPERATOR_EMAIL: "operator@example-colony.com"
+      FORWARD_AGENT_EMAILS_TO: "operator@example-colony.com"
     });
     expect(byKey["gatekeeper-browser"].vars).toEqual({
       CF_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
