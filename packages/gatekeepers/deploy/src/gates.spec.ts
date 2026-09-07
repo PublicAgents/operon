@@ -61,6 +61,7 @@ describe("validatePublish", () => {
       ]
     });
     expect(validatePublish(roster, bare, MARKER, [])?.code).toBe("missing_disclosure");
+    expect(validatePublish(roster, bare, MARKER, [])?.detail).toContain(`"${MARKER}"`);
   });
 
   it("does not require the marker on non-HTML files", () => {

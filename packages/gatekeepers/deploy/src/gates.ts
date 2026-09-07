@@ -112,9 +112,11 @@ export function validatePublish(
         disclosureMarker.length > 0 &&
         !text.toLowerCase().includes(disclosureMarker.toLowerCase())
       ) {
+        // The refusal names the marker: a mind that cannot see the
+        // colony's policy vars would otherwise guess at it for a whole wake.
         return {
           code: "missing_disclosure",
-          detail: `${file.path} does not contain the required disclosure marker`
+          detail: `${file.path} does not contain the required disclosure marker "${disclosureMarker}" (matched case-insensitively, anywhere in the file)`
         };
       }
     }
