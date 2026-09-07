@@ -132,6 +132,21 @@ describe("validateManifest", () => {
     ).toThrow(/duplicate agent id/);
   });
 
+  it("keeps two address lists apart: where agent mail goes, and who signs in to the plane", () => {
+    const parsed = validateManifest({
+      ...BASE,
+      forwardAgentEmailsTo: ["op@example-colony.com", "OP@example-colony.com"],
+      operatorEmails: ["op@example-colony.com", "Second@example-colony.com", "second@example-colony.com"]
+    });
+    expect(parsed.forwardAgentEmailsTo).toEqual(["op@example-colony.com"]);
+    expect(parsed.operatorEmails).toEqual(["op@example-colony.com", "Second@example-colony.com"]);
+    expect(validateManifest(BASE).forwardAgentEmailsTo).toBeUndefined();
+    expect(() => validateManifest({ ...BASE, operatorEmails: ["not-an-address"] })).toThrowError(/operatorEmails\[0\]/);
+    expect(() => validateManifest({ ...BASE, forwardAgentEmailsTo: "x@example-colony.com" })).toThrowError(/list/);
+    // The old single key is refused by name, never silently ignored.
+    expect(() => validateManifest({ ...BASE, operatorEmail: "x@example-colony.com" })).toThrowError(/forwardAgentEmailsTo/);
+  });
+
   it("validates identity fields precisely", () => {
     expect(() => validateManifest({ ...BASE, project: "Demo" })).toThrow(ManifestError);
     expect(() => validateManifest({ ...BASE, accountId: "nope" })).toThrow(/32-hex/);

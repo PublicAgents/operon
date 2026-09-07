@@ -77,7 +77,8 @@ converges on rerun, and never prints a secret:
 - creates the D1 database and the site-store KV namespace if missing;
 - creates and seeds each agent's state repository through `gh`;
 - makes the operator plane's Access application for `ops.<zone>`, an
-  Allow policy for `operatorEmail`, and the repository's CI service
+  Allow policy for every `operatorEmails` address, and the repository's
+  CI service
   token (stored straight into the repository's Actions secrets through
   `gh`, or deleted again when it cannot be stored), and writes the
   application's team domain and audience into the manifest, which you

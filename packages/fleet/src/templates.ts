@@ -231,7 +231,7 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         vars: {
           EMAIL_DOMAIN: zone,
           ...policyVars(manifest, "email"),
-          ...(manifest.operatorEmail !== undefined ? { OPERATOR_EMAIL: manifest.operatorEmail } : {})
+          ...(manifest.forwardAgentEmailsTo?.length ? { FORWARD_AGENT_EMAILS_TO: manifest.forwardAgentEmailsTo.join(",") } : {})
         }
       }
     },

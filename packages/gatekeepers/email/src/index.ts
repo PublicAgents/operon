@@ -28,7 +28,8 @@ interface Env {
   ROSTER: string;
   EMAIL_DOMAIN: string;
   EMAIL_SERVICE_TOKEN?: string;
-  OPERATOR_EMAIL?: string;
+  /** Comma-separated addresses every agent mail is copied or forwarded to; unset means <name>@<zone>. */
+  FORWARD_AGENT_EMAILS_TO?: string;
   NOTIFY_URL?: string;
   NOTIFY_TOKEN?: string;
   /** telegram Gatekeeper over a service binding: the only path that carries buttons. */
@@ -56,11 +57,18 @@ function ledger(env: Env) {
   return env.LEDGER.get(env.LEDGER.idFromName("email"));
 }
 
-/** Address the operator's copy lands at: OPERATOR_EMAIL, else <name>@<zone> (catch-all). */
-function operatorCopy(env: Env, localPart: string, zone: string): string {
-  return env.OPERATOR_EMAIL && env.OPERATOR_EMAIL.length > 0
-    ? env.OPERATOR_EMAIL
-    : `${localPart}@${zone}`;
+/** The operator's addresses, as configured: FORWARD_AGENT_EMAILS_TO split on commas, blanks dropped. */
+function forwardAddresses(env: Env): string[] {
+  return (env.FORWARD_AGENT_EMAILS_TO ?? "")
+    .split(",")
+    .map(address => address.trim())
+    .filter(address => address.length > 0);
+}
+
+/** Where the operator's copies land: FORWARD_AGENT_EMAILS_TO, else <name>@<zone> (catch-all). */
+function operatorCopies(env: Env, localPart: string, zone: string): string[] {
+  const configured = forwardAddresses(env);
+  return configured.length > 0 ? configured : [`${localPart}@${zone}`];
 }
 
 /**
@@ -174,17 +182,19 @@ async function deliver(
     meta: { count }
   });
 
-  const copyTo = operatorCopy(env, identity.localPart, zone);
+  // One copy per configured address; a single failure marks the copy failed.
   let copied = true;
-  try {
-    await env.EMAIL.send({
-      to: copyTo,
-      from,
-      subject: `[${identity.name} sent] ${msg.subject}`,
-      text: `To: ${msg.to}\n\n${msg.text}${footer}`
-    });
-  } catch {
-    copied = false;
+  for (const copyTo of operatorCopies(env, identity.localPart, zone)) {
+    try {
+      await env.EMAIL.send({
+        to: copyTo,
+        from,
+        subject: `[${identity.name} sent] ${msg.subject}`,
+        text: `To: ${msg.to}\n\n${msg.text}${footer}`
+      });
+    } catch {
+      copied = false;
+    }
   }
   await notifyOperator(
     env,
@@ -353,9 +363,10 @@ export default {
       messageId: parsed.messageId,
       attachments: attachments.length ? attachments : undefined
     });
-    // Full copy (attachments and all) to the operator's catch-all box.
-    const copyTo = operatorCopy(env, identity.localPart, roster.zone);
-    ctx.waitUntil(message.forward(copyTo).catch(err => console.error("forward failed", err)));
+    // Full copy (attachments and all) to every configured operator address.
+    for (const copyTo of operatorCopies(env, identity.localPart, roster.zone)) {
+      ctx.waitUntil(message.forward(copyTo).catch(err => console.error("forward failed", err)));
+    }
     // Telegram is the oversight channel the colony controls end to end:
     // the email forward above rides third-party deliverability (strict-
     // DMARC senders routinely get spam-foldered after forwarding), so
@@ -393,7 +404,7 @@ export default {
 /**
  * The operator's own mail path (spec 0007 §7), binding-only: another
  * Gatekeeper hands this one a message FOR THE OPERATOR and it goes to
- * OPERATOR_EMAIL. It is deliberately outside the agent's outbound
+ * every FORWARD_AGENT_EMAILS_TO address. It is deliberately outside the agent's outbound
  * policy: the operator is not a stranger, so there is no first-contact
  * hold, and a notification must not consume the agent's daily send
  * budget or be silently dropped when that budget is spent. It is
@@ -409,8 +420,8 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
     // No fallback to a colony catch-all here: a notification the
     // operator never configured an address for should say so, not
     // vanish into a mailbox nobody reads.
-    const to = this.env.OPERATOR_EMAIL;
-    if (!to || to.length === 0) return { ok: false, detail: "operator_email_unset" };
+    const recipients = forwardAddresses(this.env);
+    if (recipients.length === 0) return { ok: false, detail: "operator_email_unset" };
     // Audit doctrine (spec 0003): the record lands BEFORE the
     // privileged act, and the act refuses when it cannot be recorded.
     // A notification is worth less than an unauditable send.
@@ -427,12 +438,14 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
     }
     const from = { email: `${input.agentId}@${this.env.EMAIL_DOMAIN}`, name: input.agentId };
     try {
-      await this.env.EMAIL.send({
-        to,
-        from,
-        subject: input.subject,
-        text: input.text
-      });
+      for (const to of recipients) {
+        await this.env.EMAIL.send({
+          to,
+          from,
+          subject: input.subject,
+          text: input.text
+        });
+      }
     } catch (error) {
       const detail = String(error).slice(0, 200);
       try {
@@ -487,7 +500,7 @@ export class OperatorMail extends WorkerEntrypoint<Env> {
       console.error("operator mail sent but outcome row lost", error);
       await notifyOperator(
         this.env,
-        `audit gap: operator mail to ${to} (${input.subject}) was DELIVERED but its outcome row could not be written after three attempts. Read the unresolved operator_mail_requested row as outcome-unknown; this notice is its resolution.`
+        `audit gap: operator mail to ${recipients.join(", ")} (${input.subject}) was DELIVERED but its outcome row could not be written after three attempts. Read the unresolved operator_mail_requested row as outcome-unknown; this notice is its resolution.`
       ).catch(() => undefined);
       return { ok: true, detail: "outcome_unrecorded", outcomeRecorded: false };
     }

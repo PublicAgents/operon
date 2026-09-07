@@ -35,7 +35,8 @@ export function desiredOpsAccess(manifest, ghRepo) {
     domain: `ops.${manifest.roster.zone}`,
     sessionDuration: "24h",
     allowPolicyName: "operator",
-    operatorEmail: manifest.operatorEmail,
+    // Everyone who may sign in to the plane (the manifest's operatorEmails).
+    operatorEmails: manifest.operatorEmails ?? [],
     serviceAuthPolicyName: "ci service token",
     serviceTokenName: ciServiceTokenName(manifest, ghRepo),
     legacyServiceTokenName: `operon-${manifest.project}-ci`
@@ -119,8 +120,9 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
     policy.decision === decision && JSON.stringify(policy.include) === JSON.stringify(include);
   const nextPrecedence = () => Math.max(0, ...policies.map(policy => policy.precedence ?? 0)) + 1;
 
-  if (want.operatorEmail) {
-    const wantInclude = [{ email: { email: want.operatorEmail } }];
+  if (want.operatorEmails.length > 0) {
+    const allowed = want.operatorEmails.join(", ");
+    const wantInclude = want.operatorEmails.map(email => ({ email: { email } }));
     const allow = byName.get(want.allowPolicyName) ?? policies.find(policy => sameRule(policy, "allow", wantInclude));
     if (!allow) {
       const created = await call("POST", `/accounts/${accountId}/access/apps/${appId}/policies`, {
@@ -130,9 +132,9 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
         precedence: nextPrecedence()
       });
       policies.push(created);
-      lines.push(`+ policy "${want.allowPolicyName}": allow ${want.operatorEmail}`);
+      lines.push(`+ policy "${want.allowPolicyName}": allow ${allowed}`);
     } else if (allow.name !== want.allowPolicyName && sameRule(allow, "allow", wantInclude)) {
-      lines.push(`✓ policy "${allow.name}": allow ${want.operatorEmail} (adopted as the operator policy)`);
+      lines.push(`✓ policy "${allow.name}": allow ${allowed} (adopted as the operator policy)`);
     } else if (JSON.stringify(allow.include) !== JSON.stringify(wantInclude) || allow.decision !== "allow") {
       await call("PUT", `/accounts/${accountId}/access/apps/${appId}/policies/${allow.id}`, {
         name: want.allowPolicyName,
@@ -140,12 +142,12 @@ export async function ensureOpsAccess(manifest, { apiToken, accountId, createSer
         include: wantInclude,
         precedence: allow.precedence ?? 1
       });
-      lines.push(`~ policy "${want.allowPolicyName}": now allows ${want.operatorEmail} only`);
+      lines.push(`~ policy "${want.allowPolicyName}": now allows ${allowed} only`);
     } else {
-      lines.push(`✓ policy "${want.allowPolicyName}": allow ${want.operatorEmail}`);
+      lines.push(`✓ policy "${want.allowPolicyName}": allow ${allowed}`);
     }
   } else {
-    needs.push("the manifest has no operatorEmail: no one can sign in to the plane until it names one");
+    needs.push("the manifest has no operatorEmails: no one can sign in to the plane until it names one");
   }
 
   // The CI service token, by name. A legacy per-project token is

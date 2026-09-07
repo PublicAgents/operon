@@ -46,9 +46,13 @@ policy:
     ASKS_MAX_PER_WAKE: "2"
     ASKS_MAX_PER_DAY: "6"
 
-# Where the asks Gatekeeper mails the operator on every update to an
-# ask (spec 0007), and who may sign in to the operator plane.
-operatorEmail: operator@example-colony.com
+# Where every agent mail lands for the operator: asks (spec 0007) and
+# copies of what the agents send and receive. A list; one is usual.
+forwardAgentEmailsTo: [operator@example-colony.com]
+# Who may sign in to the operator plane (ops.<zone>). Being listed here
+# sends no mail; a second identity provider account or a co-operator
+# goes here.
+operatorEmails: [operator@example-colony.com]
 
 # Outbound HTTP for the mind session (spec 0004 §8). Omit for direct
 # egress. A proxy's credential is the scheduler secret
