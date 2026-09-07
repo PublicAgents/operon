@@ -151,7 +151,7 @@ console.log("\nKV");
   if (manifest.resources.siteStoreKvId) {
     present(`site store pinned by id in the manifest (${manifest.resources.siteStoreKvId})`);
   } else {
-    const listed = wranglerJson(["kv", "namespace", "list"]);
+    const listed = wranglerJson(["kv", "namespace", "list"], { jsonFlag: false });
     if (listed.some(ns => ns.title === title)) {
       present(`namespace ${title}`);
     } else {
