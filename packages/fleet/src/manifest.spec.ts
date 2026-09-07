@@ -132,6 +132,17 @@ describe("validateManifest", () => {
     ).toThrow(/duplicate agent id/);
   });
 
+  it("accepts further plane sign-ins, deduplicated against the operator's address", () => {
+    const parsed = validateManifest({
+      ...BASE,
+      operatorEmail: "op@example-colony.com",
+      operatorEmails: ["Second@example-colony.com", "OP@example-colony.com", "second@example-colony.com"]
+    });
+    expect(parsed.operatorEmails).toEqual(["Second@example-colony.com"]);
+    expect(() => validateManifest({ ...BASE, operatorEmails: ["not-an-address"] })).toThrowError(/operatorEmails\[0\]/);
+    expect(() => validateManifest({ ...BASE, operatorEmails: "x@example-colony.com" })).toThrowError(/list/);
+  });
+
   it("validates identity fields precisely", () => {
     expect(() => validateManifest({ ...BASE, project: "Demo" })).toThrow(ManifestError);
     expect(() => validateManifest({ ...BASE, accountId: "nope" })).toThrow(/32-hex/);

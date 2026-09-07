@@ -76,6 +76,8 @@ export interface FleetManifest {
   accountId: string;
   /** Where the operator is reachable: asks and mail copies land here. */
   operatorEmail?: string;
+  /** Further addresses that may sign in to the operator plane. No mail goes to them. */
+  operatorEmails?: string[];
   /** Worker name prefix; workers are `<prefix>-gatekeeper-*` and `<prefix>-scheduler`. */
   workerPrefix: string;
   /** The plane's Access application (spec 0009 §3): filled by bootstrap, absent until then. */
@@ -219,6 +221,22 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
       fail("operatorEmail", `"${operatorEmail}" is not an email address`);
     }
   }
+  // More sign-ins to the plane (a second identity provider account, a
+  // co-operator). Deduplicated against each other and the operator's
+  // own address, case-insensitively, as identity providers compare.
+  let operatorEmails: string[] | undefined;
+  if (root.operatorEmails !== undefined) {
+    if (!Array.isArray(root.operatorEmails)) fail("operatorEmails", "must be a list of email addresses");
+    const seen = new Set(operatorEmail ? [operatorEmail.toLowerCase()] : []);
+    operatorEmails = [];
+    for (const [index, value] of root.operatorEmails.entries()) {
+      const email = requireString(value, `operatorEmails[${index}]`);
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(`operatorEmails[${index}]`, `"${email}" is not an email address`);
+      if (seen.has(email.toLowerCase())) continue;
+      seen.add(email.toLowerCase());
+      operatorEmails.push(email);
+    }
+  }
 
   const workerPrefix =
     root.workerPrefix === undefined ? `operon-${project}` : requireString(root.workerPrefix, "workerPrefix");
@@ -350,6 +368,7 @@ export function validateManifest(raw: unknown, options: ValidateOptions = {}): F
     control: { defaultProject, enrolled },
     accountId,
     ...(operatorEmail !== undefined ? { operatorEmail } : {}),
+    ...(operatorEmails?.length ? { operatorEmails } : {}),
     workerPrefix,
     ...(accessBlock ? { access: accessBlock } : {}),
     resources: { d1Name, ...(siteStoreKvId !== undefined ? { siteStoreKvId } : {}) },

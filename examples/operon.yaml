@@ -49,6 +49,9 @@ policy:
 # Where the asks Gatekeeper mails the operator on every update to an
 # ask (spec 0007), and who may sign in to the operator plane.
 operatorEmail: operator@example-colony.com
+# Further addresses that may sign in to the plane (a second identity
+# provider account, a co-operator). No mail goes to them.
+# operatorEmails: [second@example-colony.com]
 
 # Outbound HTTP for the mind session (spec 0004 §8). Omit for direct
 # egress. A proxy's credential is the scheduler secret
