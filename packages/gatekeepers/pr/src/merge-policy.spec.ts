@@ -212,6 +212,18 @@ describe("mergeDecision (spec 0012 §6)", () => {
     });
   });
 
+  it("holds a deletion whatever its path", () => {
+    const pr = snapshot({
+      files: [
+        { filename: "registry/evidence/case-reports/x.json", status: "removed" },
+        { filename: "registry/jobs/cs/y.json", status: "modified" }
+      ]
+    });
+    const verdict = mergeDecision(pr, context());
+    expect(verdict).toMatchObject({ kind: "hold", reason: "outside_auto_paths" });
+    expect((verdict as { outside: string[] }).outside).toEqual(["registry/evidence/case-reports/x.json (deleted)"]);
+  });
+
   it("holds anything outside the auto globs, renames included, and dedupes the list", () => {
     const verdict = mergeDecision(
       snapshot({
@@ -227,7 +239,8 @@ describe("mergeDecision (spec 0012 §6)", () => {
     expect(verdict).toEqual({
       kind: "hold",
       reason: "outside_auto_paths",
-      outside: [".github/workflows/ci.yml", "site/src/pages/index.astro"],
+      // The rename's old side is listed twice on purpose: outside the globs, and as a deletion.
+      outside: [".github/workflows/ci.yml", "site/src/pages/index.astro", "site/src/pages/index.astro (deleted)"],
       approvedBy: ["reviewer"]
     });
   });

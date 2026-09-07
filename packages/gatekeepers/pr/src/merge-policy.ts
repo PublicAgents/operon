@@ -18,6 +18,8 @@ export interface SnapshotFile {
   filename: string;
   /** Present for renames: the path the file came from. */
   previousFilename?: string;
+  /** GitHub's change status: added, removed, modified, renamed, copied, changed, unchanged. */
+  status?: string;
 }
 
 export interface SnapshotChecks {
@@ -241,9 +243,18 @@ export function mergeDecision(pr: PrSnapshot, ctx: MergeContext): MergeVerdict {
     return refuse("no_qualifying_approval", discarded.length > 0 ? discarded.join("; ") : "no approvals");
   }
 
-  const outside = touchedPaths(pr.files).filter(path => !ctx.auto.some(glob => matchPathGlob(glob, path)));
+  // A deletion is never a data change (spec 0012 §6): a removed file
+  // is outside the auto globs whatever its path, and a rename's old
+  // side is a removal. The registry classifies the same way.
+  const outside = [
+    ...new Set([
+      ...touchedPaths(pr.files).filter(path => !ctx.auto.some(glob => matchPathGlob(glob, path))),
+      ...pr.files.filter(file => file.status === "removed").map(file => `${file.filename} (deleted)`),
+      ...pr.files.filter(file => file.previousFilename !== undefined).map(file => `${file.previousFilename} (deleted)`)
+    ])
+  ];
   if (outside.length > 0) {
-    return { kind: "hold", reason: "outside_auto_paths", outside: [...new Set(outside)], approvedBy };
+    return { kind: "hold", reason: "outside_auto_paths", outside, approvedBy };
   }
   return { kind: "auto", approvedBy };
 }

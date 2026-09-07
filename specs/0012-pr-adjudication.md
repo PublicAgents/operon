@@ -216,7 +216,11 @@ Reviews are the latest non-dismissed review per login. Then paths:
 every changed path, and for a rename BOTH `filename` and
 `previous_filename` (moving operator-owned code into a data path is
 not a data change), must match an `auto` glob for the verdict `auto`;
-otherwise the verdict is `hold` with the outside list. `matchPathGlob`
+otherwise the verdict is `hold` with the outside list. A deletion is
+never a data change: a removed file (GitHub status `removed`) and a
+rename's old side are always in the outside list, marked `(deleted)`,
+whatever their paths. Data is added and corrected by its owners;
+removing it is the operator's call. `matchPathGlob`
 is a tiny in-file matcher (`**` any segments, `*` within a segment),
 zero dependencies.
 

@@ -570,9 +570,10 @@ export async function getPullSnapshot(
     client,
     `/repos/${repo}/pulls/${number}/files`,
     page =>
-      (page as Array<{ filename: string; previous_filename?: string }>).map(file => ({
+      (page as Array<{ filename: string; previous_filename?: string; status?: string }>).map(file => ({
         filename: file.filename,
-        ...(file.previous_filename !== undefined ? { previousFilename: file.previous_filename } : {})
+        ...(file.previous_filename !== undefined ? { previousFilename: file.previous_filename } : {}),
+        ...(file.status !== undefined ? { status: file.status } : {})
       })),
     FILES_CAP
   );
