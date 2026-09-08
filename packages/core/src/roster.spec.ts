@@ -96,6 +96,85 @@ describe("findAgent", () => {
   });
 });
 
+describe("metered remote servers (spec 0014)", () => {
+  const search = {
+    type: "http",
+    url: "https://search.example/mcp",
+    auth: "bearer",
+    tools: ["web_search", "web_fetch"],
+    budget: { monthlyUsd: 120, perCall: { web_search: 0.02, web_fetch: 0.01 } }
+  };
+  const tasks = {
+    type: "http",
+    url: "https://tasks.example/mcp",
+    auth: "bearer",
+    tools: ["createDeepResearch", "getStatus", "getResultMarkdown"],
+    budget: { monthlyUsd: 80, perCall: { createDeepResearch: 2 }, free: ["getStatus", "getResultMarkdown"] },
+    webhook: {
+      createTools: ["createDeepResearch"],
+      argument: "webhook",
+      registration: { url: "{url}", event_types: "{events}" },
+      events: ["task_run.status"],
+      runIdPath: "run_id",
+      callbackRunIdPath: "data.run_id",
+      callbackEventPath: "type",
+      callbackIdPath: "id",
+      signature: { header: "X-Signature", scheme: "hmac-sha256-hex", timestampHeader: "X-Timestamp" }
+    }
+  };
+  function withMcp(mcp: Record<string, unknown>): string {
+    const roster = structuredClone(valid) as Record<string, unknown> & { agents: Array<Record<string, unknown>> };
+    roster.mcp = mcp;
+    roster.agents[0].mcp = Object.keys(mcp);
+    return JSON.stringify(roster);
+  }
+  const mutate = (base: Record<string, unknown>, edit: (def: Record<string, unknown>) => void): string => {
+    const def = JSON.parse(JSON.stringify(base)) as Record<string, unknown>;
+    edit(def);
+    return withMcp({ s: def });
+  };
+
+  it("parses a budget and a webhook block on a remote server", () => {
+    const parsed = parseRoster(withMcp({ search, tasks }));
+    const defs = parsed.mcp as Record<string, { budget?: unknown; webhook?: unknown }>;
+    expect(defs.search.budget).toEqual({ monthlyUsd: 120, perCall: { web_search: 0.02, web_fetch: 0.01 } });
+    expect(defs.tasks.webhook).toMatchObject({ createTools: ["createDeepResearch"], callbackIdPath: "id" });
+    expect(defs.tasks.budget).toMatchObject({ free: ["getStatus", "getResultMarkdown"] });
+  });
+
+  it("refuses a budget that cannot govern anything", () => {
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).monthlyUsd = 0)))).toThrowError(/positive/);
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).perCall = { web_search: -1 })))).toThrowError(/non-negative/);
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).free = ["web_search"])))).toThrowError(/priced or free, not both/);
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).weekly = 1)))).toThrowError(/not a budget field/);
+  });
+
+  it("refuses a webhook contract that cannot register, attribute or verify", () => {
+    const wh = (edit: (w: Record<string, unknown>) => void) => mutate(tasks, d => edit(d.webhook as Record<string, unknown>));
+    expect(() => parseRoster(wh(w => (w.createTools = ["nope"])))).toThrowError(/not one of this server's tools/);
+    expect(() => parseRoster(wh(w => (w.registration = { url: "https://fixed.example" })))).toThrowError(/\{url\}/);
+    expect(() => parseRoster(wh(w => (w.registration = { url: "prefix-{url}" })))).toThrowError(/exactly/);
+    // Prototype names are tool names here, nothing more.
+    // Built from JSON text on purpose: an object literal would set the prototype instead of a key.
+    const proto = mutate(search, d => ((d.budget as Record<string, unknown>).perCall = JSON.parse('{"constructor": 0.5, "__proto__": 0.1}')));
+    const parsedProto = parseRoster(proto).mcp as Record<string, { budget?: { perCall: Record<string, number> } }>;
+    expect(Object.hasOwn(parsedProto.s.budget?.perCall ?? {}, "constructor")).toBe(true);
+    expect(Object.hasOwn(parsedProto.s.budget?.perCall ?? {}, "__proto__")).toBe(true);
+    expect(parsedProto.s.budget?.perCall["__proto__"]).toBe(0.1);
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).free = ["constructor"])))).not.toThrow();
+    expect(() => parseRoster(wh(w => (w.callbackRunIdPath = "data/run id")))).toThrowError(/dotted path/);
+    expect(() => parseRoster(wh(w => ((w.signature as Record<string, unknown>).scheme = "md5")))).toThrowError(/mcp_webhook_scheme_unknown/);
+    expect(() => parseRoster(wh(w => delete w.callbackEventPath))).toThrowError(/callbackEventPath/);
+    expect(() => parseRoster(wh(w => (w.events = [])))).toThrowError(/at least one event/);
+  });
+
+  it("keeps budget and webhook off servers that cannot carry them", () => {
+    expect(() =>
+      parseRoster(withMcp({ local: { type: "stdio", command: "npx", args: ["-y", "some-mcp@1.2.3"], budget: { monthlyUsd: 1, perCall: {} } } }))
+    ).toThrowError(/not a stdio server field/);
+  });
+});
+
 describe("capability grants (spec 0008)", () => {
   const granted = () => {
     const roster = structuredClone(valid) as Record<string, unknown> & {
