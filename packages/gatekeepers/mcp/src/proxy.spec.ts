@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mockUpstream } from "./mock-upstream.js";
-import { createProxyServer, type ProxyGrant } from "./proxy.js";
+import { createProxyServer, type ProxyDeps, type ProxyGrant } from "./proxy.js";
 import { callUpstreamTool, listUpstreamTools, withUpstream } from "./upstream.js";
 
 /**
@@ -16,7 +16,8 @@ const OUTPUT = { type: "object", properties: { count: { type: "integer" } }, req
 async function throughProxy<T>(
   grant: ProxyGrant,
   tools: Parameters<typeof mockUpstream>[0]["tools"],
-  use: (client: Client, events: Array<[string, Record<string, unknown>]>) => Promise<T>
+  use: (client: Client, events: Array<[string, Record<string, unknown>]>) => Promise<T>,
+  hooks: Pick<ProxyDeps, "before" | "after"> = {}
 ): Promise<{ value: T; requests: ReturnType<typeof mockUpstream>["requests"] }> {
   const mock = mockUpstream({ revision: "stateless", tools });
   const events: Array<[string, Record<string, unknown>]> = [];
@@ -26,7 +27,8 @@ async function throughProxy<T>(
       call: (name, args) => callUpstreamTool(upstream, name, args),
       record: async (event, detail) => {
         events.push([event, detail]);
-      }
+      },
+      ...hooks
     });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await proxy.connect(serverSide);
@@ -120,5 +122,53 @@ describe("a call through the proxy", () => {
     );
     expect(value.events.map(([event]) => event)).toContain("mcp_tool_called");
     expect(value.result.isError).toBeFalsy();
+  });
+});
+
+describe("the meter's hooks around a call (spec 0014 §2)", () => {
+  it("reserves before the call, settles after an answer, and refuses by name before the network", async () => {
+    const seen: string[] = [];
+    const { value, requests } = await throughProxy(
+      BYO,
+      [{ name: "brief", structuredContent: { count: 1 }, result: { count: 1 } }],
+      async (client, events) => {
+        const ok = await client.callTool({ name: "brief", arguments: {} });
+        const refused = await client.callTool({ name: "brief", arguments: { second: true } });
+        return { ok, refused, events: [...events] };
+      },
+      {
+        before: async name => {
+          seen.push(`before:${name}`);
+          return seen.length === 1 ? { token: "r1" } : { refused: { code: "mcp_budget_exhausted", detail: "$0 of today's $1 remains" } };
+        },
+        after: async token => {
+          seen.push(`after:${token}`);
+        }
+      }
+    );
+    expect(value.ok.isError).toBeFalsy();
+    expect(value.refused.isError).toBe(true);
+    expect(JSON.stringify(value.refused.content)).toContain("mcp_budget_exhausted");
+    expect(seen).toEqual(["before:brief", "after:r1", "before:brief"]);
+    // The refused call never reached the upstream.
+    expect(requests.filter(r => (r.body as { method?: string })?.method === "tools/call")).toHaveLength(1);
+    expect(value.events.map(([event]) => event)).toEqual(["mcp_tool_called", "mcp_tool_refused"]);
+  });
+
+  it("a failed settle is accounting, never the call's verdict", async () => {
+    const { value } = await throughProxy(
+      BYO,
+      [{ name: "brief", structuredContent: { count: 1 }, result: { count: 1 } }],
+      async (client, events) => ({ result: await client.callTool({ name: "brief", arguments: {} }), events: [...events] }),
+      {
+        before: async () => ({ token: "r1" }),
+        after: async () => {
+          throw new Error("meter unavailable");
+        }
+      }
+    );
+    expect(value.result.isError).toBeFalsy();
+    expect(value.result.structuredContent).toEqual({ count: 1 });
+    expect(value.events.map(([event]) => event)).toEqual(["mcp_meter_settle_failed", "mcp_tool_called"]);
   });
 });

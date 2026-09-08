@@ -86,14 +86,14 @@ mcp:
   set so the sum is the vendor ceiling, stated in the manifests.
 - **Reserve before, settle after; ambiguous is billed.** The
   Gatekeeper reserves the price before it proxies the call and settles
-  it when the upstream answers. A reservation is refunded only when the
-  provider provably received nothing: the connection was refused, or
-  the request failed before its body was sent. Everything after the
-  body left keeps the reservation: a 401, 402 or 403 (the provider may
-  have processed the request before deciding to answer so), a
-  timeout, a lost or truncated answer, a response-boundary refusal, a
-  5xx. A reservation the proxy never settled or refunded (the Worker
-  died between the two) is not left open: every meter turn settles as
+  it whatever comes back: an answer, a 401, 402 or 403 (the provider
+  may have processed the request before deciding to answer so), a
+  timeout, a lost or truncated answer, a redirect or size refusal
+  after the body left, a 5xx. The Gatekeeper never refunds: past the
+  reservation the fetch API cannot tell an unsent body from a lost
+  answer, and a guess in the fleet's favour is how a ceiling is
+  exceeded. A reservation the proxy never settled (the Worker died
+  between the two) is not left open: every meter turn settles as
   spent any reservation older than the proxy's upstream deadline,
   ledgered `mcp_reservation_settled_stale`, so a stranded reservation
   counts exactly once, as the billed call it may have been, and never
@@ -247,12 +247,15 @@ chassis change, never an unverified webhook.
   before that day; a day's own calls never shrink it; it never exceeds
   the month's remainder and on the last day equals it. A month of
   daily spending to the allotment lands exactly on `monthlyUsd`.
-- A reservation is refunded only for a refused connection or an
-  unsent body; every answer after the body left, 4xx and 5xx alike,
-  and every lost answer, keeps it.
-- A reservation with no settle or refund by the upstream deadline is
-  settled as spent by the next meter turn, once; it never reduces the
-  allowance twice and is never refunded later.
+- A reservation is never refunded by the Gatekeeper: every answer,
+  4xx and 5xx alike, and every lost answer, keeps it; the operator's
+  reset is the only correction.
+- A reservation with no settle by the upstream deadline is settled as
+  spent by the next meter turn, once; it never reduces the allowance
+  twice. A reservation open across a day or month roll moves with the
+  day, and a reset keeps it: a call in flight is never erased.
+- A reset requires the operator's month-to-date figure, a finite
+  non-negative number; anything else is refused.
 - With a delivery id, a retried callback is delivered once whatever
   its timestamp; without one, a byte-identical repeat is delivered
   once. Two callbacks for one run under one event name with different

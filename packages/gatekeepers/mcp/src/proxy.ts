@@ -31,10 +31,25 @@ export interface ProxyGrant {
   pinned: string[];
 }
 
+/** A refusal the meter makes before the network (spec 0014 §2). */
+export interface MeterRefusal {
+  code: "mcp_budget_exhausted" | "mcp_tool_unpriced" | "mcp_audit_unavailable";
+  detail: string;
+}
+
 export interface ProxyDeps {
   tools: UpstreamTool[];
   call: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   record: (event: string, detail: Record<string, unknown>) => Promise<void>;
+  /**
+   * The meter, when the server carries a budget: `before` reserves the
+   * call's price (a token to settle) or refuses by name; `after` settles
+   * it once the upstream has answered or failed. Nothing is refunded
+   * here: past `before`, the fetch API cannot tell an unsent body from
+   * a lost answer, and an ambiguous call is billed (spec 0014 §2).
+   */
+  before?: (name: string) => Promise<{ token: string } | { refused: MeterRefusal }>;
+  after?: (token: string) => Promise<void>;
 }
 
 function failed(message: string): CallToolResult {
@@ -106,15 +121,62 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       });
       return failed(`mcp_tool_needs_grant: "${name}" is not granted on ${server.name}`);
     }
+    // Every audit row around the act is best effort: a ledger that
+    // refuses must not replace a named refusal with a protocol fault,
+    // nor a completed action's result with a failure.
+    const audit = async (event: string, detail: Record<string, unknown>) => {
+      try {
+        await deps.record(event, { server: server.name, tool: name, ...detail });
+      } catch (error) {
+        console.error(`mcp ${event} could not be ledgered`, error);
+      }
+    };
+    let token: string | undefined;
+    if (deps.before) {
+      const gate = await deps.before(name);
+      if ("refused" in gate) {
+        await audit("mcp_tool_refused", { code: gate.refused.code, detail: gate.refused.detail });
+        return failed(`${gate.refused.code}: ${gate.refused.detail}`);
+      }
+      token = gate.token;
+    }
+    // The settle after the call is accounting, never the call's
+    // verdict: a settle that fails is ledgered and left to the meter's
+    // stale sweep, and the mind still receives what the upstream said
+    // (a completed action reported as failed invites a retry it must
+    // not make).
+    const settle = async () => {
+      if (token === undefined || !deps.after) return;
+      try {
+        await deps.after(token);
+      } catch (error) {
+        // The diagnostic row is best effort too: neither the meter nor
+        // the ledger may stand between a completed action and its result.
+        try {
+          await deps.record("mcp_meter_settle_failed", {
+            server: server.name,
+            tool: name,
+            detail: error instanceof Error ? error.message : String(error)
+          });
+        } catch (recordError) {
+          console.error("mcp meter settle failed and could not be ledgered", recordError);
+        }
+      }
+    };
+    let result: unknown;
     try {
-      const result = await deps.call(name, args);
-      await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
-      return passthrough(result);
+      result = await deps.call(name, args);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      await deps.record("mcp_tool_failed", { server: server.name, tool: name, detail });
+      // Billed whatever failed (spec 0014 §2): a refusal, a redirect
+      // refused after the body left, a lost answer, all of it.
+      await settle();
+      await audit("mcp_tool_failed", { detail });
       return failed(detail);
     }
+    await settle();
+    await audit("mcp_tool_called", { mode: entry.mode });
+    return passthrough(result);
   });
 
   return proxy;
