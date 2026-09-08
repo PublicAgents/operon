@@ -102,7 +102,12 @@ export class Ops extends OpsEntrypoint<Env> {
       const roster = parseRoster(this.env.ROSTER);
       const budget = (roster.mcp?.[body.value.server] as { budget?: McpBudget } | undefined)?.budget;
       if (!budget) return errorResponse(404, "mcp_not_budgeted", `"${body.value.server}" carries no budget`);
-      const spent = typeof body.value.spentMonthUsd === "number" && body.value.spentMonthUsd >= 0 ? body.value.spentMonthUsd : 0;
+      // The operator's figure is required and must be a real amount: a
+      // reset that "forgot" the month's spend would hand out capacity.
+      const spent = body.value.spentMonthUsd;
+      if (typeof spent !== "number" || !Number.isFinite(spent) || spent < 0) {
+        return errorResponse(400, "invalid_request", "spentMonthUsd must be a non-negative number, the vendor dashboard's month-to-date figure");
+      }
       const remaining = await meter(this.env, body.value.server).reset(spent, budget.monthlyUsd, new Date().toISOString());
       await ledger(this.env).append("mcp_budget_reset", { server: body.value.server, spentMonthUsd: spent });
       return json({ ok: true, server: body.value.server, remaining });
@@ -238,10 +243,9 @@ function meterHooks(env: Env, agentId: string, server: string, budget: McpBudget
       await ledger(env).append("mcp_metered", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
       return { token: id };
     },
-    after: async (token: string, outcome: "answered" | "unreachable"): Promise<void> => {
+    after: async (token: string): Promise<void> => {
       if (token === "") return;
-      if (outcome === "unreachable") await meter(env, server).refund(token);
-      else await meter(env, server).settle(token);
+      await meter(env, server).settle(token);
     }
   };
 }

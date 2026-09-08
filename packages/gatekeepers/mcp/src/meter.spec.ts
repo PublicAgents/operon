@@ -76,6 +76,22 @@ describe("the meter (spec 0014 §2)", () => {
     expect((await store.remaining(MONTHLY, "2026-10-01T00:00:01.000Z")).remaining.allotmentTodayUsd).toBeCloseTo(30 / 31, 6);
   });
 
+  it("keeps an open reservation across a day roll and a reset, and settles it once", async () => {
+    const store = new MeterStore(memory());
+    await store.remaining(MONTHLY, DAY1);
+    expect((await reserve(store, "late", 0.5, "2026-09-01T23:58:30.000Z")).ok).toBe(true);
+    // Three minutes later it is a new day, and the reservation is still young: it is today's spend, not yesterday's.
+    const rolled = await store.remaining(MONTHLY, "2026-09-02T00:01:00.000Z");
+    expect(rolled.remaining.spentMonthUsd).toBe(0.5);
+    expect(rolled.remaining.spentTodayUsd).toBe(0.5);
+    // A reset keeps it counted.
+    const reset = await store.reset(3, MONTHLY, "2026-09-02T00:02:00.000Z");
+    expect(reset.spentTodayUsd).toBe(0.5);
+    expect(reset.spentMonthUsd).toBe(3.5);
+    expect(await store.settle("late")).toBe(true);
+    expect((await store.remaining(MONTHLY, "2026-09-02T00:03:00.000Z")).remaining.spentMonthUsd).toBe(3.5);
+  });
+
   it("refunds only what it is told to, and settles a stale reservation as spent once", async () => {
     const store = new MeterStore(memory());
     expect((await reserve(store, "a", 0.5, DAY1)).ok).toBe(true);

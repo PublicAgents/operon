@@ -141,15 +141,15 @@ describe("the meter's hooks around a call (spec 0014 §2)", () => {
           seen.push(`before:${name}`);
           return seen.length === 1 ? { token: "r1" } : { refused: { code: "mcp_budget_exhausted", detail: "$0 of today's $1 remains" } };
         },
-        after: async (token, outcome) => {
-          seen.push(`after:${token}:${outcome}`);
+        after: async token => {
+          seen.push(`after:${token}`);
         }
       }
     );
     expect(value.ok.isError).toBeFalsy();
     expect(value.refused.isError).toBe(true);
     expect(JSON.stringify(value.refused.content)).toContain("mcp_budget_exhausted");
-    expect(seen).toEqual(["before:brief", "after:r1:answered", "before:brief"]);
+    expect(seen).toEqual(["before:brief", "after:r1", "before:brief"]);
     // The refused call never reached the upstream.
     expect(requests.filter(r => (r.body as { method?: string })?.method === "tools/call")).toHaveLength(1);
     expect(value.events.map(([event]) => event)).toEqual(["mcp_tool_called", "mcp_tool_refused"]);

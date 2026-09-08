@@ -10,8 +10,11 @@
  * the first call of each UTC day the day's allotment is fixed from
  * the spend BEFORE that day, so the day's own calls never shrink its
  * share. A call reserves its price before the upstream is called and
- * settles or refunds after; a reservation nobody settled by the
- * upstream deadline is settled as spent by the next turn, once.
+ * settles after; the Gatekeeper never refunds (an ambiguous call is
+ * billed), and a reservation nobody settled by the upstream deadline
+ * is settled as spent by the next turn, once. `refund` exists for a
+ * caller that KNOWS nothing was sent, and no caller in the chassis
+ * claims to.
  */
 
 export interface KeyValueStorage {
@@ -125,14 +128,18 @@ export class MeterStore {
         next = { ...next, reservations: rest };
       }
     }
+    // Reservations still open at a roll (younger than the stale bound)
+    // move with the day: their price leaves the folded figure and
+    // starts the new day's spend, so a later settle or refund finds
+    // its price where the counters say it is.
+    const openUsd = round(Object.values(next.reservations).reduce((sum, r) => sum + r.usd, 0));
     if (next.month !== month) {
-      // A new month: nothing carried but open reservations (still today's
-      // when they were made, and settled or refunded on their own).
-      next = { ...next, month, spentBeforeTodayUsd: 0, day, allotmentTodayUsd: 0, spentTodayUsd: 0 };
+      // A new month starts over; only the open reservations carry.
+      next = { ...next, month, spentBeforeTodayUsd: 0, day, allotmentTodayUsd: 0, spentTodayUsd: openUsd };
       next.allotmentTodayUsd = round(monthlyUsd / daysLeftIncludingToday(day));
     } else if (next.day !== day) {
-      const spentBefore = round(next.spentBeforeTodayUsd + next.spentTodayUsd);
-      next = { ...next, spentBeforeTodayUsd: spentBefore, day, spentTodayUsd: 0 };
+      const spentBefore = round(Math.max(0, next.spentBeforeTodayUsd + next.spentTodayUsd - openUsd));
+      next = { ...next, spentBeforeTodayUsd: spentBefore, day, spentTodayUsd: openUsd };
       next.allotmentTodayUsd = round(Math.max(0, monthlyUsd - spentBefore) / daysLeftIncludingToday(day));
     } else if (state === undefined) {
       next.allotmentTodayUsd = round(monthlyUsd / daysLeftIncludingToday(day));
@@ -209,18 +216,25 @@ export class MeterStore {
     return true;
   }
 
-  /** The operator read the vendor's dashboard: the month starts over from this figure. */
+  /**
+   * The operator read the vendor's dashboard: the month starts over
+   * from this figure. Reservations still open (a call between reserve
+   * and settle) are kept and counted as today's spend, so a call in
+   * flight is never erased by a reset.
+   */
   async reset(spentMonthUsd: number, monthlyUsd: number, at: string): Promise<Remaining> {
+    const { state: rolled } = this.roll(await this.load(), monthlyUsd, at);
     const month = monthOf(at);
     const day = dayOf(at);
     const spentBefore = round(Math.max(0, spentMonthUsd));
+    const openUsd = round(Object.values(rolled.reservations).reduce((sum, r) => sum + r.usd, 0));
     const state: MeterState = {
       month,
       spentBeforeTodayUsd: spentBefore,
       day,
       allotmentTodayUsd: round(Math.max(0, monthlyUsd - spentBefore) / daysLeftIncludingToday(day)),
-      spentTodayUsd: 0,
-      reservations: {}
+      spentTodayUsd: openUsd,
+      reservations: rolled.reservations
     };
     await this.save(state);
     return this.describe(state, monthlyUsd);

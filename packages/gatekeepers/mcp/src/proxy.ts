@@ -44,10 +44,12 @@ export interface ProxyDeps {
   /**
    * The meter, when the server carries a budget: `before` reserves the
    * call's price (a token to settle) or refuses by name; `after` settles
-   * or refunds it once the upstream has answered or failed.
+   * it once the upstream has answered or failed. Nothing is refunded
+   * here: past `before`, the fetch API cannot tell an unsent body from
+   * a lost answer, and an ambiguous call is billed (spec 0014 §2).
    */
   before?: (name: string) => Promise<{ token: string } | { refused: MeterRefusal }>;
-  after?: (token: string, outcome: "answered" | "unreachable") => Promise<void>;
+  after?: (token: string) => Promise<void>;
 }
 
 function failed(message: string): CallToolResult {
@@ -130,16 +132,14 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
     }
     try {
       const result = await deps.call(name, args);
-      if (token !== undefined && deps.after) await deps.after(token, "answered");
+      if (token !== undefined && deps.after) await deps.after(token);
       await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
       return passthrough(result);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      // Only a provably unsent call is refunded (spec 0014 §2): a
-      // connection that never carried the body. Anything after the body
-      // left, an upstream refusal included, stays billed.
-      const unreachable = error instanceof Error && error.name === "UpstreamError" && (error as { code?: string }).code === "mcp_upstream_unreachable";
-      if (token !== undefined && deps.after) await deps.after(token, unreachable ? "unreachable" : "answered");
+      // Billed whatever failed (spec 0014 §2): a refusal, a redirect
+      // refused after the body left, a lost answer, all of it.
+      if (token !== undefined && deps.after) await deps.after(token);
       await deps.record("mcp_tool_failed", { server: server.name, tool: name, detail });
       return failed(detail);
     }
