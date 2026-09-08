@@ -130,19 +130,37 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       }
       token = gate.token;
     }
+    // The settle after the call is accounting, never the call's
+    // verdict: a settle that fails is ledgered and left to the meter's
+    // stale sweep, and the mind still receives what the upstream said
+    // (a completed action reported as failed invites a retry it must
+    // not make).
+    const settle = async () => {
+      if (token === undefined || !deps.after) return;
+      try {
+        await deps.after(token);
+      } catch (error) {
+        await deps.record("mcp_meter_settle_failed", {
+          server: server.name,
+          tool: name,
+          detail: error instanceof Error ? error.message : String(error)
+        });
+      }
+    };
+    let result: unknown;
     try {
-      const result = await deps.call(name, args);
-      if (token !== undefined && deps.after) await deps.after(token);
-      await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
-      return passthrough(result);
+      result = await deps.call(name, args);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       // Billed whatever failed (spec 0014 §2): a refusal, a redirect
       // refused after the body left, a lost answer, all of it.
-      if (token !== undefined && deps.after) await deps.after(token);
+      await settle();
       await deps.record("mcp_tool_failed", { server: server.name, tool: name, detail });
       return failed(detail);
     }
+    await settle();
+    await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
+    return passthrough(result);
   });
 
   return proxy;

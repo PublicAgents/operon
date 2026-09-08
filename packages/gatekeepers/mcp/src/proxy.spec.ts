@@ -154,4 +154,21 @@ describe("the meter's hooks around a call (spec 0014 §2)", () => {
     expect(requests.filter(r => (r.body as { method?: string })?.method === "tools/call")).toHaveLength(1);
     expect(value.events.map(([event]) => event)).toEqual(["mcp_tool_called", "mcp_tool_refused"]);
   });
+
+  it("a failed settle is accounting, never the call's verdict", async () => {
+    const { value } = await throughProxy(
+      BYO,
+      [{ name: "brief", structuredContent: { count: 1 }, result: { count: 1 } }],
+      async (client, events) => ({ result: await client.callTool({ name: "brief", arguments: {} }), events: [...events] }),
+      {
+        before: async () => ({ token: "r1" }),
+        after: async () => {
+          throw new Error("meter unavailable");
+        }
+      }
+    );
+    expect(value.result.isError).toBeFalsy();
+    expect(value.result.structuredContent).toEqual({ count: 1 });
+    expect(value.events.map(([event]) => event)).toEqual(["mcp_meter_settle_failed", "mcp_tool_called"]);
+  });
 });
