@@ -48,7 +48,10 @@ mcp:
       free: [getStatus, getResultMarkdown]  # reads that cost nothing; named, never assumed
     webhook:                             # the provider's contract, named here, never in code
       createTools: [createDeepResearch, createTaskGroup]
-      argument: webhook                  # the create call's parameter that takes {url, event_types}
+      argument: webhook                  # the create call's parameter the registration goes into
+      registration:                      # the provider's shape, with {url} and {events} filled by the Gatekeeper
+        url: "{url}"
+        event_types: "{events}"
       events: [task_run.status]
       runIdPath: run_id                  # where the create result carries the run id (dotted path)
       callbackRunIdPath: data.run_id     # where the callback body carries it
@@ -114,8 +117,12 @@ the sender proves. This spec adds one host of the same kind:
 `POST /webhook/<server>` for servers that declare a `webhook` block.
 The block is the provider's contract, stated by the operator in the
 manifest: which tools create runs, the argument that takes the
-callback, the events, where the run id sits in the create result, and
-how the signature is made. The Gatekeeper implements a small set of
+registration and the provider's shape for it (`registration`, a JSON
+template in which `{url}` and `{events}` are the only substitutions),
+the events, where the run id sits in the create result
+(`runIdPath`), where the run id and the event sit in a callback body
+(`callbackRunIdPath`, `callbackEventPath`), and how the signature is
+made. The Gatekeeper implements a small set of
 signature schemes by name and refuses an unknown one at validation
 (`mcp_webhook_scheme_unknown`); a provider that fits none of them is a
 chassis change, never an unverified webhook.
@@ -126,10 +133,12 @@ chassis change, never an unverified webhook.
   named), compared in constant time; an unverified request is
   `401 mcp_webhook_unverified` and ledgered with the source address,
   never read further. A timestamp older than five minutes is refused
-  the same way (replay). The Gatekeeper injects the public URL and the
-  events into each `createTools` call's `argument` before proxying it,
-  overwriting whatever the mind passed there, so a mind never chooses
-  the URL and never learns the secret.
+  the same way (replay). The Gatekeeper fills the `registration`
+  template with the public URL and the events and sets it as each
+  `createTools` call's `argument` before proxying, overwriting whatever
+  the mind passed there, so a mind never chooses the URL and never
+  learns the secret. A provider whose registration is not a JSON
+  argument of the create call is a chassis change.
 - **Attributed at creation, matched at callback.** Before a
   `createTools` call is proxied, the Gatekeeper records an open create
   `{agentId, server, tool, at}`; when the result arrives it reads the
@@ -141,21 +150,25 @@ chassis change, never an unverified webhook.
   verified callback is read at `callbackRunIdPath` and
   `callbackEventPath`; a body with no value at either path is
   `mcp_webhook_unreadable`, ledgered with the path names, kept for the
-  operator (below). A callback for a run nobody recorded is matched to
-  an open create when exactly one agent holds an open create for that
-  server younger than 24 hours; otherwise it is `mcp_webhook_unknown_run`,
-  ledgered, and kept for the operator: the plane's `mcp_budgets` lists
-  unattributed results and `mcp_result_assign` (a decision) hands one
-  to an agent. Nothing a vendor billed for is dropped.
+  operator (below). A callback for a run nobody recorded is never
+  guessed to an agent: it is `mcp_webhook_unknown_run`, ledgered, and
+  kept for the operator, with the open creates for that server listed
+  beside it (agent, tool, time) as the evidence for a decision. The
+  plane's `mcp_budgets` lists unattributed results and
+  `mcp_result_assign` (a decision, audited) hands one to a named
+  agent's inbox. An agent's result never crosses to another agent
+  without the operator's act. Nothing a vendor billed for is dropped.
 - **Every distinct callback is delivered, once.** Callbacks are
   deduplicated by `(run id, sha256 of the body)`, never by event name:
   a provider that reports several transitions under one event type
-  delivers each of them. They are stored in arrival order and pulled
-  as `inbox/mcp/<server>/<run id>/<n>.md`; a byte-identical repeat is
-  acknowledged without a second delivery.
+  delivers each of them. They are stored in arrival order, numbered,
+  and pulled to the same numbered paths, `inbox/mcp/<server>/<run
+  id>/<n>.md`, one file per callback, never merged; a byte-identical
+  repeat is acknowledged without a second delivery.
 - **Delivered at the next wake, as inbox content.** The verified
   payload is stored for the agent and pulled by the container at wake
-  start into `inbox/mcp/<server>/<run id>.md`, through the same
+  start into `inbox/mcp/<server>/<run id>/<n>.md`, one file per
+  callback, through the same
   sanitizing pull the email inbox uses (spec 0001: inbound is data,
   swept, chassis-written). The wake-start summary says `N task
   results landed in inbox/mcp/`. The mind may also poll the server's
@@ -168,8 +181,10 @@ chassis change, never an unverified webhook.
   `portal` defs; `budget.monthlyUsd` positive, `perCall` prices
   non-negative, `free` names disjoint from `perCall`; `webhook`
   requires `createTools` (each a known tool of the def), `argument`,
-  `events`, `runIdPath`, `callbackRunIdPath`, `callbackEventPath` and
-  a `signature` with a known `scheme`; a
+  `registration` (a JSON value whose strings may carry `{url}` and
+  `{events}`, and `{url}` must appear), `events`, `runIdPath`,
+  `callbackRunIdPath`, `callbackEventPath` and a `signature` with a
+  known `scheme`; a
   webhook block without a budget is allowed (metering and answering
   are separate facts). Unknown keys refuse by name.
 - **gatekeeper-mcp**: a `Meter` Durable Object per server holding
@@ -219,9 +234,9 @@ chassis change, never an unverified webhook.
 - A byte-identical repeated webhook is delivered once; two callbacks
   for one run under one event name with different bodies are both
   delivered, in order.
-- A callback that arrives after a lost create response reaches the one
-  agent with an open create for that server, or the operator, never
-  the floor.
+- A callback that arrives after a lost create response reaches the
+  operator with the open creates beside it, never another agent and
+  never the floor.
 - Two agents calling at once cannot both take the last cent (the
   meter is one Durable Object turn).
 - The secret and the webhook URL never appear in a tool result, a
