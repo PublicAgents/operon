@@ -91,7 +91,12 @@ mcp:
   body left keeps the reservation: a 401, 402 or 403 (the provider may
   have processed the request before deciding to answer so), a
   timeout, a lost or truncated answer, a response-boundary refusal, a
-  5xx. The meter therefore never undercounts; it can only overcount,
+  5xx. A reservation the proxy never settled or refunded (the Worker
+  died between the two) is not left open: every meter turn settles as
+  spent any reservation older than the proxy's upstream deadline,
+  ledgered `mcp_reservation_settled_stale`, so a stranded reservation
+  counts exactly once, as the billed call it may have been, and never
+  again. The meter therefore never undercounts; it can only overcount,
   and the operator's `mcp_budget_reset` is the correction after
   reading the vendor's dashboard. The spend door's outbox pattern (spec 0002
   §2.2), not "call then count".
@@ -209,7 +214,8 @@ chassis change, never an unverified webhook.
   MCP), a budgets block on the fleet page: month spent, today
   remaining, last refusal.
 - **ledger**: `mcp_metered {agentId, server, tool, usd, remainingTodayUsd}`,
-  `mcp_budget_exhausted`, `mcp_tool_unpriced`, `mcp_webhook_received`,
+  `mcp_budget_exhausted`, `mcp_tool_unpriced`,
+  `mcp_reservation_settled_stale`, `mcp_webhook_received`,
   `mcp_webhook_unverified`, `mcp_webhook_unreadable`,
   `mcp_webhook_unknown_run`, `mcp_webhook_run_unattributed`.
 
@@ -231,6 +237,9 @@ chassis change, never an unverified webhook.
 - A reservation is refunded only for a refused connection or an
   unsent body; every answer after the body left, 4xx and 5xx alike,
   and every lost answer, keeps it.
+- A reservation with no settle or refund by the upstream deadline is
+  settled as spent by the next meter turn, once; it never reduces the
+  allowance twice and is never refunded later.
 - A byte-identical repeated webhook is delivered once; two callbacks
   for one run under one event name with different bodies are both
   delivered, in order.
