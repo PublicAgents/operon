@@ -12,6 +12,9 @@ import {
 function roster(agents: Array<Record<string, unknown>>): string {
   return JSON.stringify({
     zone: "demo-colony.com",
+    // These tests are about grants; the reference registry's default
+    // grant (spec 0013) has its own tests.
+    registry: false,
     agents: agents.map(agent => ({
       stateRepo: "demo/state",
       cadence: "0 6 * * *",

@@ -240,6 +240,10 @@ describe("capability grants (spec 0008)", () => {
     expect(withRepo(["publicagents/public-agents"], "PublicAgents/public-agents")).toEqual(["publicagents/public-agents"]);
     expect(withRepo(["org/other"], "PublicAgents/public-agents")).toEqual(["org/other", "PublicAgents/public-agents"]);
     expect(registryPrRepo({ registry: undefined }, parsed.agents[0])).toBeUndefined();
+    // Absence means the reference registry; false means none.
+    const bare = granted();
+    delete (bare as { registry?: unknown }).registry;
+    expect(parseRoster(JSON.stringify(bare)).registry).toEqual({ site: "https://public-agents.com", repo: "PublicAgents/public-agents" });
     // An adjudicator gets no default grant, but an explicit listing beside its
     // adjudication grant is the operator's decision and parses; the doors keep
     // the verbs apart at the act.

@@ -638,9 +638,20 @@ export function parseRoster(json: string): Roster {
 
 const REGISTRY_KEYS = new Set(["site", "repo"]);
 
-/** `registry: false` and absence both mean no registry; an object names one. */
+/**
+ * The reference registry (spec 0013 §2): every agent on the chassis is
+ * told to keep an entry there unless the colony says `registry: false`.
+ * Its SKILL.md went live on 2026-09-08; this default shipped after.
+ */
+export const DEFAULT_REGISTRY: Readonly<RegistryPin> = Object.freeze({
+  site: "https://public-agents.com",
+  repo: "PublicAgents/public-agents"
+});
+
+/** Absence means the reference registry; `registry: false` means none; an object names one. */
 function parseRegistry(value: unknown): RegistryPin | undefined {
-  if (value === undefined || value === false) return undefined;
+  if (value === undefined) return { ...DEFAULT_REGISTRY };
+  if (value === false) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail("registry", "must be false or an object {site, repo}");
   }
