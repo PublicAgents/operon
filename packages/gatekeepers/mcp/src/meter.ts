@@ -54,6 +54,8 @@ export interface Remaining {
   allotmentTodayUsd: number;
   spentTodayUsd: number;
   remainingTodayUsd: number;
+  /** Reserved but not yet settled: calls in flight, counted in the figures above. */
+  openReservationsUsd: number;
   /** When today's allotment rolls over: the next UTC midnight. */
   resetsAt: string;
 }
@@ -157,6 +159,7 @@ export class MeterStore {
       allotmentTodayUsd: state.allotmentTodayUsd,
       spentTodayUsd: state.spentTodayUsd,
       remainingTodayUsd: round(Math.max(0, state.allotmentTodayUsd - state.spentTodayUsd)),
+      openReservationsUsd: round(Object.values(state.reservations).reduce((sum, r) => sum + r.usd, 0)),
       resetsAt: nextMidnight(state.day)
     };
   }
@@ -219,8 +222,11 @@ export class MeterStore {
   /**
    * The operator read the vendor's dashboard: the month starts over
    * from this figure. Reservations still open (a call between reserve
-   * and settle) are kept and counted as today's spend, so a call in
-   * flight is never erased by a reset.
+   * and settle) are kept and counted as today's spend on top of it, so
+   * a call in flight is never erased by a reset. When the vendor's
+   * figure already includes such a call, it is counted twice until it
+   * settles: the safe direction, and `openReservationsUsd` in the
+   * answer says by how much, so the operator can subtract it.
    */
   async reset(spentMonthUsd: number, monthlyUsd: number, at: string): Promise<Remaining> {
     const { state: rolled } = this.roll(await this.load(), monthlyUsd, at);

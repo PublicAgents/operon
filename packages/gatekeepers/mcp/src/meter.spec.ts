@@ -88,6 +88,8 @@ describe("the meter (spec 0014 §2)", () => {
     const reset = await store.reset(3, MONTHLY, "2026-09-02T00:02:00.000Z");
     expect(reset.spentTodayUsd).toBe(0.5);
     expect(reset.spentMonthUsd).toBe(3.5);
+    // The in-flight call is named, so an operator whose figure included it can subtract it.
+    expect(reset.openReservationsUsd).toBe(0.5);
     expect(await store.settle("late")).toBe(true);
     expect((await store.remaining(MONTHLY, "2026-09-02T00:03:00.000Z")).remaining.spentMonthUsd).toBe(3.5);
   });
