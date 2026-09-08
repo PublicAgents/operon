@@ -353,9 +353,19 @@ export default {
         message.setReject("No such mailbox");
         return;
       }
+      // Awaited, not backgrounded: a forward that fails (an address
+      // Cloudflare has not verified yet) bounces the mail to its sender
+      // rather than losing it in a log line.
+      let delivered = 0;
       for (const to of operators) {
-        ctx.waitUntil(message.forward(to).catch(err => console.error("operator forward failed", err)));
+        try {
+          await message.forward(to);
+          delivered += 1;
+        } catch (err) {
+          console.error("operator forward failed", err);
+        }
       }
+      if (delivered === 0) message.setReject("Mailbox unavailable");
       return;
     }
     const parsed = await PostalMime.parse(message.raw);

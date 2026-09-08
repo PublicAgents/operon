@@ -403,6 +403,7 @@ if (!apiToken || !zoneId) {
   }
 
   const wanted = manifest.forwardAgentEmailsTo ?? [];
+  let verifiedCount = 0;
   if (wanted.length === 0) {
     needYou("the manifest has no forwardAgentEmailsTo: mail to any address that is not an agent's will bounce");
   } else {
@@ -413,8 +414,12 @@ if (!apiToken || !zoneId) {
         found = await api("POST", `/accounts/${manifest.accountId}/email/routing/addresses`, { email });
         created(`destination address ${email} (a verification mail is on its way; click it, then re-run)`);
       }
-      if (found.verified) present(`destination address ${email} verified`);
-      else needYou(`verify the destination address ${email} (the mail Cloudflare sent): until then the Gatekeeper cannot forward there`);
+      if (found.verified) {
+        verifiedCount += 1;
+        present(`destination address ${email} verified`);
+      } else {
+        needYou(`verify the destination address ${email} (the mail Cloudflare sent): until then the Gatekeeper cannot forward there`);
+      }
     }
   }
 
@@ -425,6 +430,10 @@ if (!apiToken || !zoneId) {
     (catchAll.actions ?? []).some(action => action.type === "worker" && (action.value ?? []).includes(emailWorker));
   if (routed) {
     present(`catch-all → ${emailWorker}`);
+  } else if (wanted.length > 0 && verifiedCount === 0) {
+    // Pointing the catch-all at the Gatekeeper before any operator
+    // address is verified would bounce every non-agent mail meanwhile.
+    needYou(`the catch-all stays as it is until one of ${wanted.join(", ")} is verified; then re-run`);
   } else if (!deployed && (await workerExists(emailWorker)) !== true) {
     needYou(`the catch-all rule needs the Worker ${emailWorker} to exist: deploy, then re-run`);
   } else {
