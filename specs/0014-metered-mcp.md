@@ -157,9 +157,10 @@ chassis change, never an unverified webhook.
   wrong path is visible on the first call. A lost create response
   (the reservation is kept, §2) leaves the open create open. A
   verified callback is read at `callbackRunIdPath` and
-  `callbackEventPath`; a body with no value at either path is
+  `callbackEventPath`, and at `callbackIdPath` when the block names
+  one; a body with no value at any named path is
   `mcp_webhook_unreadable`, ledgered with the path names, kept for the
-  operator (below). A callback for a run nobody recorded is never
+  operator (below), never deduplicated against anything. A callback for a run nobody recorded is never
   guessed to an agent: it is `mcp_webhook_unknown_run`, ledgered, and
   kept for the operator, with the open creates for that server listed
   beside it (agent, tool, time) as the evidence for a decision. The
@@ -219,7 +220,7 @@ chassis change, never an unverified webhook.
   REGISTRY-style help lines in the MCP section, `operon mcp budget`,
   the inbox pull extended to `inbox/mcp/`.
 - **fleet**: the `hooks.<zone>` custom domain rendered only when some
-  server declares `webhook: true`; the secrets checklist names
+  server declares a `webhook` block; the secrets checklist names
   `MCP_<NAME>_WEBHOOK_SECRET` beside `MCP_<NAME>_TOKEN`.
 - **ops-tools, console**: `mcp_budgets` on the registry (UI = API =
   MCP), a budgets block on the fleet page: month spent, today
