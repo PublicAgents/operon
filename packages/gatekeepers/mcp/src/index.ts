@@ -109,11 +109,22 @@ export class Ops extends OpsEntrypoint<Env> {
         return errorResponse(400, "invalid_request", "spentMonthUsd must be a non-negative number, the vendor dashboard's month-to-date figure");
       }
       const { remaining, staleSettled } = await meter(this.env, body.value.server).reset(spent, budget.monthlyUsd, new Date().toISOString());
+      // The reset is committed above; the rows after it are best effort
+      // and their failure is reported beside the result, never as it.
+      const unrecorded: string[] = [];
       for (const stale of staleSettled) {
-        await ledger(this.env).append("mcp_reservation_settled_stale", { agentId: stale.agentId, server: body.value.server, tool: stale.tool, usd: stale.usd });
+        try {
+          await ledger(this.env).append("mcp_reservation_settled_stale", { agentId: stale.agentId, server: body.value.server, tool: stale.tool, usd: stale.usd });
+        } catch {
+          unrecorded.push(`mcp_reservation_settled_stale ${stale.id}`);
+        }
       }
-      await ledger(this.env).append("mcp_budget_reset", { server: body.value.server, spentMonthUsd: spent, openReservationsUsd: remaining.openReservationsUsd });
-      return json({ ok: true, server: body.value.server, remaining });
+      try {
+        await ledger(this.env).append("mcp_budget_reset", { server: body.value.server, spentMonthUsd: spent, openReservationsUsd: remaining.openReservationsUsd });
+      } catch {
+        unrecorded.push("mcp_budget_reset");
+      }
+      return json({ ok: true, server: body.value.server, remaining, ...(unrecorded.length > 0 ? { unrecorded } : {}) });
     }
     return errorResponse(404, "not_found");
   }
@@ -259,7 +270,14 @@ function meterHooks(env: Env, agentId: string, server: string, budget: McpBudget
       try {
         await ledger(env).append("mcp_metered", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
       } catch (error) {
-        await meter(env, server).refund(id);
+        // The refund is best effort as well: if it fails, the stale
+        // sweep settles the reservation (an overcount by one call, the
+        // safe direction), and the refusal still says why.
+        try {
+          await meter(env, server).refund(id);
+        } catch (refundError) {
+          console.error("mcp reservation could not be refunded after an audit failure", refundError);
+        }
         return { refused: { code: "mcp_audit_unavailable", detail: `the spend could not be recorded, so the call was not made: ${error instanceof Error ? error.message : String(error)}` } };
       }
       return { token: id };
