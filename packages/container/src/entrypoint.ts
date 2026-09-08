@@ -1,3 +1,4 @@
+import { budgetLine, readMcpBudgets, type McpBudgetView } from "./mcp-budget.js";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile, copyFile, readFile, chmod } from "node:fs/promises";
 import { chromeMajorFrom, LOCAL_BROWSER_EXECUTABLE, LOCAL_BROWSER_OUTPUT_DIR, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
@@ -179,7 +180,8 @@ async function stageHarness(
   adapter: HarnessAdapter,
   config: WakeConfig,
   porchUrl: string,
-  proxyUrl?: string
+  proxyUrl?: string,
+  budgets?: { refresh(): Promise<McpBudgetView[]> }
 ): Promise<StagedHarness> {
   const hasBrowser = Boolean(config.webUrl && config.webToken);
   for (const line of mcpStagingLines(config.mcpServers, hasBrowser, config.localBrowser)) log(line);
@@ -187,6 +189,9 @@ async function stageHarness(
   // not know the agent's chosen handle or whether an entry exists, so
   // it names the site and nothing more.
   log(config.registry ? `registry: ${config.registry.site} (${config.registry.repo})` : "registry: off");
+  // The metered servers' remaining figures (spec 0014 §2), so the
+  // first thing the mind reads is a number it can plan against.
+  if (budgets && config.mcpServers.some(server => server.type === "http")) log(budgetLine(await budgets.refresh()));
   let chromeMajor: number | undefined;
   if (config.localBrowser) {
     // Screenshots and downloads land here, outside the state repo,
@@ -1000,10 +1005,21 @@ async function main(): Promise<number> {
 
   // The porch opens before the session and closes after it: the wake's
   // doors exist exactly while a mind is awake to use them.
+  // The metered MCP servers' budgets (spec 0014 §2): read once at wake
+  // start for the capabilities and the help, and again on demand.
+  const budgetCache: { views: McpBudgetView[] } = { views: [] };
+  const mcpBudgets = {
+    current: () => budgetCache.views,
+    refresh: async () => {
+      budgetCache.views = await readMcpBudgets(config.mcpServers, config.mcpToken);
+      return budgetCache.views;
+    }
+  };
   const porch = new Porch({
     config,
     stateDir: STATE_DIR,
     denylist,
+    mcpBudgets,
     refreshDenylist: async () => {
       await credentialWatch?.refresh();
     },
@@ -1101,7 +1117,7 @@ async function main(): Promise<number> {
   let sessionExit: number;
   let usage: WakeUsage | undefined;
   try {
-    const staged = await stageHarness(adapter, config, porchUrl, proxy?.url);
+    const staged = await stageHarness(adapter, config, porchUrl, proxy?.url, mcpBudgets);
     const verified = await verifyModel(adapter, config, staged);
     probedModel = verified.degraded
       ? `${verified.answer} (DEGRADED: pinned ${config.model} unavailable)`

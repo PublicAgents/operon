@@ -1,3 +1,4 @@
+import type { McpBudgetView } from "./mcp-budget.js";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { handleWebUpgrade } from "./web-relay.js";
@@ -89,6 +90,11 @@ export interface PorchContext {
   recreditAnnouncements?(counts: Announcements): void;
   /** This colony's ask ceilings, for the living guide (spec 0007 §3). */
   askLimits?: AskLimits;
+  /**
+   * The budgets of this wake's metered MCP servers (spec 0014 §2):
+   * what was read at wake start, and a fresh read on demand.
+   */
+  mcpBudgets?: { current(): McpBudgetView[]; refresh(): Promise<McpBudgetView[]> };
 }
 
 /** What one pull found: counts the mind can act on, not a status dump. */
@@ -140,7 +146,7 @@ export function prRepos(config: WakeConfig): string[] {
   return config.githubGrants ? config.githubGrants.pr : config.prRepos;
 }
 
-export function capabilities(config: WakeConfig): Record<string, unknown> {
+export function capabilities(config: WakeConfig, extra: { mcpBudgets?: McpBudgetView[] } = {}): Record<string, unknown> {
   return {
     notify: Boolean(config.notifyUrl && config.notifyToken),
     publish: Boolean(config.publishUrl && config.publishToken),
@@ -161,6 +167,7 @@ export function capabilities(config: WakeConfig): Record<string, unknown> {
     githubMerge: config.githubGrants?.merge ?? [],
     registry: config.registry ?? null,
     mcp: config.mcpServers.map(server => server.name),
+    mcpBudgets: extra.mcpBudgets ?? [],
     disabledDoors: config.disabledDoors
   };
 }
@@ -260,7 +267,14 @@ export class Porch {
       const otel = /^\/otel\/v1\/(traces|metrics|logs)$/.exec(url.pathname);
       if (otel && request.method === "POST") return await this.relayTelemetry(request, otel[1]);
       if (request.method === "GET" && url.pathname === "/capabilities") {
-        return ok(capabilities(this.context.config));
+        return ok(capabilities(this.context.config, { mcpBudgets: this.context.mcpBudgets?.current() }));
+      }
+      // The remaining figures of every metered server, read fresh
+      // (spec 0014 §2): `operon mcp budget`, so a mind plans a wake
+      // against a number rather than a surprise.
+      if (url.pathname === "/mcp/budget" && (request.method === "GET" || request.method === "POST")) {
+        if (!this.context.mcpBudgets) return ok({ budgets: [] });
+        return ok({ budgets: await this.context.mcpBudgets.refresh() });
       }
       // The living guide (skills.ts): rendered fresh from THIS wake's
       // config, so `operon --help` can never describe a different
@@ -269,7 +283,7 @@ export class Porch {
         return ok({
           help: renderSkills(
             this.context.config,
-            capabilities(this.context.config),
+            capabilities(this.context.config, { mcpBudgets: this.context.mcpBudgets?.current() }),
             this.context.askLimits
           )
         });

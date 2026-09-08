@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { capabilities, contentTypeFor, Porch } from "./porch.js";
+import { capabilities, contentTypeFor, Porch, type PorchContext } from "./porch.js";
 import type { WakeConfig } from "./config.js";
 import { DEFAULT_EGRESS_ROUTES } from "./egress-proxy.js";
 
@@ -70,7 +70,8 @@ async function startPorch(
   wakeConfig: WakeConfig,
   denylist: string[] = [],
   pullFresh?: () => Promise<void>,
-  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean; asks: string[] }
+  drainAnnouncements?: () => { mail: number; dms: number; channel: boolean; asks: string[] },
+  extra: Partial<Pick<PorchContext, "mcpBudgets">> = {}
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "porch-state-"));
   cleanups.push(() => rm(stateDir, { recursive: true, force: true }));
@@ -81,7 +82,8 @@ async function startPorch(
     gitleaksConfig: fileURLToPath(new URL("../gitleaks.toml", import.meta.url)),
     log: () => undefined,
     ...(pullFresh ? { pullFresh } : {}),
-    ...(drainAnnouncements ? { drainAnnouncements } : {})
+    ...(drainAnnouncements ? { drainAnnouncements } : {}),
+    ...extra
   });
   const url = await porch.start(0);
   cleanups.push(() => porch.close());
@@ -441,6 +443,27 @@ describe("porch doors", () => {
     expect(response.status).toBe(200);
     const sent = JSON.parse(stub.requests[0]) as { files: Array<{ path: string }> };
     expect(sent.files.map(file => file.path).sort()).toEqual([".well-known/public-agents.json", "index.html"]);
+  });
+
+  it("carries the metered servers' budgets in the capabilities, the help and operon mcp budget (spec 0014)", async () => {
+    let reads = 0;
+    const view = { server: "search", budgeted: true, remainingTodayUsd: 3.9, allotmentTodayUsd: 4, spentMonthUsd: 3.5, monthlyUsd: 120, perCall: { web_search: 0.02 }, free: [] };
+    const cache = { views: [view] };
+    const { url } = await startPorch(
+      config({ mcpServers: [{ name: "search", type: "http", virtual: "mcp-search.operon.internal" }] }),
+      [],
+      undefined,
+      undefined,
+      { mcpBudgets: { current: () => cache.views, refresh: async () => (reads += 1, cache.views) } }
+    );
+    const caps = (await (await fetch(`${url}/capabilities`, { headers: { "x-operon-porch": "1" } })).json()) as { mcpBudgets: unknown[] };
+    expect(caps.mcpBudgets).toEqual([view]);
+    const help = (await (await fetch(`${url}/help`, { headers: { "x-operon-porch": "1" } })).json()) as { help: string };
+    expect(help.help).toContain("search: $3.90 of $4.00 today (about 195 web_search)");
+    expect(help.help).toContain("operon mcp budget");
+    const fresh = (await (await fetch(`${url}/mcp/budget`, { method: "POST", headers: { "x-operon-porch": "1", "content-type": "application/json" }, body: "{}" })).json()) as { budgets: unknown[] };
+    expect(fresh.budgets).toEqual([view]);
+    expect(reads).toBe(1);
   });
 
   it("names the registry in the capabilities and the help when the colony has one (spec 0013)", async () => {

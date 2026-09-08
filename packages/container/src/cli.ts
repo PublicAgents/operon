@@ -272,6 +272,11 @@ export function parseArgs(argv: string[]): CliCall | "help" {
       return parseGithub(rest);
     case "till":
       return parseTill(rest);
+    case "mcp": {
+      const [sub] = positionals(rest);
+      if (sub !== "budget") throw new CliUsageError("usage: operon mcp budget (what is left today on every metered server)");
+      return { path: "/mcp/budget", payload: {} };
+    }
     case "vault":
       return parseVault(rest);
     case "x":
