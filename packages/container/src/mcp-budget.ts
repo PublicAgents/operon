@@ -28,9 +28,18 @@ export async function readMcpBudgets(
   token: string | undefined,
   fetchImpl: typeof fetch = fetch
 ): Promise<McpBudgetView[]> {
-  const out: McpBudgetView[] = [];
-  for (const server of servers) {
-    if (server.type !== "http") continue;
+  // Independent reads, in parallel: one slow server must not spend
+  // the wake's budget of time on every server behind it.
+  const remote = servers.filter(server => server.type === "http") as Array<Extract<StagedMcpServer, { type: "http" }>>;
+  return Promise.all(remote.map(server => readOne(server, token, fetchImpl)));
+}
+
+async function readOne(
+  server: Extract<StagedMcpServer, { type: "http" }>,
+  token: string | undefined,
+  fetchImpl: typeof fetch
+): Promise<McpBudgetView> {
+  {
     try {
       const response = await fetchImpl(`http://${server.virtual}/mcp/${server.name}/budget`, {
         headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "x-operon-porch": "1" },
@@ -45,16 +54,12 @@ export async function readMcpBudgets(
         free?: string[];
       };
       if (!response.ok || body.ok === false) {
-        out.push({ server: server.name, budgeted: false, error: body.error ?? `${response.status}` });
-        continue;
+        return { server: server.name, budgeted: false, error: body.error ?? `${response.status}` };
       }
-      if (!body.budgeted) {
-        out.push({ server: server.name, budgeted: false });
-        continue;
-      }
+      if (!body.budgeted) return { server: server.name, budgeted: false };
       const r = body.remaining ?? {};
       const num = (key: string) => (typeof r[key] === "number" ? (r[key] as number) : undefined);
-      out.push({
+      return {
         server: server.name,
         budgeted: true,
         monthlyUsd: num("monthlyUsd"),
@@ -65,12 +70,11 @@ export async function readMcpBudgets(
         resetsAt: typeof r.resetsAt === "string" ? r.resetsAt : undefined,
         perCall: body.perCall ?? {},
         free: body.free ?? []
-      });
+      };
     } catch (error) {
-      out.push({ server: server.name, budgeted: false, error: String(error).slice(0, 160) });
+      return { server: server.name, budgeted: false, error: String(error).slice(0, 160) };
     }
   }
-  return out;
 }
 
 /** The cheapest priced tool, for the "about N calls" a mind plans with. */
