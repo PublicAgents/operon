@@ -233,14 +233,32 @@ function meterHooks(env: Env, agentId: string, server: string, budget: McpBudget
       if (price === 0) return { token: "" };
       const id = crypto.randomUUID();
       const outcome = await meter(env, server).reserve({ id, tool, agentId, usd: price, monthlyUsd: budget.monthlyUsd }, new Date().toISOString());
+      // Rows written after the reservation are best effort: none of
+      // them may leave a reservation open for a call that never goes.
+      const bestEffort = async (event: string, detail: Record<string, unknown>) => {
+        try {
+          await ledger(env).append(event, detail);
+        } catch (error) {
+          console.error(`mcp ${event} could not be ledgered`, error);
+        }
+      };
       for (const stale of outcome.staleSettled) {
-        await ledger(env).append("mcp_reservation_settled_stale", { agentId: stale.agentId, server, tool: stale.tool, usd: stale.usd });
+        await bestEffort("mcp_reservation_settled_stale", { agentId: stale.agentId, server, tool: stale.tool, usd: stale.usd });
       }
       if (!outcome.ok) {
-        await ledger(env).append("mcp_budget_exhausted", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
+        await bestEffort("mcp_budget_exhausted", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
         return { refused: { code: outcome.code, detail: outcome.detail } };
       }
-      await ledger(env).append("mcp_metered", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
+      // The metered row is the audit of a spend that is about to happen
+      // (spec 0003: the record before the privileged act). When it
+      // cannot be written the call does not go, and this is the one
+      // case where a refund is honest: nothing was sent.
+      try {
+        await ledger(env).append("mcp_metered", { agentId, server, tool, usd: price, remainingTodayUsd: outcome.remaining.remainingTodayUsd });
+      } catch (error) {
+        await meter(env, server).refund(id);
+        return { refused: { code: "mcp_audit_unavailable", detail: `the spend could not be recorded, so the call was not made: ${error instanceof Error ? error.message : String(error)}` } };
+      }
       return { token: id };
     },
     after: async (token: string): Promise<void> => {

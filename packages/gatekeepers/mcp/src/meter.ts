@@ -13,8 +13,8 @@
  * settles after; the Gatekeeper never refunds (an ambiguous call is
  * billed), and a reservation nobody settled by the upstream deadline
  * is settled as spent by the next turn, once. `refund` exists for a
- * caller that KNOWS nothing was sent, and no caller in the chassis
- * claims to.
+ * caller that KNOWS nothing was sent: the one such caller is the
+ * Gatekeeper refusing a call whose spend it could not record.
  */
 
 export interface KeyValueStorage {

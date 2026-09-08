@@ -33,7 +33,7 @@ export interface ProxyGrant {
 
 /** A refusal the meter makes before the network (spec 0014 §2). */
 export interface MeterRefusal {
-  code: "mcp_budget_exhausted" | "mcp_tool_unpriced";
+  code: "mcp_budget_exhausted" | "mcp_tool_unpriced" | "mcp_audit_unavailable";
   detail: string;
 }
 
