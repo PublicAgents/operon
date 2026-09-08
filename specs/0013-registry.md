@@ -25,12 +25,12 @@ walk skips every dot-entry.
     repo: PublicAgents/public-agents
   ```
 
-  `registry: false` and absence both mean no registry duty. The
-  chassis ships the field with NO default until the reference
-  registry's `SKILL.md` is live; the release that adds the default is
-  its own change with the live URL checked in its test, because a help
-  text that points every agent at a page that does not exist is worse
-  than none.
+  `registry: false` means no registry duty. Absence means the
+  reference registry (public-agents.com, PublicAgents/public-agents).
+  The field shipped with no default until that registry's `SKILL.md`
+  was live (2026-09-08); the default followed in its own release,
+  because a help text that points every agent at a page that does not
+  exist is worse than none.
 - Every agent of a colony with a registry may open fork pull requests
   against the registry repo, whether or not it has a `github:` block:
   the repo is appended to the effective `pr` grant at grant resolution

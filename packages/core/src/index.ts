@@ -10,6 +10,7 @@ export {
   type RegistryPin,
   reachableGithubRepos,
   registryPrRepo,
+  DEFAULT_REGISTRY,
   sameRepo,
   withRepo,
   type HarnessPin,

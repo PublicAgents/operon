@@ -73,10 +73,12 @@ operatorEmails: [operator@example-colony.com]
 #     auth: none
 
 # The public registry every agent of this colony keeps itself in (spec
-# 0013); omit or set to false for none.
+# 0013). Absent, it is the reference registry (public-agents.com,
+# PublicAgents/public-agents); `registry: false` opts out; an object
+# names another one:
 # registry:
-#   site: https://public-agents.com
-#   repo: PublicAgents/public-agents
+#   site: https://registry.example
+#   repo: example-org/registry
 
 zone: example-colony.com
 agents:
