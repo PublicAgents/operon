@@ -147,7 +147,9 @@ async function handleWebhook(request: Request, env: Env, name: string): Promise<
     await ledger(env).append("mcp_webhook_unreadable", { server: name, paths: [contract.callbackRunIdPath, contract.callbackEventPath, contract.callbackIdPath].filter(Boolean), stored: stored.stored });
     return json({ ok: true, stored: stored.stored, attributed: false });
   }
-  const stored = await runs(env, name).storeCallback({ runId, event, deliveryKey: await deliveryKey(callbackId, body), body, at });
+  // The provider's delivery id from the body when the contract names
+  // one, else from the id header a Standard Webhooks provider signs.
+  const stored = await runs(env, name).storeCallback({ runId, event, deliveryKey: await deliveryKey(callbackId ?? deliveryId, body), body, at });
   if (!stored.stored) return json({ ok: true, stored: false, repeat: true });
   if (stored.agentId) {
     await ledger(env).append("mcp_webhook_received", { agentId: stored.agentId, server: name, runId, event });

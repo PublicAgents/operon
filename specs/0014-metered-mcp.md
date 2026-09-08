@@ -175,9 +175,10 @@ chassis change, never an unverified webhook.
   without the operator's act. Nothing a vendor billed for is dropped.
 - **Every distinct callback is delivered, once.** Callbacks are
   deduplicated by `(run id, delivery id)` when the block names a
-  `callbackIdPath`, the provider's own identity for a delivery, so a
-  retry with a fresh timestamp is one delivery and two transitions
-  are two. Without a delivery id the key is `(run id, sha256 of the
+  `callbackIdPath` (or the signature block an `idHeader`, the
+  Standard Webhooks message id), the provider's own identity for a
+  delivery, so a retry with a fresh timestamp is one delivery and two
+  transitions are two. Without a delivery id the key is `(run id, sha256 of the
   body)`, and the spec says plainly what that buys: a retry whose body
   changed (a new timestamp, an attempt counter) is delivered again,
   under the same run id, for the mind to recognise, and two callbacks
