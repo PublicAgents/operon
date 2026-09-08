@@ -67,8 +67,15 @@ export class RunStore {
     return out.sort((a, b) => a.at.localeCompare(b.at));
   }
 
-  async agentOf(runId: string): Promise<string | undefined> {
-    return (await this.storage.get<{ agentId: string }>(`run:${runId}`))?.agentId;
+  /** The run's agent, while the attribution is within retention; a stale one is forgotten, not honoured. */
+  async agentOf(runId: string, at: string): Promise<string | undefined> {
+    const run = await this.storage.get<{ agentId: string; at: string }>(`run:${runId}`);
+    if (!run) return undefined;
+    if (Date.parse(run.at) < Date.parse(at) - RUN_RETENTION_MS) {
+      await this.storage.delete(`run:${runId}`);
+      return undefined;
+    }
+    return run.agentId;
   }
 
   /**
@@ -82,7 +89,7 @@ export class RunStore {
     const seen = await this.storage.get<string>(seenKey);
     if (seen) return { stored: false, id: seen };
     const id = crypto.randomUUID();
-    const agentId = await this.agentOf(input.runId);
+    const agentId = await this.agentOf(input.runId, input.at);
     const n = ((await this.storage.get<number>(`seq:${input.runId}`)) ?? 0) + 1;
     await this.storage.put(`seq:${input.runId}`, n);
     const result: StoredResult = { id, runId: input.runId, n, event: input.event, body: input.body, at: input.at };

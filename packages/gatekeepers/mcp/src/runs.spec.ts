@@ -74,17 +74,27 @@ describe("the run store (spec 0014 §3)", () => {
     expect(assigned?.runId).toBe("run-?");
     expect(await store.listUnattributed()).toEqual([]);
     expect(await store.pullResults("scout")).toHaveLength(1);
-    expect(await store.agentOf("run-?")).toBe("scout");
+    expect(await store.agentOf("run-?", T2)).toBe("scout");
     const next = await store.storeCallback({ runId: "run-?", event: "done", deliveryKey: "id:e10", body: "{}", at: T2 });
     expect(next.agentId).toBe("scout");
     expect(await store.assign("nope", "scout")).toBeUndefined();
   });
 
-  it("forgets open creates past the retention window", async () => {
+  it("forgets open creates and run attributions past the retention window", async () => {
     const store = new RunStore(memory());
     await store.openCreate({ id: "old", agentId: "scout", tool: "createTask", at: T0 });
+    await store.openCreate({ id: "done", agentId: "scout", tool: "createTask", at: T0 });
+    await store.closeCreate("done", "run-old");
     const later = new Date(Date.parse(T0) + RUN_RETENTION_MS + 1000).toISOString();
     expect(await store.listOpenCreates(later)).toEqual([]);
     expect(await store.closeCreate("old", "run-late")).toBe(false);
+    expect(await store.agentOf("run-old", T1)).toBe("scout");
+    // A callback after the window is nobody's: kept for the operator,
+    // never handed to whoever held the run a month ago.
+    const late = await store.storeCallback({ runId: "run-old", event: "done", deliveryKey: "id:late", body: "{}", at: later });
+    expect(late.agentId).toBeUndefined();
+    expect(await store.pullResults("scout")).toEqual([]);
+    expect((await store.listUnattributed()).map(row => row.runId)).toEqual(["run-old"]);
+    expect(await store.agentOf("run-old", later)).toBeUndefined();
   });
 });
