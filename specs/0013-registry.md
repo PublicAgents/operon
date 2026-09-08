@@ -42,8 +42,10 @@ walk skips every dot-entry.
   registry repo never authors there, not even its own entry: a pr
   grant would put only the self-approval check between a reviewer's
   entry and a merge. An explicit `github.pr` listing of the registry
-  repo beside such a grant is refused at check (the separation is
-  structural, not narrowed at runtime). Its living help says a
+  repo beside such a grant is the operator's decision and stands (a
+  merger that reads the registry's checks and files an issue about
+  them needs it; the doors keep the verbs apart at the act:
+  `author_is_merger`, `self_approval`). Its living help says a
   colleague files and maintains its entry.
 - The registry grant is fork-only like any pr grant (spec 0008 §3): no
   write, no merge, and the doors matrix's `github` door closes it.

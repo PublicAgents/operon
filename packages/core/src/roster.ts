@@ -627,18 +627,12 @@ export function parseRoster(json: string): Roster {
   }
 
   const registry = parseRegistry(raw.registry);
-  if (registry) {
-    // The three-verb separation on the registry is structural (spec
-    // 0013 §2): an agent that adjudicates there never authors there,
-    // so an explicit pr grant beside a review or merge grant on the
-    // registry repo is refused at check, not narrowed at runtime.
-    for (const [index, agent] of agents.entries()) {
-      const authors = (agent.github?.pr ?? []).some(repo => sameRepo(repo, registry.repo));
-      if (authors && registryPrRepo({ registry }, agent) === undefined) {
-        fail(`agents[${index}].github.pr`, `"${agent.id}" adjudicates on the registry ${registry.repo} and may not author there`);
-      }
-    }
-  }
+  // An adjudicator gets no DEFAULT authoring grant on the registry
+  // (spec 0013 §2). An explicit github.pr listing beside its review or
+  // merge grant is the operator's decision and stands: the doors keep
+  // the verbs apart at the act (author_is_merger, self_approval), and a
+  // merger that reads the registry's checks and files an issue about
+  // them needs exactly that grant.
   return { zone, agents, ...(mcp ? { mcp } : {}), ...(registry ? { registry } : {}) };
 }
 
