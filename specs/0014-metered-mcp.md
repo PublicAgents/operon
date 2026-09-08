@@ -130,17 +130,29 @@ chassis change, never an unverified webhook.
   events into each `createTools` call's `argument` before proxying it,
   overwriting whatever the mind passed there, so a mind never chooses
   the URL and never learns the secret.
-- **Attributed at creation, matched at callback.** The Gatekeeper
-  reads the run id from the create result at `runIdPath` and records
-  `run id -> agentId` (30 days); a create result with no id at that
-  path is proxied unchanged and ledgered `mcp_webhook_run_unattributed`,
-  so a wrong path is visible on the first call. A verified callback is
-  read at `callbackRunIdPath` and `callbackEventPath`; a body with no
-  value at either path is `mcp_webhook_unreadable`, ledgered with the
-  path names, dropped. A webhook for an unknown run is
-  `mcp_webhook_unknown_run`, ledgered, dropped; a webhook for a known
-  run is stored once per (run id, event) and a repeat is acknowledged
-  without a second delivery.
+- **Attributed at creation, matched at callback.** Before a
+  `createTools` call is proxied, the Gatekeeper records an open create
+  `{agentId, server, tool, at}`; when the result arrives it reads the
+  run id at `runIdPath`, records `run id -> agentId` (30 days) and
+  closes the open create. A create result with no id at that path is
+  proxied unchanged and ledgered `mcp_webhook_run_unattributed`, so a
+  wrong path is visible on the first call. A lost create response
+  (the reservation is kept, §2) leaves the open create open. A
+  verified callback is read at `callbackRunIdPath` and
+  `callbackEventPath`; a body with no value at either path is
+  `mcp_webhook_unreadable`, ledgered with the path names, kept for the
+  operator (below). A callback for a run nobody recorded is matched to
+  an open create when exactly one agent holds an open create for that
+  server younger than 24 hours; otherwise it is `mcp_webhook_unknown_run`,
+  ledgered, and kept for the operator: the plane's `mcp_budgets` lists
+  unattributed results and `mcp_result_assign` (a decision) hands one
+  to an agent. Nothing a vendor billed for is dropped.
+- **Every distinct callback is delivered, once.** Callbacks are
+  deduplicated by `(run id, sha256 of the body)`, never by event name:
+  a provider that reports several transitions under one event type
+  delivers each of them. They are stored in arrival order and pulled
+  as `inbox/mcp/<server>/<run id>/<n>.md`; a byte-identical repeat is
+  acknowledged without a second delivery.
 - **Delivered at the next wake, as inbox content.** The verified
   payload is stored for the agent and pulled by the container at wake
   start into `inbox/mcp/<server>/<run id>.md`, through the same
@@ -168,8 +180,10 @@ chassis change, never an unverified webhook.
   calling agent's grant checked) answers the remaining figures; the
   `hooks.<zone>` route with the HMAC check and the run-id table; the
   Ops entrypoint gains `mcp_budgets` (read-only, every server's month
-  and day) and `mcp_budget_reset` (a decision, audited, for the
-  operator who topped up credits mid-month).
+  and day, and every unattributed callback held for the operator),
+  `mcp_budget_reset` (a decision, audited, for the operator who topped
+  up credits mid-month) and `mcp_result_assign` (a decision: an
+  unattributed callback to a named agent's inbox).
 - **container**: `capabilities().mcpBudgets`, the wake-start line, the
   REGISTRY-style help lines in the MCP section, `operon mcp budget`,
   the inbox pull extended to `inbox/mcp/`.
@@ -192,8 +206,9 @@ chassis change, never an unverified webhook.
   `free` listing; refused before the network.
 - `mcp_webhook_unverified` (bad signature, stale timestamp),
   `mcp_webhook_unreadable` (no run id or event at the named paths),
-  `mcp_webhook_unknown_run`, `mcp_webhook_run_unattributed`,
-  `mcp_webhook_scheme_unknown` (at validation).
+  `mcp_webhook_unknown_run` (kept for the operator, never dropped),
+  `mcp_webhook_run_unattributed`, `mcp_webhook_scheme_unknown` (at
+  validation).
 - The daily allotment is fixed at the day's first call from the spend
   before that day; a day's own calls never shrink it; it never exceeds
   the month's remainder and on the last day equals it. A month of
@@ -201,7 +216,12 @@ chassis change, never an unverified webhook.
 - A reservation is refunded only for a refused connection or an
   unsent body; every answer after the body left, 4xx and 5xx alike,
   and every lost answer, keeps it.
-- A repeated webhook (same run id and event) is delivered once.
+- A byte-identical repeated webhook is delivered once; two callbacks
+  for one run under one event name with different bodies are both
+  delivered, in order.
+- A callback that arrives after a lost create response reaches the one
+  agent with an open create for that server, or the operator, never
+  the floor.
 - Two agents calling at once cannot both take the last cent (the
   meter is one Durable Object turn).
 - The secret and the webhook URL never appear in a tool result, a
