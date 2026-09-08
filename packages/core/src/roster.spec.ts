@@ -164,6 +164,12 @@ describe("metered remote servers (spec 0014)", () => {
     expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).free = ["constructor"])))).not.toThrow();
     expect(() => parseRoster(wh(w => (w.callbackRunIdPath = "data/run id")))).toThrowError(/dotted path/);
     expect(() => parseRoster(wh(w => ((w.signature as Record<string, unknown>).scheme = "md5")))).toThrowError(/mcp_webhook_scheme_unknown/);
+    expect(() => parseRoster(wh(w => ((w.signature as Record<string, unknown>).scheme = "standard-webhooks")))).toThrowError(/idHeader/);
+    expect(() =>
+      parseRoster(
+        wh(w => (w.signature = { header: "webhook-signature", scheme: "standard-webhooks", timestampHeader: "webhook-timestamp", idHeader: "webhook-id" }))
+      )
+    ).not.toThrow();
     expect(() => parseRoster(wh(w => delete w.callbackEventPath))).toThrowError(/callbackEventPath/);
     expect(() => parseRoster(wh(w => (w.events = [])))).toThrowError(/at least one event/);
   });

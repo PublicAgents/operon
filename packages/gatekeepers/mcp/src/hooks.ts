@@ -33,11 +33,19 @@ function same(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * What the provider signed: the raw body, or `<timestamp>.<body>` when
- * the contract names a timestamp header.
+ * What the provider signed: the raw body, `<timestamp>.<body>` when the
+ * contract names a timestamp header, and `<id>.<timestamp>.<body>`
+ * under Standard Webhooks.
  */
-export function signedInput(body: string, timestamp?: string): string {
-  return timestamp === undefined ? body : `${timestamp}.${body}`;
+export function signedInput(body: string, timestamp?: string, id?: string): string {
+  const parts = [id, timestamp, body].filter((part): part is string => part !== undefined);
+  return parts.join(".");
+}
+
+/** A Standard Webhooks secret: `whsec_` plus base64; anything else is taken as raw bytes. */
+function standardKey(secret: string): Uint8Array {
+  const stripped = secret.startsWith("whsec_") ? secret.slice("whsec_".length) : secret;
+  return (secret.startsWith("whsec_") ? fromBase64(stripped) : undefined) ?? encoder.encode(secret);
 }
 
 /** True when `signature` is the provider's signature of `input` under `scheme` with `secret`. */
@@ -48,6 +56,18 @@ export async function verifySignature(
   input: string
 ): Promise<boolean> {
   const given = signature.trim().replace(/^(sha256=|v1=)/, "");
+  if (scheme === "standard-webhooks") {
+    // Several space-separated `v1,<base64>` signatures may travel (a
+    // rotated secret); any one that verifies is the provider's.
+    const key = await crypto.subtle.importKey("raw", standardKey(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(input)));
+    for (const candidate of signature.split(/\s+/)) {
+      if (!candidate.startsWith("v1,")) continue;
+      const theirs = fromBase64(candidate.slice(3));
+      if (theirs !== undefined && same(mac, theirs)) return true;
+    }
+    return false;
+  }
   if (scheme === "hmac-sha256-hex" || scheme === "hmac-sha256-base64") {
     const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(input)));

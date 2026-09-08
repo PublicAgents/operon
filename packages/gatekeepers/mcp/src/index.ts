@@ -101,6 +101,7 @@ async function handleWebhook(request: Request, env: Env, name: string): Promise<
   const at = new Date().toISOString();
   const signature = request.headers.get(contract.signature.header) ?? "";
   const timestamp = contract.signature.timestampHeader ? (request.headers.get(contract.signature.timestampHeader) ?? undefined) : undefined;
+  const deliveryId = contract.signature.idHeader ? (request.headers.get(contract.signature.idHeader) ?? undefined) : undefined;
   const source = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (contract.signature.timestampHeader) {
     const ms = timestamp === undefined ? undefined : timestampMs(timestamp);
@@ -109,7 +110,12 @@ async function handleWebhook(request: Request, env: Env, name: string): Promise<
       return errorResponse(401, "mcp_webhook_unverified", "the timestamp is missing, unreadable, or older than five minutes");
     }
   }
-  const verified = signature.length > 0 && (await verifySignature(contract.signature.scheme, secret, signature, signedInput(body, timestamp)));
+  if (contract.signature.idHeader && !deliveryId) {
+    await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "id_header", source });
+    return errorResponse(401, "mcp_webhook_unverified", `the ${contract.signature.idHeader} header is missing`);
+  }
+  const verified =
+    signature.length > 0 && (await verifySignature(contract.signature.scheme, secret, signature, signedInput(body, timestamp, deliveryId)));
   if (!verified) {
     await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "signature", source });
     return errorResponse(401, "mcp_webhook_unverified", "the signature does not verify");

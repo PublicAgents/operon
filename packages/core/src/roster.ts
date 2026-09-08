@@ -96,8 +96,20 @@ export interface McpBudget {
   free?: string[];
 }
 
-export type McpSignatureScheme = "hmac-sha256-hex" | "hmac-sha256-base64" | "ed25519-hex";
-export const MCP_SIGNATURE_SCHEMES: readonly McpSignatureScheme[] = ["hmac-sha256-hex", "hmac-sha256-base64", "ed25519-hex"];
+/**
+ * The signature schemes the Gatekeeper knows: an HMAC over the body
+ * (joined to the timestamp when one is named), ed25519 with the
+ * provider's public key, and Standard Webhooks (an HMAC over
+ * `<id>.<timestamp>.<body>` with a base64 `whsec_` key and `v1,`
+ * signatures), which needs the id and timestamp headers named.
+ */
+export type McpSignatureScheme = "hmac-sha256-hex" | "hmac-sha256-base64" | "ed25519-hex" | "standard-webhooks";
+export const MCP_SIGNATURE_SCHEMES: readonly McpSignatureScheme[] = [
+  "hmac-sha256-hex",
+  "hmac-sha256-base64",
+  "ed25519-hex",
+  "standard-webhooks"
+];
 
 /**
  * The provider's webhook contract (spec 0014 §3), stated by the
@@ -116,7 +128,7 @@ export interface McpWebhook {
   callbackRunIdPath: string;
   callbackEventPath: string;
   callbackIdPath?: string;
-  signature: { header: string; scheme: McpSignatureScheme; timestampHeader?: string };
+  signature: { header: string; scheme: McpSignatureScheme; timestampHeader?: string; idHeader?: string };
 }
 
 export type McpServerDef =
@@ -417,7 +429,7 @@ const WEBHOOK_KEYS = new Set([
   "callbackIdPath",
   "signature"
 ]);
-const SIGNATURE_KEYS = new Set(["header", "scheme", "timestampHeader"]);
+const SIGNATURE_KEYS = new Set(["header", "scheme", "timestampHeader", "idHeader"]);
 const DOTTED_PATH = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
 const TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
@@ -512,7 +524,7 @@ function parseWebhook(path: string, value: unknown, tools: string[] | undefined)
   const callbackEventPath = pathField("callbackEventPath", true) as string;
   const callbackIdPath = pathField("callbackIdPath", false);
   if (typeof raw.signature !== "object" || raw.signature === null || Array.isArray(raw.signature)) {
-    fail(`${path}.signature`, "must be an object {header, scheme, timestampHeader?}");
+    fail(`${path}.signature`, "must be an object {header, scheme, timestampHeader?, idHeader?}");
   }
   const sig = raw.signature as Record<string, unknown>;
   refuseUnknownKeys(sig, SIGNATURE_KEYS, `${path}.signature`, "signature");
@@ -523,6 +535,10 @@ function parseWebhook(path: string, value: unknown, tools: string[] | undefined)
     fail(`${path}.signature.scheme`, `mcp_webhook_scheme_unknown: "${scheme}" (known: ${MCP_SIGNATURE_SCHEMES.join(", ")})`);
   }
   const timestampHeader = sig.timestampHeader === undefined ? undefined : requireString(sig.timestampHeader, `${path}.signature.timestampHeader`);
+  const idHeader = sig.idHeader === undefined ? undefined : requireString(sig.idHeader, `${path}.signature.idHeader`);
+  if (scheme === "standard-webhooks" && (!timestampHeader || !idHeader)) {
+    fail(`${path}.signature`, "standard-webhooks signs <id>.<timestamp>.<body>: name timestampHeader and idHeader");
+  }
   return {
     createTools,
     argument,
@@ -532,7 +548,12 @@ function parseWebhook(path: string, value: unknown, tools: string[] | undefined)
     callbackRunIdPath,
     callbackEventPath,
     ...(callbackIdPath ? { callbackIdPath } : {}),
-    signature: { header, scheme: scheme as McpSignatureScheme, ...(timestampHeader ? { timestampHeader } : {}) }
+    signature: {
+      header,
+      scheme: scheme as McpSignatureScheme,
+      ...(timestampHeader ? { timestampHeader } : {}),
+      ...(idHeader ? { idHeader } : {})
+    }
   };
 }
 

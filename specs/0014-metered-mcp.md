@@ -59,8 +59,11 @@ mcp:
       callbackIdPath: id                 # optional: the provider's delivery id, the dedupe key
       signature:
         header: X-Signature
-        scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64 and ed25519-hex also known
+        scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64, ed25519-hex
+                                         # and standard-webhooks also known
         timestampHeader: X-Timestamp     # optional; when named, joined to the body as "<ts>.<body>"
+        idHeader: X-Id                   # optional; standard-webhooks requires both and signs
+                                         # "<id>.<ts>.<body>" with a base64 whsec_ key, "v1,<base64>"
 ```
 
 - **The cap is the month's, spread over its days.** Each server's

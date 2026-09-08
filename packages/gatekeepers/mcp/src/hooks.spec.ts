@@ -33,6 +33,22 @@ describe("webhook signatures (spec 0014 §3)", () => {
     expect(await verifySignature("hmac-sha256-hex", "k", sig, signedInput(body, "1700000001"))).toBe(false);
   });
 
+  it("verifies Standard Webhooks: <id>.<timestamp>.<body> under the base64 whsec_ key, any of several v1 signatures", async () => {
+    const raw = crypto.getRandomValues(new Uint8Array(24));
+    const secret = `whsec_${btoa(String.fromCharCode(...raw))}`;
+    const body = '{"type":"task_run.status","data":{"run_id":"trun_1"}}';
+    const input = signedInput(body, "1700000000", "msg_1");
+    expect(input).toBe(`msg_1.1700000000.${body}`);
+    const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(input)));
+    const sig = `v1,${btoa(String.fromCharCode(...mac))}`;
+    expect(await verifySignature("standard-webhooks", secret, sig, input)).toBe(true);
+    expect(await verifySignature("standard-webhooks", secret, `v1,AAAA ${sig}`, input)).toBe(true);
+    expect(await verifySignature("standard-webhooks", secret, sig.slice(3), input)).toBe(false);
+    expect(await verifySignature("standard-webhooks", `whsec_${btoa("other")}`, sig, input)).toBe(false);
+    expect(await verifySignature("standard-webhooks", secret, sig, signedInput(body, "1700000001", "msg_1"))).toBe(false);
+  });
+
   it("verifies ed25519 against the provider's public key and refuses a bad key or signature", async () => {
     const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
     const publicKey = hex(await crypto.subtle.exportKey("raw", pair.publicKey));
