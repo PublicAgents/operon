@@ -84,11 +84,17 @@ export function McpBudgets() {
                       danger
                       detail={
                         <span className="confirm-note">
-                          {row.server}: the month starts over from {usd(Number(figures[row.server] ?? 0))}
+                          {(figures[row.server] ?? "").trim() === ""
+                            ? `${row.server}: enter the vendor's month-to-date figure first`
+                            : `${row.server}: the month starts over from ${usd(Number(figures[row.server]))}`}
                         </span>
                       }
                       onConfirm={async () => {
-                        const value = Number(figures[row.server]);
+                        // An empty field is not a figure: Number("") is 0,
+                        // and a reset to zero hands out the whole month.
+                        const figure = (figures[row.server] ?? "").trim();
+                        if (figure === "") return;
+                        const value = Number(figure);
                         if (!Number.isFinite(value) || value < 0) return;
                         await callTool("mcp_budget_reset", { server: row.server, spentMonthUsd: value });
                         state.refresh();
