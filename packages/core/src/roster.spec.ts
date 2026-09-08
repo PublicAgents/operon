@@ -153,6 +153,12 @@ describe("metered remote servers (spec 0014)", () => {
     const wh = (edit: (w: Record<string, unknown>) => void) => mutate(tasks, d => edit(d.webhook as Record<string, unknown>));
     expect(() => parseRoster(wh(w => (w.createTools = ["nope"])))).toThrowError(/not one of this server's tools/);
     expect(() => parseRoster(wh(w => (w.registration = { url: "https://fixed.example" })))).toThrowError(/\{url\}/);
+    expect(() => parseRoster(wh(w => (w.registration = { url: "prefix-{url}" })))).toThrowError(/exactly/);
+    // Prototype names are tool names here, nothing more.
+    const proto = mutate(search, d => ((d.budget as Record<string, unknown>).perCall = { constructor: 0.5, __proto__: 0.1 }));
+    const parsedProto = parseRoster(proto).mcp as Record<string, { budget?: { perCall: Record<string, number> } }>;
+    expect(Object.hasOwn(parsedProto.s.budget?.perCall ?? {}, "constructor")).toBe(true);
+    expect(() => parseRoster(mutate(search, d => ((d.budget as Record<string, unknown>).free = ["constructor"])))).not.toThrow();
     expect(() => parseRoster(wh(w => (w.callbackRunIdPath = "data/run id")))).toThrowError(/dotted path/);
     expect(() => parseRoster(wh(w => ((w.signature as Record<string, unknown>).scheme = "md5")))).toThrowError(/mcp_webhook_scheme_unknown/);
     expect(() => parseRoster(wh(w => delete w.callbackEventPath))).toThrowError(/callbackEventPath/);

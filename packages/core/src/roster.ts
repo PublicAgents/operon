@@ -419,6 +419,7 @@ const WEBHOOK_KEYS = new Set([
 ]);
 const SIGNATURE_KEYS = new Set(["header", "scheme", "timestampHeader"]);
 const DOTTED_PATH = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
+const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 function refuseUnknownKeys(raw: Record<string, unknown>, known: Set<string>, path: string, what: string): void {
   for (const key of Object.keys(raw)) {
@@ -449,9 +450,11 @@ function parseBudget(path: string, value: unknown): McpBudget {
   if (typeof raw.perCall !== "object" || raw.perCall === null || Array.isArray(raw.perCall)) {
     fail(`${path}.perCall`, "must be an object of tool name to USD per call");
   }
-  const perCall: Record<string, number> = {};
+  // A null-prototype map and own-property checks: a tool named
+  // "constructor" or "__proto__" is a tool name, not a prototype key.
+  const perCall: Record<string, number> = Object.create(null) as Record<string, number>;
   for (const [tool, price] of Object.entries(raw.perCall as Record<string, unknown>)) {
-    if (tool.length === 0) fail(`${path}.perCall`, "must not contain empty tool names");
+    if (!TOOL_NAME.test(tool)) fail(`${path}.perCall`, `"${tool}" is not a tool name`);
     if (typeof price !== "number" || !Number.isFinite(price) || price < 0) {
       fail(`${path}.perCall.${tool}`, "must be a non-negative number of USD");
     }
@@ -459,18 +462,18 @@ function parseBudget(path: string, value: unknown): McpBudget {
   }
   const free = raw.free === undefined ? undefined : requireStringArray(raw.free, `${path}.free`);
   for (const tool of free ?? []) {
-    if (tool.length === 0) fail(`${path}.free`, "must not contain empty tool names");
-    if (tool in perCall) fail(`${path}.free`, `"${tool}" is priced in perCall; a tool is priced or free, not both`);
+    if (!TOOL_NAME.test(tool)) fail(`${path}.free`, `"${tool}" is not a tool name`);
+    if (Object.hasOwn(perCall, tool)) fail(`${path}.free`, `"${tool}" is priced in perCall; a tool is priced or free, not both`);
   }
   return { monthlyUsd, perCall, ...(free ? { free } : {}) };
 }
 
-/** Whether a JSON template mentions a placeholder anywhere in its strings. */
-function templateMentions(value: unknown, placeholder: string): boolean {
-  if (typeof value === "string") return value.includes(placeholder);
-  if (Array.isArray(value)) return value.some(item => templateMentions(item, placeholder));
+/** Whether a JSON template carries a string that IS the placeholder (the whole value, its own JSON type). */
+function templateHasField(value: unknown, placeholder: string): boolean {
+  if (typeof value === "string") return value === placeholder;
+  if (Array.isArray(value)) return value.some(item => templateHasField(item, placeholder));
   if (typeof value === "object" && value !== null) {
-    return Object.values(value as Record<string, unknown>).some(item => templateMentions(item, placeholder));
+    return Object.values(value as Record<string, unknown>).some(item => templateHasField(item, placeholder));
   }
   return false;
 }
@@ -488,8 +491,10 @@ function parseWebhook(path: string, value: unknown, tools: string[] | undefined)
   const argument = requireString(raw.argument, `${path}.argument`);
   if (argument.length === 0) fail(`${path}.argument`, "must name the create call's argument");
   if (raw.registration === undefined) fail(`${path}.registration`, "is required: the provider's registration shape");
-  if (!templateMentions(raw.registration, "{url}")) {
-    fail(`${path}.registration`, "must carry {url} somewhere in its strings, or the provider never learns the callback");
+  // The callback URL is a whole field of the registration, never a
+  // fragment inside a longer string: the provider reads it as a URL.
+  if (!templateHasField(raw.registration, "{url}")) {
+    fail(`${path}.registration`, 'must carry a field whose value is exactly "{url}", or the provider never learns the callback');
   }
   const events = requireStringArray(raw.events, `${path}.events`);
   if (events.length === 0) fail(`${path}.events`, "must name at least one event");
