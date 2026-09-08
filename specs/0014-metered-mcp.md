@@ -56,6 +56,7 @@ mcp:
       runIdPath: run_id                  # where the create result carries the run id (dotted path)
       callbackRunIdPath: data.run_id     # where the callback body carries it
       callbackEventPath: type            # where the callback body names its event
+      callbackIdPath: id                 # optional: the provider's delivery id, the dedupe key
       signature:
         header: X-Signature
         scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64 and ed25519-hex also known
@@ -123,7 +124,10 @@ the sender proves. This spec adds one host of the same kind:
 The block is the provider's contract, stated by the operator in the
 manifest: which tools create runs, the argument that takes the
 registration and the provider's shape for it (`registration`, a JSON
-template in which `{url}` and `{events}` are the only substitutions),
+template in which `{url}` and `{events}` are the only substitutions:
+a string that is exactly a placeholder takes the value's own JSON
+type, so `"{events}"` becomes the array, and a placeholder inside a
+longer string is joined into it as text),
 the events, where the run id sits in the create result
 (`runIdPath`), where the run id and the event sit in a callback body
 (`callbackRunIdPath`, `callbackEventPath`), and how the signature is
@@ -164,8 +168,15 @@ chassis change, never an unverified webhook.
   agent's inbox. An agent's result never crosses to another agent
   without the operator's act. Nothing a vendor billed for is dropped.
 - **Every distinct callback is delivered, once.** Callbacks are
-  deduplicated by `(run id, sha256 of the body)`, never by event name:
-  a provider that reports several transitions under one event type
+  deduplicated by `(run id, delivery id)` when the block names a
+  `callbackIdPath`, the provider's own identity for a delivery, so a
+  retry with a fresh timestamp is one delivery and two transitions
+  are two. Without a delivery id the key is `(run id, sha256 of the
+  body)`, and the spec says plainly what that buys: a retry whose body
+  changed (a new timestamp, an attempt counter) is delivered again,
+  under the same run id, for the mind to recognise, and two callbacks
+  with byte-identical bodies are one. Never by event name alone: a
+  provider that reports several transitions under one event type
   delivers each of them. They are stored in arrival order, numbered,
   and pulled to the same numbered paths, `inbox/mcp/<server>/<run
   id>/<n>.md`, one file per callback, never merged; a byte-identical
@@ -188,8 +199,8 @@ chassis change, never an unverified webhook.
   requires `createTools` (each a known tool of the def), `argument`,
   `registration` (a JSON value whose strings may carry `{url}` and
   `{events}`, and `{url}` must appear), `events`, `runIdPath`,
-  `callbackRunIdPath`, `callbackEventPath` and a `signature` with a
-  known `scheme`; a
+  `callbackRunIdPath`, `callbackEventPath`, an optional
+  `callbackIdPath`, and a `signature` with a known `scheme`; a
   webhook block without a budget is allowed (metering and answering
   are separate facts). Unknown keys refuse by name.
 - **gatekeeper-mcp**: a `Meter` Durable Object per server holding
@@ -240,9 +251,10 @@ chassis change, never an unverified webhook.
 - A reservation with no settle or refund by the upstream deadline is
   settled as spent by the next meter turn, once; it never reduces the
   allowance twice and is never refunded later.
-- A byte-identical repeated webhook is delivered once; two callbacks
-  for one run under one event name with different bodies are both
-  delivered, in order.
+- With a delivery id, a retried callback is delivered once whatever
+  its timestamp; without one, a byte-identical repeat is delivered
+  once. Two callbacks for one run under one event name with different
+  delivery ids (or bodies) are both delivered, in order.
 - A callback that arrives after a lost create response reaches the
   operator with the open creates beside it, never another agent and
   never the floor.
