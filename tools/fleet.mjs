@@ -618,10 +618,27 @@ for (const manifest of manifests) {
     deployError = error;
   }
   if (paused) {
-    resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
-      () => (console.log("  fleet resumed"), false),
-      error => (console.error(`  resume error: ${error}`), true)
-    );
+    // The resume is a decision the plane audits before it acts; a
+    // transient on the audit ledger (a Durable Object reset at the
+    // wrong second has left a fleet paused) is retried a few times
+    // before the failure is reported, since a paused fleet defers
+    // every wake until someone notices.
+    resumeFailed = true;
+    let transient = true;
+    for (let attempt = 1; attempt <= 4 && resumeFailed && transient; attempt++) {
+      resumeFailed = await opsCall(manifest, "fleet-resume", { token: drainToken }).then(
+        () => (console.log("  fleet resumed"), false),
+        error => {
+          // Only a 5xx (the audit ledger, the plane) is worth another
+          // try; a 4xx (authorization, a pause held elsewhere) will
+          // answer the same way, so it is reported at once.
+          transient = error.status === undefined || error.status >= 500;
+          console.error(`  resume error (attempt ${attempt}): ${error}`);
+          return true;
+        }
+      );
+      if (resumeFailed && transient && attempt < 4) await new Promise(resolve => setTimeout(resolve, 5_000 * attempt));
+    }
   }
   if (resumeFailed || deployError) {
     fail(
