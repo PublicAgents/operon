@@ -128,6 +128,7 @@ const OPS_BINDINGS: ReadonlyArray<readonly [binding: string, worker: string, ent
   ["TELEGRAM", "gatekeeper-telegram", "Ops"],
   ["BROWSER", "gatekeeper-browser", "Ops"],
   ["ASKS", "gatekeeper-asks", "Ops"],
+  ["MCP_GK", "gatekeeper-mcp", "Ops"],
   ["SCHEDULER", "scheduler"]
 ];
 

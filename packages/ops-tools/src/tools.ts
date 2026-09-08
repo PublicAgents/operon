@@ -735,6 +735,29 @@ const REGISTRY: readonly ToolDefinition[] = [
 
   // ---- the web door -------------------------------------------------
   {
+    name: "mcp_budgets",
+    title: "The metered MCP servers' budgets",
+    description:
+      "Every remote MCP server that carries a budget (spec 0014): the month's cap and spend, today's allotment and remainder, the calls in flight, when the day rolls. Read-only; the figures are the meter's, the vendor's dashboard is the invoice.",
+    input: z.object({}),
+    readOnly: true,
+    decision: false,
+    handler: (_input, context) => context.ops("MCP_GK", "POST", "/gatekeeper/mcp/budgets", { body: {} })
+  },
+  {
+    name: "mcp_budget_reset",
+    title: "Reset a server's meter to the vendor's month-to-date figure",
+    description:
+      "After reading the vendor's dashboard (a top-up, an overcount from lost answers), start the month's meter over from that figure. Calls in flight stay counted on top of it and the answer names their sum. A decision, audited.",
+    input: z.object({
+      server: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(40),
+      spentMonthUsd: z.number().nonnegative().finite().describe("the vendor dashboard's month-to-date spend in USD")
+    }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) => context.ops("MCP_GK", "POST", "/gatekeeper/mcp/budget-reset", { body: input })
+  },
+  {
     name: "web_sessions",
     title: "List an agent's browser sessions",
     description:
