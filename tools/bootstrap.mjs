@@ -380,18 +380,18 @@ async function workerExists(name) {
 }
 
 // ---- 6. email routing --------------------------------------------------
-// The zone's mail, two ways (the reference colony's shape): every
-// agent's own address (<first host>@<zone>, the email Gatekeeper's
-// identity rule) routes to the Gatekeeper, and everything else, the
-// catch-all, forwards to the operator's addresses. A catch-all pointed
-// at the Gatekeeper rejects every address that is not an agent's, so
-// the operator would never see mail to hello@ or to a retired name.
+// The zone's catch-all routes to the email Gatekeeper: an agent's own
+// address (<first host>@<zone>) reaches its mailbox, and every other
+// address (hello@, a retired name) is forwarded on to the operator's
+// forwardAgentEmailsTo by the Gatekeeper itself. Cloudflare forwards
+// only to verified destination addresses, so those are checked here
+// and a missing one is created (which sends the verification mail).
 console.log("\nemail routing");
 if (!apiToken || !zoneId) {
   needYou(
-    `enable Email Routing on ${manifest.roster.zone}: one rule per agent address to the Worker ` +
-      `${workerName("gatekeeper-email")}, the catch-all forwarding to ${(manifest.forwardAgentEmailsTo ?? []).join(", ") || "the operator"} ` +
-      `(dashboard: Email Routing → Routing rules)`
+    `enable Email Routing on ${manifest.roster.zone} and set the catch-all rule to the Worker ` +
+      `${workerName("gatekeeper-email")} (dashboard: Email Routing → Routing rules); verify ` +
+      `${(manifest.forwardAgentEmailsTo ?? []).join(", ") || "the operator's address"} as a destination address`
   );
 } else {
   const routing = await api("GET", `/zones/${zoneId}/email/routing`);
@@ -401,77 +401,54 @@ if (!apiToken || !zoneId) {
     await api("POST", `/zones/${zoneId}/email/routing/enable`);
     created("Email Routing enabled (MX, SPF and DKIM records added by Cloudflare)");
   }
-  const emailWorker = workerName("gatekeeper-email");
-  const workerReady = deployed || (await workerExists(emailWorker)) === true;
 
-  // The operator's destination addresses: Cloudflare forwards only to
-  // addresses it has verified (a mail with a link, clicked once per
-  // account). Missing ones are created, which sends that mail.
   const wanted = manifest.forwardAgentEmailsTo ?? [];
-  const destinations = await apiAll(`/accounts/${manifest.accountId}/email/routing/addresses`);
-  const verified = [];
-  for (const email of wanted) {
-    let found = destinations.find(d => d.email.toLowerCase() === email.toLowerCase());
-    if (!found) {
-      found = await api("POST", `/accounts/${manifest.accountId}/email/routing/addresses`, { email });
-      created(`destination address ${email} (a verification mail is on its way; click it, then re-run)`);
+  let verifiedCount = 0;
+  if (wanted.length === 0) {
+    needYou("the manifest has no forwardAgentEmailsTo: mail to any address that is not an agent's will bounce");
+  } else {
+    const destinations = await apiAll(`/accounts/${manifest.accountId}/email/routing/addresses`);
+    for (const email of wanted) {
+      let found = destinations.find(d => d.email.toLowerCase() === email.toLowerCase());
+      if (!found) {
+        found = await api("POST", `/accounts/${manifest.accountId}/email/routing/addresses`, { email });
+        created(`destination address ${email} (a verification mail is on its way; click it, then re-run)`);
+      }
+      if (found.verified) {
+        verifiedCount += 1;
+        present(`destination address ${email} verified`);
+      } else {
+        needYou(`verify the destination address ${email} (the mail Cloudflare sent): until then the Gatekeeper cannot forward there`);
+      }
     }
-    if (found.verified) verified.push(found.email);
-    else needYou(`verify the destination address ${email} (the mail Cloudflare sent), then re-run: the catch-all cannot forward there yet`);
   }
 
-  // The catch-all: forward to the operator, never to the Gatekeeper.
+  const emailWorker = workerName("gatekeeper-email");
   const catchAll = await api("GET", `/zones/${zoneId}/email/routing/rules/catch_all`);
-  const forwardsTo = (catchAll.actions ?? []).filter(a => a.type === "forward").flatMap(a => a.value ?? []);
-  const sameSet = (a, b) => a.length === b.length && a.every(x => b.some(y => x.toLowerCase() === y.toLowerCase()));
-  if (wanted.length === 0) {
-    needYou("the manifest has no forwardAgentEmailsTo: the catch-all has nowhere to forward; name at least one address");
-  } else if (verified.length === 0) {
-    // Said above, per address.
-  } else if (catchAll.enabled && sameSet(forwardsTo, verified)) {
-    present(`catch-all → ${verified.join(", ")}`);
+  const routed =
+    catchAll.enabled &&
+    (catchAll.actions ?? []).some(action => action.type === "worker" && (action.value ?? []).includes(emailWorker));
+  if (routed && wanted.length > 0 && verifiedCount === 0) {
+    // The Gatekeeper already holds the catch-all but can forward
+    // nowhere yet: non-agent mail bounces (never silently lost) until
+    // an address is verified. Said by name, not ticked.
+    needYou(`the catch-all is at ${emailWorker} but no address in ${wanted.join(", ")} is verified: non-agent mail bounces until one is`);
+  } else if (routed) {
+    present(`catch-all → ${emailWorker}`);
+  } else if (wanted.length > 0 && verifiedCount === 0) {
+    // Pointing the catch-all at the Gatekeeper before any operator
+    // address is verified would bounce every non-agent mail meanwhile.
+    needYou(`the catch-all stays as it is until one of ${wanted.join(", ")} is verified; then re-run`);
+  } else if (!deployed && (await workerExists(emailWorker)) !== true) {
+    needYou(`the catch-all rule needs the Worker ${emailWorker} to exist: deploy, then re-run`);
   } else {
     await api("PUT", `/zones/${zoneId}/email/routing/rules/catch_all`, {
       enabled: true,
-      name: "operon: everything else to the operator",
+      name: "operon: every address to the email Gatekeeper",
       matchers: [{ type: "all" }],
-      actions: [{ type: "forward", value: verified }]
-    });
-    created(`catch-all → ${verified.join(", ")}`);
-  }
-
-  // One rule per agent: its address (the email Gatekeeper's identity
-  // rule: the first host that is not the apex, else the id) to the
-  // Worker. Reconciled by the matched address.
-  const rules = await apiAll(`/zones/${zoneId}/email/routing/rules`);
-  for (const agent of manifest.roster.agents) {
-    const local = (agent.hosts.find(host => host !== "@") ?? agent.id).toLowerCase();
-    const address = `${local}@${manifest.roster.zone}`;
-    const rule = rules.find(r =>
-      (r.matchers ?? []).some(m => m.type === "literal" && m.field === "to" && (m.value ?? "").toLowerCase() === address)
-    );
-    const toWorker = rule && rule.enabled && (rule.actions ?? []).some(a => a.type === "worker" && (a.value ?? []).includes(emailWorker));
-    if (toWorker) {
-      present(`${address} → ${emailWorker}`);
-      continue;
-    }
-    if (!workerReady) {
-      needYou(`the rule for ${address} needs the Worker ${emailWorker} to exist: deploy, then re-run`);
-      continue;
-    }
-    const body = {
-      enabled: true,
-      name: `operon: ${agent.id}`,
-      matchers: [{ type: "literal", field: "to", value: address }],
       actions: [{ type: "worker", value: [emailWorker] }]
-    };
-    if (rule) {
-      await api("PUT", `/zones/${zoneId}/email/routing/rules/${rule.id}`, body);
-      created(`${address} → ${emailWorker} (rule updated)`);
-    } else {
-      await api("POST", `/zones/${zoneId}/email/routing/rules`, body);
-      created(`${address} → ${emailWorker}`);
-    }
+    });
+    created(`catch-all → ${emailWorker}`);
   }
 }
 

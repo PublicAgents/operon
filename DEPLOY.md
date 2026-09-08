@@ -86,10 +86,10 @@ converges on rerun, and never prints a secret:
 - renders and deploys every Worker; a project's first deploy runs two
   passes (every Worker once without service bindings, then the real
   configs) so the binding cycles resolve in one run;
-- enables Email Routing, one rule per agent address to the email
-  Gatekeeper and the catch-all forwarding to `forwardAgentEmailsTo`
-  (verified destination addresses; a missing one is created and its
-  verification mail waits for your click);
+- enables Email Routing with the catch-all pointed at the email
+  Gatekeeper, which forwards every non-agent address to
+  `forwardAgentEmailsTo` (verified destination addresses; a missing one
+  is created and its verification mail waits for your click);
 - prints the secrets checklist, names only, per Worker;
 - prints the enrollment snippet when this project should join another
   project's control plane (spec 0006 §9).

@@ -343,7 +343,29 @@ export default {
     const roster = parseRoster(env.ROSTER);
     const identity = identityForRecipient(roster, env.EMAIL_DOMAIN, message.to);
     if (!identity) {
-      message.setReject("No such mailbox");
+      // Not an agent's address (hello@, a retired name, a typo): the
+      // zone's catch-all lands here, so the mail goes on to the
+      // operator's addresses rather than bouncing. Nothing else is
+      // done with it: no mailbox, no notify, no agent ever sees it.
+      // Only with no forward address configured does it bounce.
+      const operators = forwardAddresses(env);
+      if (operators.length === 0) {
+        message.setReject("No such mailbox");
+        return;
+      }
+      // Awaited, not backgrounded: a forward that fails (an address
+      // Cloudflare has not verified yet) bounces the mail to its sender
+      // rather than losing it in a log line.
+      let delivered = 0;
+      for (const to of operators) {
+        try {
+          await message.forward(to);
+          delivered += 1;
+        } catch (err) {
+          console.error("operator forward failed", err);
+        }
+      }
+      if (delivered === 0) message.setReject("Mailbox unavailable");
       return;
     }
     const parsed = await PostalMime.parse(message.raw);
