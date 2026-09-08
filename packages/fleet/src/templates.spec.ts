@@ -138,8 +138,10 @@ describe("renderWorkers reproduces the example colony", () => {
     ]);
     expect(byKey["gatekeeper-mcp"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["Ledger"] },
-      { tag: "v2", new_sqlite_classes: ["Meter"] }
+      { tag: "v2", new_sqlite_classes: ["Meter"] },
+      { tag: "v3", new_sqlite_classes: ["Runs"] }
     ]);
+    expect(byKey["gatekeeper-mcp"].routes).toBeUndefined();
     expect(byKey["gatekeeper-spend"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }
     ]);
@@ -385,6 +387,38 @@ describe("MCP server bindings (spec 0008 §4)", () => {
     });
     const order = (key: string) => DEPLOY_ORDER.indexOf(key as (typeof DEPLOY_ORDER)[number]);
     expect(order("gatekeeper-google-analytics")).toBeLessThan(order("scheduler"));
+  });
+
+  it("opens hooks.<zone> on the mcp Worker only when a server takes a provider's callback (spec 0014 §3)", () => {
+    expect(renderWorkers(withMcp, { chassisDir: CHASSIS }).find(worker => worker.key === "gatekeeper-mcp")!.config.routes).toBeUndefined();
+    const withHooks = validateManifest({
+      ...RAW,
+      mcp: {
+        tasks: {
+          type: "http",
+          url: "https://tasks.example/mcp",
+          auth: "bearer",
+          tools: ["createDeepResearch"],
+          webhook: {
+          createTools: ["createDeepResearch"],
+          argument: "webhook",
+          registration: { url: "{url}", event_types: "{events}" },
+          events: ["task_run.status"],
+          runIdPath: "run_id",
+          callbackRunIdPath: "data.run_id",
+          callbackEventPath: "type",
+          signature: { header: "X-Signature", scheme: "hmac-sha256-hex" }
+        }
+        }
+      },
+      agents: LIVEVARIANT.roster.agents.map(agent => ({ ...agent, mcp: ["tasks"] }))
+    });
+    const mcp = renderWorkers(withHooks, { chassisDir: CHASSIS }).find(worker => worker.key === "gatekeeper-mcp")!.config as {
+      routes?: unknown;
+      durable_objects: { bindings: Array<{ name: string }> };
+    };
+    expect(mcp.routes).toEqual([{ pattern: "hooks.example-colony.com", custom_domain: true }]);
+    expect(mcp.durable_objects.bindings.map(binding => binding.name)).toEqual(["LEDGER", "METER", "RUNS"]);
   });
 
   it("ships the analytics Worker with no public route: the binding is the auth", () => {

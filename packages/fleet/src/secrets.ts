@@ -126,6 +126,13 @@ export function requiredSecrets(manifest: FleetManifest): SecretRequirement[] {
     if (def.type === "http" && def.auth === "bearer") {
       add({ worker: "gatekeeper-mcp", name: `MCP_${agentVar(name)}_TOKEN`, purpose: `the bearer for the "${name}" MCP server` });
     }
+    if ((def.type === "http" || def.type === "portal") && def.webhook) {
+      add({
+        worker: "gatekeeper-mcp",
+        name: `MCP_${agentVar(name)}_WEBHOOK_SECRET`,
+        purpose: `the "${name}" provider's webhook signing secret (spec 0014 §3; a public key for ed25519)`
+      });
+    }
     if (def.type === "portal") {
       add({ worker: "gatekeeper-mcp", name: "MCP_PORTAL_CLIENT_ID", purpose: "the Access service token id for the MCP portal" });
       add({ worker: "gatekeeper-mcp", name: "MCP_PORTAL_CLIENT_SECRET", purpose: "the Access service token secret for the MCP portal" });

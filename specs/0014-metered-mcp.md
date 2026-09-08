@@ -59,8 +59,11 @@ mcp:
       callbackIdPath: id                 # optional: the provider's delivery id, the dedupe key
       signature:
         header: X-Signature
-        scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64 and ed25519-hex also known
+        scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64, ed25519-hex
+                                         # and standard-webhooks also known
         timestampHeader: X-Timestamp     # optional; when named, joined to the body as "<ts>.<body>"
+        idHeader: X-Id                   # optional; standard-webhooks requires both and signs
+                                         # "<id>.<ts>.<body>" with a base64 whsec_ key, "v1,<base64>"
 ```
 
 - **The cap is the month's, spread over its days.** Each server's
@@ -165,15 +168,17 @@ chassis change, never an unverified webhook.
   guessed to an agent: it is `mcp_webhook_unknown_run`, ledgered, and
   kept for the operator, with the open creates for that server listed
   beside it (agent, tool, time) as the evidence for a decision. The
-  plane's `mcp_budgets` lists unattributed results and
+  plane's `mcp_budgets` lists unattributed results, each numbered
+  within its run by arrival like every other callback, and
   `mcp_result_assign` (a decision, audited) hands one to a named
   agent's inbox. An agent's result never crosses to another agent
   without the operator's act. Nothing a vendor billed for is dropped.
 - **Every distinct callback is delivered, once.** Callbacks are
   deduplicated by `(run id, delivery id)` when the block names a
-  `callbackIdPath`, the provider's own identity for a delivery, so a
-  retry with a fresh timestamp is one delivery and two transitions
-  are two. Without a delivery id the key is `(run id, sha256 of the
+  `callbackIdPath` (or the signature block an `idHeader`, the
+  Standard Webhooks message id), the provider's own identity for a
+  delivery, so a retry with a fresh timestamp is one delivery and two
+  transitions are two. Without a delivery id the key is `(run id, sha256 of the
   body)`, and the spec says plainly what that buys: a retry whose body
   changed (a new timestamp, an attempt counter) is delivered again,
   under the same run id, for the mind to recognise, and two callbacks

@@ -87,6 +87,36 @@ describe("requiredSecrets", () => {
     expect(names).toContain("gatekeeper-ops/WAKE_TRIGGER_TOKEN_SECOND_ONE");
   });
 
+  it("requires the provider's signing secret for a server that takes callbacks (spec 0014 §3)", () => {
+    const manifest = validateManifest({
+      ...BASE,
+      mcp: {
+        tasks: {
+          type: "http",
+          url: "https://tasks.example/mcp",
+          auth: "bearer",
+          tools: ["createDeepResearch"],
+          webhook: {
+          createTools: ["createDeepResearch"],
+          argument: "webhook",
+          registration: { url: "{url}", event_types: "{events}" },
+          events: ["task_run.status"],
+          runIdPath: "run_id",
+          callbackRunIdPath: "data.run_id",
+          callbackEventPath: "type",
+          signature: { header: "X-Signature", scheme: "hmac-sha256-hex" }
+        }
+        },
+        plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" }
+      },
+      agents: [{ ...BASE.agents[0], mcp: ["tasks", "plain"] }]
+    });
+    const names = requiredSecrets(manifest).map(r => `${r.worker}/${r.name}`);
+    expect(names).toContain("gatekeeper-mcp/MCP_TASKS_TOKEN");
+    expect(names).toContain("gatekeeper-mcp/MCP_TASKS_WEBHOOK_SECRET");
+    expect(names).not.toContain("gatekeeper-mcp/MCP_PLAIN_WEBHOOK_SECRET");
+  });
+
   it("groups by worker with required names first", () => {
     const grouped = secretsByWorker(requiredSecrets(validateManifest(BASE)));
     const telegram = grouped.get("gatekeeper-telegram") ?? [];

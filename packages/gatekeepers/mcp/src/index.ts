@@ -1,5 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { findAgent, parseRoster, type McpBudget, type McpServerDef } from "@operon/core";
+import { findAgent, parseRoster, type McpBudget, type McpServerDef, type McpWebhook } from "@operon/core";
 import { errorResponse, json, Ledger, OpsEntrypoint, readJson } from "@operon/worker-kit";
 import { inPortalScope, ownerOf, type ServerTrust, type UpstreamTool } from "./classify.js";
 import { UpstreamError } from "./guarded-fetch.js";
@@ -7,6 +7,9 @@ import { CatalogMemory } from "./catalog-memory.js";
 import { createProxyServer, type MeterRefusal } from "./proxy.js";
 import { Meter } from "./meter-do.js";
 import type { Remaining } from "./meter.js";
+import { Runs } from "./runs-do.js";
+import type { UnattributedResult } from "./runs.js";
+import { deliveryKey, fillRegistration, readPath, runIdFromResult, signedInput, timestampMs, TIMESTAMP_SKEW_MS, verifySignature } from "./hooks.js";
 import {
   callUpstreamTool,
   catalogRevision,
@@ -15,7 +18,7 @@ import {
   type UpstreamConfig
 } from "./upstream.js";
 
-export { Ledger, Meter };
+export { Ledger, Meter, Runs };
 // Re-exports name functions and classes ONLY: a Worker entry module's
 // export map may carry nothing else (workerd refuses a bare constant
 // there), and the constants have their own modules to import from.
@@ -52,6 +55,7 @@ interface Env {
   MCP_PORTAL_CLIENT_SECRET?: string;
   LEDGER: DurableObjectNamespace<Ledger>;
   METER: DurableObjectNamespace<Meter>;
+  RUNS: DurableObjectNamespace<Runs>;
   CHRONICLE?: D1Database;
   [secret: string]: unknown;
 }
@@ -62,6 +66,97 @@ function ledger(env: Env) {
 
 function meter(env: Env, server: string) {
   return env.METER.get(env.METER.idFromName(server));
+}
+
+function runs(env: Env, server: string) {
+  return env.RUNS.get(env.RUNS.idFromName(server));
+}
+
+/** "tasks" -> MCP_TASKS_WEBHOOK_SECRET: the provider's signing secret (or public key) for one server. */
+export function webhookSecretVar(name: string): string {
+  return `MCP_${name.toUpperCase().replace(/-/g, "_")}_WEBHOOK_SECRET`;
+}
+
+/** The public callback URL a provider is registered with (spec 0014 §3). */
+export function callbackUrl(zone: string, server: string): string {
+  return `https://hooks.${zone}/webhook/${server}`;
+}
+
+/**
+ * A provider's callback on hooks.<zone> (spec 0014 §3): verified or
+ * refused, read at the contract's paths, stored once per delivery,
+ * queued for the run's agent or kept for the operator. Never a guess.
+ */
+async function handleWebhook(request: Request, env: Env, name: string): Promise<Response> {
+  const roster = parseRoster(env.ROSTER);
+  const def = roster.mcp?.[name] as { webhook?: McpWebhook } | undefined;
+  const contract = def?.webhook;
+  if (!contract) return errorResponse(404, "not_found");
+  const secret = env[webhookSecretVar(name)];
+  if (typeof secret !== "string" || secret.length === 0) {
+    await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "secret_unconfigured" });
+    return errorResponse(503, "mcp_webhook_unverified", `${webhookSecretVar(name)} is not configured`);
+  }
+  const body = await request.text();
+  const at = new Date().toISOString();
+  const signature = request.headers.get(contract.signature.header) ?? "";
+  const timestamp = contract.signature.timestampHeader ? (request.headers.get(contract.signature.timestampHeader) ?? undefined) : undefined;
+  const deliveryId = contract.signature.idHeader ? (request.headers.get(contract.signature.idHeader) ?? undefined) : undefined;
+  const source = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (contract.signature.timestampHeader) {
+    const ms = timestamp === undefined ? undefined : timestampMs(timestamp);
+    if (ms === undefined || Math.abs(Date.now() - ms) > TIMESTAMP_SKEW_MS) {
+      await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "timestamp", source });
+      return errorResponse(401, "mcp_webhook_unverified", "the timestamp is missing, unreadable, or older than five minutes");
+    }
+  }
+  if (contract.signature.idHeader && !deliveryId) {
+    await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "id_header", source });
+    return errorResponse(401, "mcp_webhook_unverified", `the ${contract.signature.idHeader} header is missing`);
+  }
+  const verified =
+    signature.length > 0 && (await verifySignature(contract.signature.scheme, secret, signature, signedInput(body, timestamp, deliveryId)));
+  if (!verified) {
+    await ledger(env).append("mcp_webhook_unverified", { server: name, reason: "signature", source });
+    return errorResponse(401, "mcp_webhook_unverified", "the signature does not verify");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    parsed = undefined;
+  }
+  const runIdValue = readPath(parsed, contract.callbackRunIdPath);
+  const eventValue = readPath(parsed, contract.callbackEventPath);
+  const callbackId = contract.callbackIdPath ? readPath(parsed, contract.callbackIdPath) : undefined;
+  const runId = typeof runIdValue === "string" ? runIdValue : typeof runIdValue === "number" ? String(runIdValue) : undefined;
+  const event = typeof eventValue === "string" ? eventValue : undefined;
+  const idMissing = contract.callbackIdPath !== undefined && callbackId === undefined;
+  if (runId === undefined || event === undefined || idMissing) {
+    // Kept for the operator under a run id of "?" rather than dropped:
+    // the provider billed for something.
+    const stored = await runs(env, name).storeCallback({
+      runId: runId ?? "?",
+      event: event ?? "?",
+      // Never deduplicated against anything (spec 0014 §3): nothing
+      // readable says what it repeats.
+      deliveryKey: `unreadable:${crypto.randomUUID()}`,
+      body,
+      at
+    });
+    await ledger(env).append("mcp_webhook_unreadable", { server: name, paths: [contract.callbackRunIdPath, contract.callbackEventPath, contract.callbackIdPath].filter(Boolean), stored: stored.stored });
+    return json({ ok: true, stored: stored.stored, attributed: false });
+  }
+  // The provider's delivery id from the body when the contract names
+  // one, else from the id header a Standard Webhooks provider signs.
+  const stored = await runs(env, name).storeCallback({ runId, event, deliveryKey: await deliveryKey(callbackId ?? deliveryId, body), body, at });
+  if (!stored.stored) return json({ ok: true, stored: false, repeat: true });
+  if (stored.agentId) {
+    await ledger(env).append("mcp_webhook_received", { agentId: stored.agentId, server: name, runId, event });
+  } else {
+    await ledger(env).append("mcp_webhook_unknown_run", { server: name, runId, event });
+  }
+  return json({ ok: true, stored: true, attributed: Boolean(stored.agentId) });
 }
 
 /** The price of one call under a budget: a number, 0 for a free read, undefined when the tool is neither. */
@@ -86,6 +181,18 @@ async function budgets(env: Env, at: string): Promise<Array<{ server: string; bu
   return out;
 }
 
+/** Every callback held for the operator (spec 0014 §3), per webhook-bearing server, with its evidence. */
+async function unattributed(env: Env): Promise<Array<{ server: string; results: UnattributedResult[] }>> {
+  const roster = parseRoster(env.ROSTER);
+  const out: Array<{ server: string; results: UnattributedResult[] }> = [];
+  for (const [name, def] of Object.entries(roster.mcp ?? {})) {
+    if (!(def as { webhook?: unknown }).webhook) continue;
+    const results = await runs(env, name).listUnattributed();
+    if (results.length > 0) out.push({ server: name, results });
+  }
+  return out;
+}
+
 /** The operator's binding-only view of this ledger (spec 0003 step 3) and the budgets (spec 0014 §4). */
 export class Ops extends OpsEntrypoint<Env> {
   protected async handle(request: Request): Promise<Response> {
@@ -94,7 +201,24 @@ export class Ops extends OpsEntrypoint<Env> {
       return json(await ledger(this.env).recent());
     }
     if (path === "/gatekeeper/mcp/budgets") {
-      return json({ ok: true, budgets: await budgets(this.env, new Date().toISOString()) });
+      return json({
+        ok: true,
+        budgets: await budgets(this.env, new Date().toISOString()),
+        unattributed: await unattributed(this.env)
+      });
+    }
+    if (path === "/gatekeeper/mcp/result-assign" && request.method === "POST") {
+      const body = await readJson<{ server?: string; id?: string; agentId?: string }>(request);
+      if (!body.ok || typeof body.value.server !== "string" || typeof body.value.id !== "string" || typeof body.value.agentId !== "string") {
+        return errorResponse(400, "malformed_json");
+      }
+      const roster = parseRoster(this.env.ROSTER);
+      if (!findAgent(roster, body.value.agentId)) return errorResponse(404, "unknown_agent");
+      if (!(roster.mcp?.[body.value.server] as { webhook?: unknown } | undefined)?.webhook) return errorResponse(404, "not_found");
+      const assigned = await runs(this.env, body.value.server).assign(body.value.id, body.value.agentId);
+      if (!assigned) return errorResponse(404, "not_found", "no unattributed result with that id");
+      await ledger(this.env).append("mcp_result_assigned", { agentId: body.value.agentId, server: body.value.server, runId: assigned.runId, id: assigned.id });
+      return json({ ok: true, runId: assigned.runId, agentId: body.value.agentId });
     }
     if (path === "/gatekeeper/mcp/budget-reset" && request.method === "POST") {
       const body = await readJson<{ server?: string; spentMonthUsd?: number }>(request);
@@ -232,6 +356,41 @@ function allServerIds(tools: UpstreamTool[]): string[] {
 }
 
 /**
+ * The hooks around one call (spec 0014): the meter's reservation before
+ * and settlement after, and the webhook contract's registration on a
+ * create call and run attribution from its answer. Tokens carry both.
+ */
+function callHooks(env: Env, agentId: string, server: string, zone: string, budget: McpBudget | undefined, contract: McpWebhook | undefined) {
+  const meterHook = budget ? meterHooks(env, agentId, server, budget) : undefined;
+  return {
+    before: async (tool: string, args: Record<string, unknown>) => {
+      const gate = meterHook ? await meterHook.before(tool) : { token: "" };
+      if ("refused" in gate) return gate;
+      if (!contract || !contract.createTools.includes(tool)) return { token: `${gate.token}|` };
+      // The registration is the Gatekeeper's: the mind never chooses the
+      // URL; an open create remembers the agent until the run id comes back.
+      const createId = crypto.randomUUID();
+      await runs(env, server).openCreate({ id: createId, agentId, tool, at: new Date().toISOString() });
+      const registration = fillRegistration(contract.registration, callbackUrl(zone, server), contract.events);
+      return { token: `${gate.token}|${createId}`, args: { ...args, [contract.argument]: registration } };
+    },
+    after: async (token: string, result: unknown) => {
+      const [meterToken, createId] = token.split("|");
+      if (meterHook && meterToken) await meterHook.after(meterToken);
+      if (!contract || !createId) return;
+      const runId = result === undefined ? undefined : runIdFromResult(result, contract.runIdPath);
+      if (runId) {
+        await runs(env, server).closeCreate(createId, runId);
+      } else {
+        // The answer carried no id at the named path (or was lost): the
+        // create stays open as the operator's evidence, and the row says so.
+        await ledger(env).append("mcp_webhook_run_unattributed", { agentId, server, createId, path: contract.runIdPath, answered: result !== undefined });
+      }
+    }
+  };
+}
+
+/**
  * The meter's two hooks for one budgeted server (spec 0014 §2): reserve
  * the price before the call, or refuse by name before the network;
  * settle after an answer of any kind, refund only after a provably
@@ -295,10 +454,35 @@ const catalogs = new CatalogMemory();
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // hooks.<zone>: the one public surface of this Worker (spec 0014
+    // §3), a provider's callback, verified before it is read.
+    const hook = /^\/webhook\/([a-z0-9][a-z0-9-]*)$/.exec(url.pathname);
+    if (hook) {
+      if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+      return handleWebhook(request, env, hook[1]);
+    }
     // /mcp/<name>: the umbilical rewrites nothing, so the server name
     // arrives in the path the container's config named.
-    const match = /^\/mcp\/([a-z0-9][a-z0-9-]*)(\/budget)?$/.exec(url.pathname);
+    const match = /^\/mcp\/([a-z0-9][a-z0-9-]*)(\/budget|\/results|\/results\/ack)?$/.exec(url.pathname);
     if (!match) return errorResponse(404, "not_found");
+    // The agent's queued results (spec 0014 §3): pulled at wake start,
+    // acked by the wake after its persist.
+    if (match[2] === "/results" || match[2] === "/results/ack") {
+      if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+      const agentId = request.headers.get("x-operon-agent") ?? "unknown";
+      let resolved: ResolvedServer;
+      try {
+        resolved = resolveServer(env, agentId, match[1]);
+      } catch (error) {
+        const code = error instanceof ConfigRefusal ? error.code : "mcp_not_granted";
+        return errorResponse(code === "mcp_not_granted" ? 403 : 503, code, error instanceof Error ? error.message : String(error));
+      }
+      if (!(resolved.def as { webhook?: unknown }).webhook) return json({ ok: true, results: [] });
+      if (match[2] === "/results") return json({ ok: true, results: await runs(env, resolved.name).pullResults(agentId) });
+      const body = await readJson<{ ids?: string[] }>(request);
+      const ids = body.ok && Array.isArray(body.value.ids) ? body.value.ids.filter(id => typeof id === "string") : [];
+      return json({ ok: true, acked: await runs(env, resolved.name).ackResults(agentId, ids) });
+    }
     // GET /mcp/<name>/budget: the remaining figures for the calling
     // agent's granted server (spec 0014 §2), read at wake start and on
     // demand, so a mind plans against a number.
@@ -361,11 +545,12 @@ export default {
           })
         );
         const budget = (server.def as { budget?: McpBudget }).budget;
+        const contract = (server.def as { webhook?: McpWebhook }).webhook;
         const proxy = await createProxyServer(server, {
           tools,
           call: (toolName, args) => callUpstreamTool(client, toolName, args),
           record: (event, detail) => ledger(env).append(event, { agentId, ...detail }),
-          ...(budget ? meterHooks(env, agentId, server.name, budget) : {})
+          ...(budget || contract ? callHooks(env, agentId, server.name, parseRoster(env.ROSTER).zone, budget, contract) : {})
         });
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
