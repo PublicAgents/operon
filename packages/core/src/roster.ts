@@ -84,6 +84,41 @@ export interface Roster {
  * One, never in the container, and a stdio definition has no place to
  * put one at all.
  */
+/**
+ * A monthly ceiling for a paid upstream, shared by every agent that
+ * holds the grant (spec 0014 §2): the operator's price per tool call
+ * in USD, and the tools that cost nothing. With a budget present, a
+ * tool that is neither priced nor free is refused before the network.
+ */
+export interface McpBudget {
+  monthlyUsd: number;
+  perCall: Record<string, number>;
+  free?: string[];
+}
+
+export type McpSignatureScheme = "hmac-sha256-hex" | "hmac-sha256-base64" | "ed25519-hex";
+export const MCP_SIGNATURE_SCHEMES: readonly McpSignatureScheme[] = ["hmac-sha256-hex", "hmac-sha256-base64", "ed25519-hex"];
+
+/**
+ * The provider's webhook contract (spec 0014 §3), stated by the
+ * operator: which tools create runs, the create argument that takes
+ * the registration and its shape (a JSON template; `{url}` and
+ * `{events}` are the only substitutions), the events, where the run id
+ * sits in the create result and in a callback, the provider's
+ * delivery id when it has one, and how the signature is made.
+ */
+export interface McpWebhook {
+  createTools: string[];
+  argument: string;
+  registration: unknown;
+  events: string[];
+  runIdPath: string;
+  callbackRunIdPath: string;
+  callbackEventPath: string;
+  callbackIdPath?: string;
+  signature: { header: string; scheme: McpSignatureScheme; timestampHeader?: string };
+}
+
 export type McpServerDef =
   | {
       /** A bespoke operon Worker speaking MCP (e.g. gatekeeper-google-analytics). */
@@ -96,6 +131,10 @@ export type McpServerDef =
       server: string;
       /** Write pins; reads pass via the vetted tier. */
       tools?: string[];
+      /** A fleet-wide budget for a paid upstream (spec 0014 §2). */
+      budget?: McpBudget;
+      /** The provider's webhook contract for asynchronous answers (spec 0014 §3). */
+      webhook?: McpWebhook;
     }
   | {
       /** A plain remote server; bearer secret (MCP_<NAME>_TOKEN) lives on gatekeeper-mcp. */
@@ -104,6 +143,8 @@ export type McpServerDef =
       auth: "none" | "bearer";
       /** byo tier: ONLY pinned tools are callable. */
       tools?: string[];
+      budget?: McpBudget;
+      webhook?: McpWebhook;
     }
   | {
       /** In-container, credential-less by construction: no env field exists. */
@@ -284,8 +325,8 @@ function requireStringArray(value: unknown, path: string): string[] {
 /** The keys allowed per def type: an unknown key refuses, it never vanishes. */
 const MCP_DEF_KEYS: Record<string, Set<string>> = {
   gatekeeper: new Set(["type", "worker"]),
-  portal: new Set(["type", "server", "tools"]),
-  http: new Set(["type", "url", "auth", "tools"]),
+  portal: new Set(["type", "server", "tools", "budget", "webhook"]),
+  http: new Set(["type", "url", "auth", "tools", "budget", "webhook"]),
   stdio: new Set(["type", "command", "args"])
 };
 
@@ -330,14 +371,14 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
     case "portal": {
       const server = requireString(raw.server, `${path}.server`);
       if (!PORTAL_SERVER.test(server)) fail(`${path}.server`, `"${server}" is not a server id`);
-      return { type, server, ...(tools ? { tools } : {}) };
+      return { type, server, ...(tools ? { tools } : {}), ...parseMetering(path, raw, tools) };
     }
     case "http": {
       const url = requireString(raw.url, `${path}.url`);
       if (!/^https:\/\//.test(url)) fail(`${path}.url`, "must be an https:// URL");
       const auth = requireString(raw.auth, `${path}.auth`);
       if (auth !== "none" && auth !== "bearer") fail(`${path}.auth`, 'must be "none" or "bearer"');
-      return { type, url, auth, ...(tools ? { tools } : {}) };
+      return { type, url, auth, ...(tools ? { tools } : {}), ...parseMetering(path, raw, tools) };
     }
     default: {
       const command = requireString(raw.command, `${path}.command`);
@@ -362,6 +403,132 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
       return { type: "stdio", command, args };
     }
   }
+}
+
+const BUDGET_KEYS = new Set(["monthlyUsd", "perCall", "free"]);
+const WEBHOOK_KEYS = new Set([
+  "createTools",
+  "argument",
+  "registration",
+  "events",
+  "runIdPath",
+  "callbackRunIdPath",
+  "callbackEventPath",
+  "callbackIdPath",
+  "signature"
+]);
+const SIGNATURE_KEYS = new Set(["header", "scheme", "timestampHeader"]);
+const DOTTED_PATH = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
+
+function refuseUnknownKeys(raw: Record<string, unknown>, known: Set<string>, path: string, what: string): void {
+  for (const key of Object.keys(raw)) {
+    if (!known.has(key)) fail(`${path}.${key}`, `is not a ${what} field (known: ${[...known].join(", ")})`);
+  }
+}
+
+/** The budget and webhook blocks of a remote server (spec 0014 §2, §3), each optional. */
+function parseMetering(
+  path: string,
+  raw: Record<string, unknown>,
+  tools: string[] | undefined
+): { budget?: McpBudget; webhook?: McpWebhook } {
+  const out: { budget?: McpBudget; webhook?: McpWebhook } = {};
+  if (raw.budget !== undefined) out.budget = parseBudget(`${path}.budget`, raw.budget);
+  if (raw.webhook !== undefined) out.webhook = parseWebhook(`${path}.webhook`, raw.webhook, tools);
+  return out;
+}
+
+function parseBudget(path: string, value: unknown): McpBudget {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) fail(path, "must be an object");
+  const raw = value as Record<string, unknown>;
+  refuseUnknownKeys(raw, BUDGET_KEYS, path, "budget");
+  const monthlyUsd = raw.monthlyUsd;
+  if (typeof monthlyUsd !== "number" || !Number.isFinite(monthlyUsd) || monthlyUsd <= 0) {
+    fail(`${path}.monthlyUsd`, "must be a positive number of USD");
+  }
+  if (typeof raw.perCall !== "object" || raw.perCall === null || Array.isArray(raw.perCall)) {
+    fail(`${path}.perCall`, "must be an object of tool name to USD per call");
+  }
+  const perCall: Record<string, number> = {};
+  for (const [tool, price] of Object.entries(raw.perCall as Record<string, unknown>)) {
+    if (tool.length === 0) fail(`${path}.perCall`, "must not contain empty tool names");
+    if (typeof price !== "number" || !Number.isFinite(price) || price < 0) {
+      fail(`${path}.perCall.${tool}`, "must be a non-negative number of USD");
+    }
+    perCall[tool] = price;
+  }
+  const free = raw.free === undefined ? undefined : requireStringArray(raw.free, `${path}.free`);
+  for (const tool of free ?? []) {
+    if (tool.length === 0) fail(`${path}.free`, "must not contain empty tool names");
+    if (tool in perCall) fail(`${path}.free`, `"${tool}" is priced in perCall; a tool is priced or free, not both`);
+  }
+  return { monthlyUsd, perCall, ...(free ? { free } : {}) };
+}
+
+/** Whether a JSON template mentions a placeholder anywhere in its strings. */
+function templateMentions(value: unknown, placeholder: string): boolean {
+  if (typeof value === "string") return value.includes(placeholder);
+  if (Array.isArray(value)) return value.some(item => templateMentions(item, placeholder));
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value as Record<string, unknown>).some(item => templateMentions(item, placeholder));
+  }
+  return false;
+}
+
+function parseWebhook(path: string, value: unknown, tools: string[] | undefined): McpWebhook {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) fail(path, "must be an object");
+  const raw = value as Record<string, unknown>;
+  refuseUnknownKeys(raw, WEBHOOK_KEYS, path, "webhook");
+  const createTools = requireStringArray(raw.createTools, `${path}.createTools`);
+  if (createTools.length === 0) fail(`${path}.createTools`, "must name at least one tool");
+  for (const tool of createTools) {
+    if (tool.length === 0) fail(`${path}.createTools`, "must not contain empty names");
+    if (tools && !tools.includes(tool)) fail(`${path}.createTools`, `"${tool}" is not one of this server's tools`);
+  }
+  const argument = requireString(raw.argument, `${path}.argument`);
+  if (argument.length === 0) fail(`${path}.argument`, "must name the create call's argument");
+  if (raw.registration === undefined) fail(`${path}.registration`, "is required: the provider's registration shape");
+  if (!templateMentions(raw.registration, "{url}")) {
+    fail(`${path}.registration`, "must carry {url} somewhere in its strings, or the provider never learns the callback");
+  }
+  const events = requireStringArray(raw.events, `${path}.events`);
+  if (events.length === 0) fail(`${path}.events`, "must name at least one event");
+  const pathField = (key: string, required: boolean): string | undefined => {
+    if (raw[key] === undefined) {
+      if (required) fail(`${path}.${key}`, "is required");
+      return undefined;
+    }
+    const text = requireString(raw[key], `${path}.${key}`);
+    if (!DOTTED_PATH.test(text)) fail(`${path}.${key}`, `"${text}" is not a dotted path`);
+    return text;
+  };
+  const runIdPath = pathField("runIdPath", true) as string;
+  const callbackRunIdPath = pathField("callbackRunIdPath", true) as string;
+  const callbackEventPath = pathField("callbackEventPath", true) as string;
+  const callbackIdPath = pathField("callbackIdPath", false);
+  if (typeof raw.signature !== "object" || raw.signature === null || Array.isArray(raw.signature)) {
+    fail(`${path}.signature`, "must be an object {header, scheme, timestampHeader?}");
+  }
+  const sig = raw.signature as Record<string, unknown>;
+  refuseUnknownKeys(sig, SIGNATURE_KEYS, `${path}.signature`, "signature");
+  const header = requireString(sig.header, `${path}.signature.header`);
+  if (header.length === 0) fail(`${path}.signature.header`, "must name the signature header");
+  const scheme = requireString(sig.scheme, `${path}.signature.scheme`);
+  if (!(MCP_SIGNATURE_SCHEMES as readonly string[]).includes(scheme)) {
+    fail(`${path}.signature.scheme`, `mcp_webhook_scheme_unknown: "${scheme}" (known: ${MCP_SIGNATURE_SCHEMES.join(", ")})`);
+  }
+  const timestampHeader = sig.timestampHeader === undefined ? undefined : requireString(sig.timestampHeader, `${path}.signature.timestampHeader`);
+  return {
+    createTools,
+    argument,
+    registration: raw.registration,
+    events,
+    runIdPath,
+    callbackRunIdPath,
+    callbackEventPath,
+    ...(callbackIdPath ? { callbackIdPath } : {}),
+    signature: { header, scheme: scheme as McpSignatureScheme, ...(timestampHeader ? { timestampHeader } : {}) }
+  };
 }
 
 /**
