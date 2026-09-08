@@ -31,10 +31,23 @@ export interface ProxyGrant {
   pinned: string[];
 }
 
+/** A refusal the meter makes before the network (spec 0014 §2). */
+export interface MeterRefusal {
+  code: "mcp_budget_exhausted" | "mcp_tool_unpriced";
+  detail: string;
+}
+
 export interface ProxyDeps {
   tools: UpstreamTool[];
   call: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   record: (event: string, detail: Record<string, unknown>) => Promise<void>;
+  /**
+   * The meter, when the server carries a budget: `before` reserves the
+   * call's price (a token to settle) or refuses by name; `after` settles
+   * or refunds it once the upstream has answered or failed.
+   */
+  before?: (name: string) => Promise<{ token: string } | { refused: MeterRefusal }>;
+  after?: (token: string, outcome: "answered" | "unreachable") => Promise<void>;
 }
 
 function failed(message: string): CallToolResult {
@@ -106,12 +119,27 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       });
       return failed(`mcp_tool_needs_grant: "${name}" is not granted on ${server.name}`);
     }
+    let token: string | undefined;
+    if (deps.before) {
+      const gate = await deps.before(name);
+      if ("refused" in gate) {
+        await deps.record("mcp_tool_refused", { server: server.name, tool: name, code: gate.refused.code, detail: gate.refused.detail });
+        return failed(`${gate.refused.code}: ${gate.refused.detail}`);
+      }
+      token = gate.token;
+    }
     try {
       const result = await deps.call(name, args);
+      if (token !== undefined && deps.after) await deps.after(token, "answered");
       await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
       return passthrough(result);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      // Only a provably unsent call is refunded (spec 0014 §2): a
+      // connection that never carried the body. Anything after the body
+      // left, an upstream refusal included, stays billed.
+      const unreachable = error instanceof Error && error.name === "UpstreamError" && (error as { code?: string }).code === "mcp_upstream_unreachable";
+      if (token !== undefined && deps.after) await deps.after(token, unreachable ? "unreachable" : "answered");
       await deps.record("mcp_tool_failed", { server: server.name, tool: name, detail });
       return failed(detail);
     }

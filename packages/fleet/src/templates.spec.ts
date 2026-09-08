@@ -136,6 +136,10 @@ describe("renderWorkers reproduces the example colony", () => {
       { tag: "v1", new_sqlite_classes: ["Ledger"] },
       { tag: "v2", new_sqlite_classes: ["Channel"] }
     ]);
+    expect(byKey["gatekeeper-mcp"].migrations).toEqual([
+      { tag: "v1", new_sqlite_classes: ["Ledger"] },
+      { tag: "v2", new_sqlite_classes: ["Meter"] }
+    ]);
     expect(byKey["gatekeeper-spend"].migrations).toEqual([
       { tag: "v1", new_sqlite_classes: ["SpendLedger", "Ledger"] }
     ]);

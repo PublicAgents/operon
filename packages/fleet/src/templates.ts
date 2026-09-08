@@ -349,8 +349,11 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // which a hostname blocklist cannot do (spec 0008 §5).
         compatibility_flags: ["global_fetch_strictly_public"],
         // No route: reached only through the umbilical.
-        durable_objects: { bindings: [ledger] },
-        migrations: [{ tag: "v1", new_sqlite_classes: ["Ledger"] }],
+        durable_objects: { bindings: [ledger, { name: "METER", class_name: "Meter" }] },
+        migrations: [
+          { tag: "v1", new_sqlite_classes: ["Ledger"] },
+          { tag: "v2", new_sqlite_classes: ["Meter"] }
+        ],
         vars: policyVars(manifest, "mcp")
       }
     },

@@ -6,9 +6,15 @@
   "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": false,
   "durable_objects": {
-    "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }]
+    "bindings": [
+      { "name": "LEDGER", "class_name": "Ledger" },
+      { "name": "METER", "class_name": "Meter" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Ledger"] },
+    { "tag": "v2", "new_sqlite_classes": ["Meter"] }
+  ]
   // ROSTER injected at deploy; the fleet templates own the real
   // deployment config (spec 0006 §2). This file is the dev target.
   // Vars:    MCP_PORTAL_URL  the deployment's Cloudflare MCP portal
