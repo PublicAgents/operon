@@ -51,6 +51,8 @@ mcp:
       argument: webhook                  # the create call's parameter that takes {url, event_types}
       events: [task_run.status]
       runIdPath: run_id                  # where the create result carries the run id (dotted path)
+      callbackRunIdPath: data.run_id     # where the callback body carries it
+      callbackEventPath: type            # where the callback body names its event
       signature:
         header: X-Signature
         scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64 and ed25519-hex also known
@@ -81,14 +83,14 @@ mcp:
 - **Reserve before, settle after; ambiguous is billed.** The
   Gatekeeper reserves the price before it proxies the call and settles
   it when the upstream answers. A reservation is refunded only when the
-  provider provably did no work: the connection was refused or the
-  request failed before its body was sent, or the provider answered
-  401, 402 or 403 (spec 0008's `mcp_upstream_auth`). A timeout, a lost
-  or truncated answer, a response-boundary refusal, a 5xx: all keep
-  the reservation, because the vendor may have billed. The meter
-  therefore never undercounts; it can only overcount, and the
-  operator's `mcp_budget_reset` is the correction after reading the
-  vendor's dashboard. The spend door's outbox pattern (spec 0002
+  provider provably received nothing: the connection was refused, or
+  the request failed before its body was sent. Everything after the
+  body left keeps the reservation: a 401, 402 or 403 (the provider may
+  have processed the request before deciding to answer so), a
+  timeout, a lost or truncated answer, a response-boundary refusal, a
+  5xx. The meter therefore never undercounts; it can only overcount,
+  and the operator's `mcp_budget_reset` is the correction after
+  reading the vendor's dashboard. The spend door's outbox pattern (spec 0002
   §2.2), not "call then count".
 - **The agent is told.** At wake start the container reads each
   granted metered server's remaining figure and prints
@@ -128,11 +130,14 @@ chassis change, never an unverified webhook.
   events into each `createTools` call's `argument` before proxying it,
   overwriting whatever the mind passed there, so a mind never chooses
   the URL and never learns the secret.
-- **Attributed at creation.** The Gatekeeper reads the run id from the
-  create result at `runIdPath` and records `run id -> agentId` (30
-  days); a create result with no id at that path is proxied unchanged
-  and ledgered `mcp_webhook_run_unattributed`, so a wrong path is
-  visible on the first call. A webhook for an unknown run is
+- **Attributed at creation, matched at callback.** The Gatekeeper
+  reads the run id from the create result at `runIdPath` and records
+  `run id -> agentId` (30 days); a create result with no id at that
+  path is proxied unchanged and ledgered `mcp_webhook_run_unattributed`,
+  so a wrong path is visible on the first call. A verified callback is
+  read at `callbackRunIdPath` and `callbackEventPath`; a body with no
+  value at either path is `mcp_webhook_unreadable`, ledgered with the
+  path names, dropped. A webhook for an unknown run is
   `mcp_webhook_unknown_run`, ledgered, dropped; a webhook for a known
   run is stored once per (run id, event) and a repeat is acknowledged
   without a second delivery.
@@ -151,7 +156,8 @@ chassis change, never an unverified webhook.
   `portal` defs; `budget.monthlyUsd` positive, `perCall` prices
   non-negative, `free` names disjoint from `perCall`; `webhook`
   requires `createTools` (each a known tool of the def), `argument`,
-  `events`, `runIdPath` and a `signature` with a known `scheme`; a
+  `events`, `runIdPath`, `callbackRunIdPath`, `callbackEventPath` and
+  a `signature` with a known `scheme`; a
   webhook block without a budget is allowed (metering and answering
   are separate facts). Unknown keys refuse by name.
 - **gatekeeper-mcp**: a `Meter` Durable Object per server holding
@@ -175,8 +181,8 @@ chassis change, never an unverified webhook.
   remaining, last refusal.
 - **ledger**: `mcp_metered {agentId, server, tool, usd, remainingTodayUsd}`,
   `mcp_budget_exhausted`, `mcp_tool_unpriced`, `mcp_webhook_received`,
-  `mcp_webhook_unverified`, `mcp_webhook_unknown_run`,
-  `mcp_webhook_run_unattributed`.
+  `mcp_webhook_unverified`, `mcp_webhook_unreadable`,
+  `mcp_webhook_unknown_run`, `mcp_webhook_run_unattributed`.
 
 ## 5. Refusals and invariants, each with a test
 
@@ -185,14 +191,16 @@ chassis change, never an unverified webhook.
 - `mcp_tool_unpriced`: a budgeted server's tool with no price and no
   `free` listing; refused before the network.
 - `mcp_webhook_unverified` (bad signature, stale timestamp),
+  `mcp_webhook_unreadable` (no run id or event at the named paths),
   `mcp_webhook_unknown_run`, `mcp_webhook_run_unattributed`,
   `mcp_webhook_scheme_unknown` (at validation).
 - The daily allotment is fixed at the day's first call from the spend
   before that day; a day's own calls never shrink it; it never exceeds
   the month's remainder and on the last day equals it. A month of
   daily spending to the allotment lands exactly on `monthlyUsd`.
-- A reservation is refunded only for a refused connection, an unsent
-  body, or a 401/402/403; a timeout, a 5xx and a lost answer keep it.
+- A reservation is refunded only for a refused connection or an
+  unsent body; every answer after the body left, 4xx and 5xx alike,
+  and every lost answer, keeps it.
 - A repeated webhook (same run id and event) is delivered once.
 - Two agents calling at once cannot both take the last cent (the
   meter is one Durable Object turn).
