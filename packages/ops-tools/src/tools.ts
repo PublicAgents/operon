@@ -738,7 +738,7 @@ const REGISTRY: readonly ToolDefinition[] = [
     name: "mcp_budgets",
     title: "The metered MCP servers' budgets",
     description:
-      "Every remote MCP server that carries a budget (spec 0014): the month's cap and spend, today's allotment and remainder, the calls in flight, when the day rolls. Read-only; the figures are the meter's, the vendor's dashboard is the invoice.",
+      `Every remote MCP server that carries a budget (spec 0014): the month's cap and spend, today's allotment and remainder, the calls in flight, when the day rolls; and every provider callback nobody could be attributed (spec 0014 §3), with the open creates at its arrival as the evidence for mcp_result_assign. Read-only; the figures are the meter's, the vendor's dashboard is the invoice. ${UNTRUSTED}`,
     input: z.object({}),
     readOnly: true,
     decision: false,
@@ -756,6 +756,20 @@ const REGISTRY: readonly ToolDefinition[] = [
     readOnly: false,
     decision: true,
     handler: (input, context) => context.ops("MCP_GK", "POST", "/gatekeeper/mcp/budget-reset", { body: input })
+  },
+  {
+    name: "mcp_result_assign",
+    title: "Hand an unattributed task result to an agent",
+    description:
+      "The operator's decision on a callback nobody could be attributed: it becomes the named agent's, delivered to its inbox at its next wake, and the run is that agent's from now on. Audited.",
+    input: z.object({
+      server: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(40),
+      id: z.string().min(1).max(80),
+      agentId
+    }),
+    readOnly: false,
+    decision: true,
+    handler: (input, context) => context.ops("MCP_GK", "POST", "/gatekeeper/mcp/result-assign", { body: input })
   },
   {
     name: "web_sessions",

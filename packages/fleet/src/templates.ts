@@ -349,11 +349,19 @@ export function renderWorkers(manifest: FleetManifest, options: RenderOptions): 
         // The runtime refuses private and loopback addresses after DNS,
         // which a hostname blocklist cannot do (spec 0008 §5).
         compatibility_flags: ["global_fetch_strictly_public"],
-        // No route: reached only through the umbilical.
-        durable_objects: { bindings: [ledger, { name: "METER", class_name: "Meter" }] },
+        // Reached through the umbilical, plus hooks.<zone> when some
+        // server takes a provider's callback (spec 0014 §3): the one
+        // public surface, verified before it is read.
+        ...(Object.values(manifest.roster.mcp ?? {}).some(def => (def as { webhook?: unknown }).webhook)
+          ? { routes: [route(gkHost("hooks"))] }
+          : {}),
+        durable_objects: {
+          bindings: [ledger, { name: "METER", class_name: "Meter" }, { name: "RUNS", class_name: "Runs" }]
+        },
         migrations: [
           { tag: "v1", new_sqlite_classes: ["Ledger"] },
-          { tag: "v2", new_sqlite_classes: ["Meter"] }
+          { tag: "v2", new_sqlite_classes: ["Meter"] },
+          { tag: "v3", new_sqlite_classes: ["Runs"] }
         ],
         vars: policyVars(manifest, "mcp")
       }

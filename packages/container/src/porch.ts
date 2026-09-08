@@ -100,6 +100,8 @@ export interface PorchContext {
 /** What one pull found: counts the mind can act on, not a status dump. */
 export interface Announcements {
   mail: number;
+  /** Task results written to inbox/mcp/ (spec 0014 §3). */
+  results?: number;
   dms: number;
   channel: boolean;
   /** Ids of asks the operator acted on, deduplicated while buffered. */
@@ -301,12 +303,13 @@ export class Porch {
         if (request.destroyed) return fail(499, "caller_gone");
         const pulled = this.context.drainAnnouncements();
         const fresh = Boolean(
-          pulled.mail || pulled.dms || pulled.channel || pulled.asks.length
+          pulled.mail || pulled.results || pulled.dms || pulled.channel || pulled.asks.length
         );
         const recredit = this.context.recreditAnnouncements;
         return {
           ...ok({
             mail: pulled.mail,
+            results: pulled.results ?? 0,
             dms: pulled.dms,
             channel: pulled.channel,
             // The wire says how MANY asks moved; the ids are internal

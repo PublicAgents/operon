@@ -34,6 +34,12 @@ describe("composeNotice", () => {
     );
   });
 
+  it("names task results in inbox/mcp/ apart from mail", () => {
+    const { text } = composeNotice({ mail: 0, dms: 0, channel: false, results: 2 }, null, []);
+    expect(text).toContain("2 task result(s) in inbox/mcp/");
+    expect(text).not.toContain("new message(s)");
+  });
+
   it("names an answered ask on its own: it may be what the mind is blocked on", () => {
     const { text } = composeNotice({ mail: 0, dms: 0, channel: false, asks: 2 }, null, []);
     expect(text).toContain("acted on 2 of your ask(s)");

@@ -1,4 +1,5 @@
 import { budgetLine, readMcpBudgets, type McpBudgetView } from "./mcp-budget.js";
+import { ackMcpResults, pullMcpResults, writeResultFiles } from "./mcp-results.js";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile, copyFile, readFile, chmod } from "node:fs/promises";
 import { chromeMajorFrom, LOCAL_BROWSER_EXECUTABLE, LOCAL_BROWSER_OUTPUT_DIR, mcpStagingLines, mergedMcpConfig } from "./mcp-config.js";
@@ -327,6 +328,35 @@ async function pullInbox(
     log(`inbox pull error: ${String(error).slice(0, 200)}`);
     return [];
   }
+}
+
+/**
+ * Pull every reachable MCP server's queued task results (spec 0014 §3)
+ * into inbox/mcp/, remembering their ids for the ack after persist.
+ * Returns how many files arrived; a server that cannot be read is
+ * logged and skipped, and its results re-deliver next time.
+ */
+async function pullResultsInto(
+  config: WakeConfig,
+  chassisWritten: Map<string, string>,
+  denylist: string[],
+  acked: Map<string, Set<string>>
+): Promise<number> {
+  if (!config.mcpServers.some(server => server.type === "http")) return 0;
+  const pulled = await pullMcpResults(config.mcpServers, config.mcpToken, denylist);
+  for (const error of pulled.errors) log(`mcp results pull failed: ${error}`);
+  for (const path of pulled.sanitized) log(`mcp results: sanitized ${path} at delivery (matched the secret scanner)`);
+  if (pulled.files.length === 0) return 0;
+  await writeResultFiles(STATE_DIR, pulled.files);
+  for (const file of pulled.files) chassisWritten.set(file.path, file.content);
+  await chownToMind(join(STATE_DIR, "inbox", "mcp"));
+  for (const [server, ids] of pulled.ids) {
+    const set = acked.get(server) ?? new Set<string>();
+    for (const id of ids) set.add(id);
+    acked.set(server, set);
+  }
+  log(`${pulled.files.length} task result(s) landed in inbox/mcp/`);
+  return pulled.files.length;
 }
 
 /**
@@ -988,11 +1018,14 @@ async function main(): Promise<number> {
     // entry at the time it was handed out, so a later token covers an
     // earlier one and acking the latest is exactly right; acking an
     // older one after it would move nothing backwards either.
-    asksDelivery: null as string | null
+    asksDelivery: null as string | null,
+    // Task results per MCP server (spec 0014 §3), acked like mail.
+    mcpResults: new Map<string, Set<string>>()
   };
   for (const id of await pullInbox(config, chassisWritten, denylist)) {
     ackState.inboxIds.add(id);
   }
+  await pullResultsInto(config, chassisWritten, denylist, ackState.mcpResults);
   ackState.dmUpTo = await pullXDms(config, chassisWritten, denylist);
   ackState.channelUpTo = await pullOperatorChannel(config, chassisWritten, denylist);
   const asksAtStart = await pullAsks(config, chassisWritten, denylist);
@@ -1049,6 +1082,7 @@ async function main(): Promise<number> {
     drainAnnouncements() {
       const out = { ...unannounced, asks: [...unannounced.asks] };
       unannounced.mail = 0;
+      unannounced.results = 0;
       unannounced.dms = 0;
       unannounced.channel = false;
       unannounced.asks.clear();
@@ -1056,6 +1090,7 @@ async function main(): Promise<number> {
     },
     recreditAnnouncements(counts) {
       unannounced.mail += counts.mail;
+      unannounced.results += counts.results ?? 0;
       unannounced.dms += counts.dms;
       unannounced.channel = unannounced.channel || counts.channel;
       for (const id of counts.asks) unannounced.asks.add(id);
@@ -1064,13 +1099,14 @@ async function main(): Promise<number> {
   let inFlightPull: Promise<void> | null = null;
   // Asks are buffered as IDS, not a count: several operator actions on
   // one ask while nobody was listening are still one ask to mention.
-  const unannounced = { mail: 0, dms: 0, channel: false, asks: new Set<string>() };
+  const unannounced = { mail: 0, results: 0, dms: 0, channel: false, asks: new Set<string>() };
   async function doPullFresh(): Promise<void> {
     const before = ackState.inboxIds.size;
     for (const id of await pullInbox(config, chassisWritten, denylist)) {
       ackState.inboxIds.add(id);
     }
     unannounced.mail += ackState.inboxIds.size - before;
+    unannounced.results += await pullResultsInto(config, chassisWritten, denylist, ackState.mcpResults);
     const dmBefore = ackState.dmUpTo;
     const dmUpTo = await pullXDms(config, chassisWritten, denylist);
     if (dmUpTo !== null) {
@@ -1192,6 +1228,11 @@ async function main(): Promise<number> {
   // Inbox and channel are acked only now, after the state is durably
   // persisted: a wake that failed or was blocked re-delivers both.
   await ackInbox(config, [...ackState.inboxIds]);
+  await ackMcpResults(
+    config.mcpServers,
+    config.mcpToken,
+    new Map([...ackState.mcpResults].map(([server, ids]) => [server, [...ids]]))
+  );
   await ackXDms(config, ackState.dmUpTo);
   await ackChannel(config, ackState.channelUpTo);
   await ackAsks(config, ackState.asksDelivery);

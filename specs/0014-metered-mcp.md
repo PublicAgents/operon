@@ -165,7 +165,8 @@ chassis change, never an unverified webhook.
   guessed to an agent: it is `mcp_webhook_unknown_run`, ledgered, and
   kept for the operator, with the open creates for that server listed
   beside it (agent, tool, time) as the evidence for a decision. The
-  plane's `mcp_budgets` lists unattributed results and
+  plane's `mcp_budgets` lists unattributed results, each numbered
+  within its run by arrival like every other callback, and
   `mcp_result_assign` (a decision, audited) hands one to a named
   agent's inbox. An agent's result never crosses to another agent
   without the operator's act. Nothing a vendor billed for is dropped.

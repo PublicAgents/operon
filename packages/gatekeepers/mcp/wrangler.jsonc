@@ -8,12 +8,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "LEDGER", "class_name": "Ledger" },
-      { "name": "METER", "class_name": "Meter" }
+      { "name": "METER", "class_name": "Meter" },
+      { "name": "RUNS", "class_name": "Runs" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Ledger"] },
-    { "tag": "v2", "new_sqlite_classes": ["Meter"] }
+    { "tag": "v2", "new_sqlite_classes": ["Meter"] },
+    { "tag": "v3", "new_sqlite_classes": ["Runs"] }
   ]
   // ROSTER injected at deploy; the fleet templates own the real
   // deployment config (spec 0006 §2). This file is the dev target.

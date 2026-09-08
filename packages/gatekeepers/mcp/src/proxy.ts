@@ -48,8 +48,11 @@ export interface ProxyDeps {
    * here: past `before`, the fetch API cannot tell an unsent body from
    * a lost answer, and an ambiguous call is billed (spec 0014 §2).
    */
-  before?: (name: string) => Promise<{ token: string } | { refused: MeterRefusal }>;
-  after?: (token: string) => Promise<void>;
+  before?: (
+    name: string,
+    args: Record<string, unknown>
+  ) => Promise<{ token: string; args?: Record<string, unknown> } | { refused: MeterRefusal }>;
+  after?: (token: string, result: unknown) => Promise<void>;
 }
 
 function failed(message: string): CallToolResult {
@@ -132,23 +135,27 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       }
     };
     let token: string | undefined;
+    let callArgs = args;
     if (deps.before) {
-      const gate = await deps.before(name);
+      const gate = await deps.before(name, args);
       if ("refused" in gate) {
         await audit("mcp_tool_refused", { code: gate.refused.code, detail: gate.refused.detail });
         return failed(`${gate.refused.code}: ${gate.refused.detail}`);
       }
       token = gate.token;
+      // A webhook contract rewrites the create call's registration
+      // argument (spec 0014 §3); every other argument travels untouched.
+      if (gate.args) callArgs = gate.args;
     }
     // The settle after the call is accounting, never the call's
     // verdict: a settle that fails is ledgered and left to the meter's
     // stale sweep, and the mind still receives what the upstream said
     // (a completed action reported as failed invites a retry it must
     // not make).
-    const settle = async () => {
+    const settle = async (result: unknown) => {
       if (token === undefined || !deps.after) return;
       try {
-        await deps.after(token);
+        await deps.after(token, result);
       } catch (error) {
         // The diagnostic row is best effort too: neither the meter nor
         // the ledger may stand between a completed action and its result.
@@ -165,16 +172,16 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
     };
     let result: unknown;
     try {
-      result = await deps.call(name, args);
+      result = await deps.call(name, callArgs);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       // Billed whatever failed (spec 0014 §2): a refusal, a redirect
       // refused after the body left, a lost answer, all of it.
-      await settle();
+      await settle(undefined);
       await audit("mcp_tool_failed", { detail });
       return failed(detail);
     }
-    await settle();
+    await settle(result);
     await audit("mcp_tool_called", { mode: entry.mode });
     return passthrough(result);
   });
