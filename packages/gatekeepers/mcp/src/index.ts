@@ -108,8 +108,11 @@ export class Ops extends OpsEntrypoint<Env> {
       if (typeof spent !== "number" || !Number.isFinite(spent) || spent < 0) {
         return errorResponse(400, "invalid_request", "spentMonthUsd must be a non-negative number, the vendor dashboard's month-to-date figure");
       }
-      const remaining = await meter(this.env, body.value.server).reset(spent, budget.monthlyUsd, new Date().toISOString());
-      await ledger(this.env).append("mcp_budget_reset", { server: body.value.server, spentMonthUsd: spent });
+      const { remaining, staleSettled } = await meter(this.env, body.value.server).reset(spent, budget.monthlyUsd, new Date().toISOString());
+      for (const stale of staleSettled) {
+        await ledger(this.env).append("mcp_reservation_settled_stale", { agentId: stale.agentId, server: body.value.server, tool: stale.tool, usd: stale.usd });
+      }
+      await ledger(this.env).append("mcp_budget_reset", { server: body.value.server, spentMonthUsd: spent, openReservationsUsd: remaining.openReservationsUsd });
       return json({ ok: true, server: body.value.server, remaining });
     }
     return errorResponse(404, "not_found");

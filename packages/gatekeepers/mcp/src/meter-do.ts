@@ -26,7 +26,7 @@ export class Meter extends DurableObject {
   refund(id: string): Promise<boolean> {
     return this.store.refund(id);
   }
-  reset(spentMonthUsd: number, monthlyUsd: number, at: string): Promise<Remaining> {
+  reset(spentMonthUsd: number, monthlyUsd: number, at: string): Promise<{ remaining: Remaining; staleSettled: Reservation[] }> {
     return this.store.reset(spentMonthUsd, monthlyUsd, at);
   }
 }

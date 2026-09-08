@@ -133,7 +133,10 @@ export class MeterStore {
     // Reservations still open at a roll (younger than the stale bound)
     // move with the day: their price leaves the folded figure and
     // starts the new day's spend, so a later settle or refund finds
-    // its price where the counters say it is.
+    // its price where the counters say it is. A reservation gone stale
+    // across a MONTH boundary was last month's spend and settles there
+    // (the fold above the month reset has already counted it); the new
+    // month starts from zero, as the spec's month does.
     const openUsd = round(Object.values(next.reservations).reduce((sum, r) => sum + r.usd, 0));
     if (next.month !== month) {
       // A new month starts over; only the open reservations carry.
@@ -228,8 +231,12 @@ export class MeterStore {
    * settles: the safe direction, and `openReservationsUsd` in the
    * answer says by how much, so the operator can subtract it.
    */
-  async reset(spentMonthUsd: number, monthlyUsd: number, at: string): Promise<Remaining> {
-    const { state: rolled } = this.roll(await this.load(), monthlyUsd, at);
+  async reset(
+    spentMonthUsd: number,
+    monthlyUsd: number,
+    at: string
+  ): Promise<{ remaining: Remaining; staleSettled: Reservation[] }> {
+    const { state: rolled, staleSettled } = this.roll(await this.load(), monthlyUsd, at);
     const month = monthOf(at);
     const day = dayOf(at);
     const spentBefore = round(Math.max(0, spentMonthUsd));
@@ -243,7 +250,10 @@ export class MeterStore {
       reservations: rolled.reservations
     };
     await this.save(state);
-    return this.describe(state, monthlyUsd);
+    // Stale reservations settled by this roll are reported, not lost:
+    // the operator's figure supersedes their spend, the ledger keeps
+    // their record.
+    return { remaining: this.describe(state, monthlyUsd), staleSettled };
   }
 }
 

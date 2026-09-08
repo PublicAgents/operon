@@ -121,11 +121,21 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       });
       return failed(`mcp_tool_needs_grant: "${name}" is not granted on ${server.name}`);
     }
+    // Every audit row around the act is best effort: a ledger that
+    // refuses must not replace a named refusal with a protocol fault,
+    // nor a completed action's result with a failure.
+    const audit = async (event: string, detail: Record<string, unknown>) => {
+      try {
+        await deps.record(event, { server: server.name, tool: name, ...detail });
+      } catch (error) {
+        console.error(`mcp ${event} could not be ledgered`, error);
+      }
+    };
     let token: string | undefined;
     if (deps.before) {
       const gate = await deps.before(name);
       if ("refused" in gate) {
-        await deps.record("mcp_tool_refused", { server: server.name, tool: name, code: gate.refused.code, detail: gate.refused.detail });
+        await audit("mcp_tool_refused", { code: gate.refused.code, detail: gate.refused.detail });
         return failed(`${gate.refused.code}: ${gate.refused.detail}`);
       }
       token = gate.token;
@@ -151,16 +161,6 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
         } catch (recordError) {
           console.error("mcp meter settle failed and could not be ledgered", recordError);
         }
-      }
-    };
-    // The terminal audit row is written after the act, so it too is
-    // best effort: a ledger that refuses must not replace what the
-    // upstream said, in either direction.
-    const audit = async (event: string, detail: Record<string, unknown>) => {
-      try {
-        await deps.record(event, { server: server.name, tool: name, ...detail });
-      } catch (error) {
-        console.error(`mcp ${event} could not be ledgered`, error);
       }
     };
     let result: unknown;

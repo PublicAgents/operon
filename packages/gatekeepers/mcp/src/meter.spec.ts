@@ -85,7 +85,7 @@ describe("the meter (spec 0014 §2)", () => {
     expect(rolled.remaining.spentMonthUsd).toBe(0.5);
     expect(rolled.remaining.spentTodayUsd).toBe(0.5);
     // A reset keeps it counted.
-    const reset = await store.reset(3, MONTHLY, "2026-09-02T00:02:00.000Z");
+    const { remaining: reset } = await store.reset(3, MONTHLY, "2026-09-02T00:02:00.000Z");
     expect(reset.spentTodayUsd).toBe(0.5);
     expect(reset.spentMonthUsd).toBe(3.5);
     // The in-flight call is named, so an operator whose figure included it can subtract it.
@@ -113,8 +113,10 @@ describe("the meter (spec 0014 §2)", () => {
   it("resets to the operator's figure from the vendor's dashboard", async () => {
     const store = new MeterStore(memory());
     await reserve(store, "a", 1, DAY1);
-    const after = await store.reset(12, MONTHLY, at(16));
+    const { remaining: after, staleSettled } = await store.reset(12, MONTHLY, at(16));
     expect(after.spentMonthUsd).toBe(12);
     expect(after.allotmentTodayUsd).toBeCloseTo(18 / 15, 6);
+    // The stale reservation from day 1 is reported to the ledger, not lost in silence.
+    expect(staleSettled.map(r => r.id)).toEqual(["a"]);
   });
 });
