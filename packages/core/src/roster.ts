@@ -419,7 +419,7 @@ const WEBHOOK_KEYS = new Set([
 ]);
 const SIGNATURE_KEYS = new Set(["header", "scheme", "timestampHeader"]);
 const DOTTED_PATH = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
-const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
 function refuseUnknownKeys(raw: Record<string, unknown>, known: Set<string>, path: string, what: string): void {
   for (const key of Object.keys(raw)) {
