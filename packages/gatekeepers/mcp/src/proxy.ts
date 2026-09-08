@@ -153,6 +153,16 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
         }
       }
     };
+    // The terminal audit row is written after the act, so it too is
+    // best effort: a ledger that refuses must not replace what the
+    // upstream said, in either direction.
+    const audit = async (event: string, detail: Record<string, unknown>) => {
+      try {
+        await deps.record(event, { server: server.name, tool: name, ...detail });
+      } catch (error) {
+        console.error(`mcp ${event} could not be ledgered`, error);
+      }
+    };
     let result: unknown;
     try {
       result = await deps.call(name, args);
@@ -161,11 +171,11 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       // Billed whatever failed (spec 0014 §2): a refusal, a redirect
       // refused after the body left, a lost answer, all of it.
       await settle();
-      await deps.record("mcp_tool_failed", { server: server.name, tool: name, detail });
+      await audit("mcp_tool_failed", { detail });
       return failed(detail);
     }
     await settle();
-    await deps.record("mcp_tool_called", { server: server.name, tool: name, mode: entry.mode });
+    await audit("mcp_tool_called", { mode: entry.mode });
     return passthrough(result);
   });
 
