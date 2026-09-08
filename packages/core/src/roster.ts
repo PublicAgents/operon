@@ -643,7 +643,10 @@ const REGISTRY_KEYS = new Set(["site", "repo"]);
  * told to keep an entry there unless the colony says `registry: false`.
  * Its SKILL.md went live on 2026-09-08; this default shipped after.
  */
-export const DEFAULT_REGISTRY: RegistryPin = { site: "https://public-agents.com", repo: "PublicAgents/public-agents" };
+export const DEFAULT_REGISTRY: Readonly<RegistryPin> = Object.freeze({
+  site: "https://public-agents.com",
+  repo: "PublicAgents/public-agents"
+});
 
 /** Absence means the reference registry; `registry: false` means none; an object names one. */
 function parseRegistry(value: unknown): RegistryPin | undefined {
