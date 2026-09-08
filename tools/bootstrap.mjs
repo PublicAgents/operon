@@ -72,6 +72,25 @@ function wranglerJson(cmdArgs, { jsonFlag = true } = {}) {
   return Array.isArray(body) ? body : (body.result ?? body);
 }
 
+/** Every page of a list endpoint (Cloudflare's result_info paging), in order. */
+async function apiAll(path) {
+  const out = [];
+  for (let page = 1; ; page++) {
+    const sep = path.includes("?") ? "&" : "?";
+    const response = await fetch(`${API}${path}${sep}page=${page}&per_page=50`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.success === false) {
+      const detail = (payload.errors ?? []).map(error => `${error.code ?? response.status}: ${error.message}`).join("; ") || `${response.status}`;
+      throw new Error(`GET ${path}: ${detail}`);
+    }
+    out.push(...(payload.result ?? []));
+    const info = payload.result_info;
+    if (!info || !info.total_pages || page >= info.total_pages || (payload.result ?? []).length === 0) return out;
+  }
+}
+
 async function api(method, path, body) {
   const response = await fetch(`${API}${path}`, {
     method,
@@ -389,7 +408,7 @@ if (!apiToken || !zoneId) {
   // addresses it has verified (a mail with a link, clicked once per
   // account). Missing ones are created, which sends that mail.
   const wanted = manifest.forwardAgentEmailsTo ?? [];
-  const destinations = (await api("GET", `/accounts/${manifest.accountId}/email/routing/addresses?per_page=50`)) ?? [];
+  const destinations = await apiAll(`/accounts/${manifest.accountId}/email/routing/addresses`);
   const verified = [];
   for (const email of wanted) {
     let found = destinations.find(d => d.email.toLowerCase() === email.toLowerCase());
@@ -424,7 +443,7 @@ if (!apiToken || !zoneId) {
   // One rule per agent: its address (the email Gatekeeper's identity
   // rule: the first host that is not the apex, else the id) to the
   // Worker. Reconciled by the matched address.
-  const rules = (await api("GET", `/zones/${zoneId}/email/routing/rules?per_page=100`)) ?? [];
+  const rules = await apiAll(`/zones/${zoneId}/email/routing/rules`);
   for (const agent of manifest.roster.agents) {
     const local = (agent.hosts.find(host => host !== "@") ?? agent.id).toLowerCase();
     const address = `${local}@${manifest.roster.zone}`;
