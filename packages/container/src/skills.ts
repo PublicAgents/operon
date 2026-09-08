@@ -1,3 +1,4 @@
+import { describeBudget, type McpBudgetView } from "./mcp-budget.js";
 import type { WakeConfig } from "./config.js";
 
 /**
@@ -70,6 +71,9 @@ REGISTRY (spec 0013: every agent of this colony keeps a public entry)
     : "";
   const mergeRepos = Array.isArray(caps.githubMerge) ? (caps.githubMerge as string[]) : [];
   const mcpServers = Array.isArray(caps.mcp) ? (caps.mcp as string[]) : [];
+  const mcpBudgets = (Array.isArray(caps.mcpBudgets) ? (caps.mcpBudgets as McpBudgetView[]) : []).filter(
+    view => view.budgeted || view.error
+  );
   const door = doorMarker(new Set(Array.isArray(caps.disabledDoors) ? (caps.disabledDoors as string[]) : []));
   const localBrowserNote = caps.localBrowser === false ? " [switched off for this agent]" : "";
   const askCeiling = askLimits
@@ -171,7 +175,19 @@ ${
                                          you and need nothing from you to
                                          connect. A tool the operator has not
                                          granted answers a named refusal rather
-                                         than vanishing.
+                                         than vanishing.${
+                                           mcpBudgets.length > 0
+                                             ? `
+  Budgets (spec 0014): some servers are paid, and the whole colony
+  shares one monthly cap per server, spread over the month's days.
+  What is left today, as of wake start:
+${mcpBudgets.map(view => `    ${describeBudget(view)}`).join("\n")}
+  A call past today's share is refused by name (mcp_budget_exhausted)
+  with what remains and when the day rolls; plan the wake against the
+  number and do not retry a refused call. Re-read any time:
+  operon mcp budget`
+                                             : ""
+                                         }
 
 `
     : ""
