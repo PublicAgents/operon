@@ -46,16 +46,28 @@ mcp:
         createDeepResearch: 2.00
         createTaskGroup: 1.00
       free: [getStatus, getResultMarkdown]  # reads that cost nothing; named, never assumed
-    webhook: true
+    webhook:                             # the provider's contract, named here, never in code
+      createTools: [createDeepResearch, createTaskGroup]
+      argument: webhook                  # the create call's parameter that takes {url, event_types}
+      events: [task_run.status]
+      runIdPath: run_id                  # where the create result carries the run id (dotted path)
+      signature:
+        header: X-Signature
+        scheme: hmac-sha256-hex          # over the raw body; hmac-sha256-base64 and ed25519-hex also known
+        timestampHeader: X-Timestamp     # optional; when named, joined to the body as "<ts>.<body>"
 ```
 
 - **The cap is the month's, spread over its days.** Each server's
   meter keeps the month's spend and today's. Today's allotment is
-  `(monthlyUsd - spentThisMonth) / daysLeftInMonth`, computed in UTC
-  at each call, so an unspent day flows forward and a heavy day
-  cannot borrow from tomorrow. A call whose price would push today's
-  spend over today's allotment refuses `mcp_budget_exhausted`, naming
-  the price, what remains today, and when the day rolls (00:00 UTC).
+  fixed once, at the first call of each UTC day:
+  `allotmentToday = (monthlyUsd - spentBeforeToday) / daysLeftIncludingToday`,
+  where `spentBeforeToday` excludes today, so today's own calls never
+  shrink today's share (they are counted once, against it). An unspent
+  day flows forward; a heavy day cannot borrow from tomorrow; on the
+  month's last day the allotment is the whole remainder. A call whose
+  price would push `spentToday` over `allotmentToday` refuses
+  `mcp_budget_exhausted`, naming the price, what remains today, and
+  when the day rolls (00:00 UTC).
 - **Every tool is priced, free, or refused.** With a `budget` present,
   a tool that appears in neither `perCall` nor `free` refuses
   `mcp_tool_unpriced` before any upstream call. Prices are the
@@ -66,11 +78,18 @@ mcp:
   grant.** One meter per server per project. A cap that must span two
   projects is the operator's arithmetic: each project's `monthlyUsd`
   set so the sum is the vendor ceiling, stated in the manifests.
-- **Reserve before, settle after.** The Gatekeeper reserves the price
-  before it proxies the call and settles when the upstream answers; an
-  upstream error refunds the reservation, a lost answer keeps it (a
-  call the vendor may have billed is never given back). The spend
-  door's outbox pattern (spec 0002 §2.2), not "call then count".
+- **Reserve before, settle after; ambiguous is billed.** The
+  Gatekeeper reserves the price before it proxies the call and settles
+  it when the upstream answers. A reservation is refunded only when the
+  provider provably did no work: the connection was refused or the
+  request failed before its body was sent, or the provider answered
+  401, 402 or 403 (spec 0008's `mcp_upstream_auth`). A timeout, a lost
+  or truncated answer, a response-boundary refusal, a 5xx: all keep
+  the reservation, because the vendor may have billed. The meter
+  therefore never undercounts; it can only overcount, and the
+  operator's `mcp_budget_reset` is the correction after reading the
+  vendor's dashboard. The spend door's outbox pattern (spec 0002
+  §2.2), not "call then count".
 - **The agent is told.** At wake start the container reads each
   granted metered server's remaining figure and prints
   `mcp budgets: search $3.90 today (about 195 searches), tasks $2.60
@@ -90,20 +109,33 @@ Gatekeepers no public hostnames; the Telegram Gatekeeper is the one
 precedent, and it holds its webhook on a dedicated host with a secret
 the sender proves. This spec adds one host of the same kind:
 `hooks.<zone>`, on the mcp Gatekeeper, serving only
-`POST /webhook/<server>` for servers declared `webhook: true`.
+`POST /webhook/<server>` for servers that declare a `webhook` block.
+The block is the provider's contract, stated by the operator in the
+manifest: which tools create runs, the argument that takes the
+callback, the events, where the run id sits in the create result, and
+how the signature is made. The Gatekeeper implements a small set of
+signature schemes by name and refuses an unknown one at validation
+(`mcp_webhook_scheme_unknown`); a provider that fits none of them is a
+chassis change, never an unverified webhook.
 
 - **Verified or refused.** The per-server secret
-  `MCP_<NAME>_WEBHOOK_SECRET` verifies the vendor's HMAC signature on
-  the raw body; an unverified request is `401 mcp_webhook_unverified`
-  and ledgered with the source address, never read further. The
-  Gatekeeper passes the public URL and the secret to the upstream at
-  task creation by rewriting the `createXxx` call's arguments (the
-  `webhook` parameter), so a mind never learns the secret and never
-  chooses the URL.
-- **Attributed at creation.** When a create-tool's result carries a
-  run id, the Gatekeeper records `run id -> agentId` (30 days). A
-  webhook for an unknown run is `mcp_webhook_unknown_run`, ledgered,
-  dropped.
+  `MCP_<NAME>_WEBHOOK_SECRET` verifies the signature named by the
+  block, over the raw body (joined to the timestamp header when one is
+  named), compared in constant time; an unverified request is
+  `401 mcp_webhook_unverified` and ledgered with the source address,
+  never read further. A timestamp older than five minutes is refused
+  the same way (replay). The Gatekeeper injects the public URL and the
+  events into each `createTools` call's `argument` before proxying it,
+  overwriting whatever the mind passed there, so a mind never chooses
+  the URL and never learns the secret.
+- **Attributed at creation.** The Gatekeeper reads the run id from the
+  create result at `runIdPath` and records `run id -> agentId` (30
+  days); a create result with no id at that path is proxied unchanged
+  and ledgered `mcp_webhook_run_unattributed`, so a wrong path is
+  visible on the first call. A webhook for an unknown run is
+  `mcp_webhook_unknown_run`, ledgered, dropped; a webhook for a known
+  run is stored once per (run id, event) and a repeat is acknowledged
+  without a second delivery.
 - **Delivered at the next wake, as inbox content.** The verified
   payload is stored for the agent and pulled by the container at wake
   start into `inbox/mcp/<server>/<run id>.md`, through the same
@@ -117,9 +149,11 @@ the sender proves. This spec adds one host of the same kind:
 
 - **core** (`roster.ts`): `budget` and `webhook` keys on `http` and
   `portal` defs; `budget.monthlyUsd` positive, `perCall` prices
-  non-negative, `free` names disjoint from `perCall`; a `webhook: true`
-  without a `budget` is allowed (metering and answering are separate
-  facts). Unknown keys refuse by name.
+  non-negative, `free` names disjoint from `perCall`; `webhook`
+  requires `createTools` (each a known tool of the def), `argument`,
+  `events`, `runIdPath` and a `signature` with a known `scheme`; a
+  webhook block without a budget is allowed (metering and answering
+  are separate facts). Unknown keys refuse by name.
 - **gatekeeper-mcp**: a `Meter` Durable Object per server holding
   `{month, spentUsd, day, spentTodayUsd, reservations}`; `reserve`,
   `settle`, `refund`, `remaining` as one-turn transitions; the proxy
@@ -141,7 +175,8 @@ the sender proves. This spec adds one host of the same kind:
   remaining, last refusal.
 - **ledger**: `mcp_metered {agentId, server, tool, usd, remainingTodayUsd}`,
   `mcp_budget_exhausted`, `mcp_tool_unpriced`, `mcp_webhook_received`,
-  `mcp_webhook_unverified`, `mcp_webhook_unknown_run`.
+  `mcp_webhook_unverified`, `mcp_webhook_unknown_run`,
+  `mcp_webhook_run_unattributed`.
 
 ## 5. Refusals and invariants, each with a test
 
@@ -149,11 +184,16 @@ the sender proves. This spec adds one host of the same kind:
   detail names price, remaining and the reset time.
 - `mcp_tool_unpriced`: a budgeted server's tool with no price and no
   `free` listing; refused before the network.
-- `mcp_webhook_unverified`, `mcp_webhook_unknown_run`.
-- The daily allotment never exceeds the month's remainder; on the
-  month's last day it equals it.
-- A reservation outlives a lost upstream answer and is refunded only
-  by an upstream error.
+- `mcp_webhook_unverified` (bad signature, stale timestamp),
+  `mcp_webhook_unknown_run`, `mcp_webhook_run_unattributed`,
+  `mcp_webhook_scheme_unknown` (at validation).
+- The daily allotment is fixed at the day's first call from the spend
+  before that day; a day's own calls never shrink it; it never exceeds
+  the month's remainder and on the last day equals it. A month of
+  daily spending to the allotment lands exactly on `monthlyUsd`.
+- A reservation is refunded only for a refused connection, an unsent
+  body, or a 401/402/403; a timeout, a 5xx and a lost answer keep it.
+- A repeated webhook (same run id and event) is delivered once.
 - Two agents calling at once cannot both take the last cent (the
   meter is one Durable Object turn).
 - The secret and the webhook URL never appear in a tool result, a
