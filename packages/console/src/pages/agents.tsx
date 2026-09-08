@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { callTool, type AgentRow } from "../api.js";
 import { useTool } from "../hooks.js";
 import { ConfirmButton, Empty, ErrorNote, LoadingGate, TimeStamp } from "../ui.js";
+import { McpBudgets } from "./budgets.js";
 
 interface DoorState {
   baseline: boolean;
@@ -170,6 +171,7 @@ export function AgentsPage() {
       </table>
       </LoadingGate>
           <DoorsMatrix />
+      <McpBudgets />
     </section>
   );
 }

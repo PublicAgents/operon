@@ -172,7 +172,12 @@ describe("renderWorkers reproduces the example colony", () => {
       service: "operon-gatekeeper-asks",
       entrypoint: "Ops"
     });
-    expect(ops.services).toHaveLength(13);
+    expect(ops.services).toContainEqual({
+      binding: "MCP_GK",
+      service: "operon-gatekeeper-mcp",
+      entrypoint: "Ops"
+    });
+    expect(ops.services).toHaveLength(14);
     expect(byKey["gatekeeper-github"].routes).toBeUndefined();
     expect(byKey["gatekeeper-x"].routes).toBeUndefined();
     expect(byKey["gatekeeper-asks"].routes).toBeUndefined();
@@ -198,7 +203,7 @@ describe("renderWorkers reproduces the example colony", () => {
     )["gatekeeper-ops"] as Record<string, unknown> & { services: unknown[]; vars: Record<string, unknown> };
     // The host keeps its bare names; the enrolled project gets the same
     // set under its infix, bound to its own workers by its prefix.
-    expect(ops.services).toHaveLength(26);
+    expect(ops.services).toHaveLength(28);
     expect(ops.services).toContainEqual({
       binding: "SECOND_ONE__EMAIL",
       service: "operon-second-one-gatekeeper-email",
