@@ -126,8 +126,9 @@ manifest: which tools create runs, the argument that takes the
 registration and the provider's shape for it (`registration`, a JSON
 template in which `{url}` and `{events}` are the only substitutions:
 a string that is exactly a placeholder takes the value's own JSON
-type, so `"{events}"` becomes the array, and a placeholder inside a
-longer string is joined into it as text),
+type, so `"{events}"` becomes the array; `{events}` inside a longer
+string is joined into it as text; `{url}` is always a whole field,
+because the provider reads it as a URL),
 the events, where the run id sits in the create result
 (`runIdPath`), where the run id and the event sit in a callback body
 (`callbackRunIdPath`, `callbackEventPath`), and how the signature is
@@ -198,8 +199,8 @@ chassis change, never an unverified webhook.
   `portal` defs; `budget.monthlyUsd` positive, `perCall` prices
   non-negative, `free` names disjoint from `perCall`; `webhook`
   requires `createTools` (each a known tool of the def), `argument`,
-  `registration` (a JSON value whose strings may carry `{url}` and
-  `{events}`, and `{url}` must appear), `events`, `runIdPath`,
+  `registration` (a JSON value whose strings may carry `{events}`,
+  and some string of which is exactly `{url}`), `events`, `runIdPath`,
   `callbackRunIdPath`, `callbackEventPath`, an optional
   `callbackIdPath`, and a `signature` with a known `scheme`; a
   webhook block without a budget is allowed (metering and answering
