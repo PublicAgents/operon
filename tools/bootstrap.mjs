@@ -428,7 +428,12 @@ if (!apiToken || !zoneId) {
   const routed =
     catchAll.enabled &&
     (catchAll.actions ?? []).some(action => action.type === "worker" && (action.value ?? []).includes(emailWorker));
-  if (routed) {
+  if (routed && wanted.length > 0 && verifiedCount === 0) {
+    // The Gatekeeper already holds the catch-all but can forward
+    // nowhere yet: non-agent mail bounces (never silently lost) until
+    // an address is verified. Said by name, not ticked.
+    needYou(`the catch-all is at ${emailWorker} but no address in ${wanted.join(", ")} is verified: non-agent mail bounces until one is`);
+  } else if (routed) {
     present(`catch-all → ${emailWorker}`);
   } else if (wanted.length > 0 && verifiedCount === 0) {
     // Pointing the catch-all at the Gatekeeper before any operator
