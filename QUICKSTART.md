@@ -107,7 +107,8 @@ the site-store KV namespace, creates and seeds each agent's state repo
 from `charters/<agent>.md`, makes the operator plane's Access
 application and the repository's CI service token, deploys every
 Worker (a first deploy runs two passes so the binding cycles resolve),
-enables Email Routing with the catch-all, and prints a names-only
+enables Email Routing (one rule per agent address to the email
+Gatekeeper, the catch-all forwarding to you), and prints a names-only
 checklist of the secrets each Worker still lacks. It converges: rerun
 it after each step you finish. It never prints a secret.
 

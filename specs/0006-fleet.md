@@ -106,8 +106,12 @@ schema such a runtime would adopt.
 a fresh domain into a running project using the account-scoped
 `CLOUDFLARE_API_TOKEN`:
 
-1. Create or adopt the zone; DNS records; email routing for the
-   agents' addresses.
+1. Create or adopt the zone; DNS records; email routing: one rule per
+   agent address (`<first host>@<zone>`) to the email Gatekeeper, the
+   catch-all forwarding to the operator's `forwardAgentEmailsTo`
+   (verified destination addresses; bootstrap creates the missing ones
+   and waits for the click). A catch-all pointed at the Gatekeeper
+   would reject every address that is not an agent's.
 2. Create the D1 database (named `operon-<project>`) and the routes
    the templates expect.
 3. Create agent state repos from the charter seeds if they do not
