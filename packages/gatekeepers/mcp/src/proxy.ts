@@ -140,11 +140,17 @@ export async function createProxyServer(server: ProxyGrant, deps: ProxyDeps): Pr
       try {
         await deps.after(token);
       } catch (error) {
-        await deps.record("mcp_meter_settle_failed", {
-          server: server.name,
-          tool: name,
-          detail: error instanceof Error ? error.message : String(error)
-        });
+        // The diagnostic row is best effort too: neither the meter nor
+        // the ledger may stand between a completed action and its result.
+        try {
+          await deps.record("mcp_meter_settle_failed", {
+            server: server.name,
+            tool: name,
+            detail: error instanceof Error ? error.message : String(error)
+          });
+        } catch (recordError) {
+          console.error("mcp meter settle failed and could not be ledgered", recordError);
+        }
       }
     };
     let result: unknown;
