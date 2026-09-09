@@ -21,8 +21,11 @@ export interface ToolAudit {
 }
 
 export class AuditUnavailableError extends Error {
-  constructor() {
-    super("decision refused: it could not be attributed (audit unavailable)");
+  constructor(cause?: unknown) {
+    // The refusal names what the audit ledger said: a paused fleet
+    // whose resume was refused must be diagnosable from the answer.
+    const said = cause instanceof Error ? cause.message : cause === undefined ? "" : String(cause);
+    super(`decision refused: it could not be attributed (audit unavailable${said ? `: ${said.slice(0, 200)}` : ""})`);
     this.name = "AuditUnavailableError";
   }
 }
@@ -60,8 +63,8 @@ export async function runTool(
   if (tool.decision) {
     try {
       await audit.intent(tool.name, auditSummary(parsed.data));
-    } catch {
-      throw new AuditUnavailableError();
+    } catch (error) {
+      throw new AuditUnavailableError(error);
     }
   }
   try {
