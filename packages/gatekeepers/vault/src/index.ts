@@ -1,5 +1,5 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+import { drainingBodies, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type TelegramGatewayBinding
 } from "@operon/worker-kit";
@@ -131,7 +131,7 @@ async function handleAll(env: Env, agent: RosterAgent): Promise<Response> {
   return json({ ok: true, secrets });
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== "POST") return errorResponse(404, "not_found");
@@ -144,4 +144,4 @@ export default {
     if (url.pathname === "/gatekeeper/vault/all") return handleAll(env, agent);
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

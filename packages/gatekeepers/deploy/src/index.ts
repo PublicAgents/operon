@@ -1,6 +1,6 @@
 import { parseRoster } from "@operon/core";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { respondThenDrain, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { injectMeasurementResponse, validMeasurementId } from "./measurement.js";
 import {
   hostLabel,
@@ -139,7 +139,12 @@ async function serve(request: Request, env: Env): Promise<Response> {
  * the real PUBLISH_TOKEN, and the door still names who may publish.
  */
 export class Door extends WorkerEntrypoint<Env> {
-  override async fetch(request: Request): Promise<Response> {
+  /** The body is consumed before the response leaves, whatever the route did with it. */
+  override fetch(request: Request): Promise<Response> {
+    return respondThenDrain(request, () => this.route(request));
+  }
+
+  private async route(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/gatekeeper/publish" && request.method === "POST") {
       return handlePublish(request, this.env);

@@ -2,7 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono } from "hono";
 import { Mppx, tempo } from "mppx/hono";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, requireBearer, Ledger, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
+import { errorResponse, json, requireBearer, respondThenDrain, Ledger, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
 import { credentialClaimKey, durableStore, TillStore } from "./replay-store.js";
 export { TillStore };
 import { TillCatalog } from "./catalog-do.js";
@@ -330,8 +330,9 @@ app.all("*", async c => {
 
 /** The doors, over the umbilical's TILL_DOOR binding only (spec 0009). */
 export class Door extends WorkerEntrypoint<Env> {
+  /** The body is consumed before the response leaves, whatever the route did with it. */
   override fetch(request: Request): Promise<Response> {
-    return Promise.resolve(doors.fetch(request, this.env, this.ctx));
+    return respondThenDrain(request, () => doors.fetch(request, this.env, this.ctx));
   }
 }
 

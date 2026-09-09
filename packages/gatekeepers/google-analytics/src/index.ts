@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { errorResponse, json, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { drainingBodies, errorResponse, json, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { GoogleAuthError, GoogleTokenSource, parseServiceAccount } from "./google-auth.js";
 import { isMcpPath } from "./paths.js";
 import {
@@ -235,7 +235,7 @@ export function createAnalyticsServer(
   return server;
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!isMcpPath(url.pathname)) return errorResponse(404, "not_found");
@@ -278,4 +278,4 @@ export default {
       await server.close();
     }
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

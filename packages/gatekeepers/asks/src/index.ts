@@ -1,5 +1,6 @@
 import { parseRoster } from "@operon/core";
 import {
+  drainingBodies,
   errorResponse,
   json,
   readJson,
@@ -311,7 +312,7 @@ async function handleAgentTransition(request: Request, env: Env, next: AskState)
   return json({ ok: true, ask: result.ask });
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== "POST") return errorResponse(404, "not_found");
@@ -359,7 +360,7 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
 
 /**
  * The operator's plane (spec 0003 step 3): binding-only, no bearer,

@@ -32,6 +32,64 @@ export async function readJson<T = unknown>(
   }
 }
 
+/**
+ * Consume and discard whatever is left of a request body. A handler that
+ * answers without reading its body leaves the stream unread when the
+ * response goes out; behind a service binding the proxying Worker then
+ * logs "Can't read from request stream after response has been sent"
+ * (the umbilical, spec 0003 step 4, forwards the container's request
+ * stream as the binding's body). The chunks are read and dropped, never
+ * buffered, so the cost is bounded whatever the caller sent. Draining
+ * is idempotent: a body already read, or a request that never had one,
+ * is a no-op, and a stream that fails mid-read is ignored because the
+ * handler's answer does not depend on it.
+ */
+export async function drainBody(request: Request): Promise<void> {
+  if (request.bodyUsed || request.body === null) return;
+  try {
+    const reader = request.body.getReader();
+    while (!(await reader.read()).done) {
+      // Discarded: the handler never asked for this body.
+    }
+  } catch {
+    // Nothing to do: the body was never the handler's input.
+  }
+}
+
+/**
+ * Run a route, then drain the request body before its response leaves.
+ * The rule for every Worker behind a service binding: the body is
+ * consumed before the response is sent, whatever the route did with it
+ * (read it, ignored it, or refused early with a named error). One place
+ * per Worker, so no handler has to remember it.
+ */
+export async function respondThenDrain(
+  request: Request,
+  route: () => Response | Promise<Response>
+): Promise<Response> {
+  try {
+    return await route();
+  } finally {
+    await drainBody(request);
+  }
+}
+
+/**
+ * The same rule for a default export: the fetch handler is wrapped in
+ * respondThenDrain and every other export (scheduled, email, queue) is
+ * carried through untouched.
+ */
+export function drainingBodies<E>(handler: ExportedHandler<E>): ExportedHandler<E> {
+  const { fetch } = handler;
+  if (!fetch) return handler;
+  return {
+    ...handler,
+    fetch(request, env, ctx) {
+      return respondThenDrain(request, () => fetch.call(handler, request, env, ctx));
+    }
+  };
+}
+
 export function errorResponse(status: number, code: string, detail?: string): Response {
   return json({ error: code, ...(detail ? { detail } : {}) }, status);
 }

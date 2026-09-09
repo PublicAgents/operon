@@ -1,5 +1,6 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import {
+  drainingBodies,
   errorResponse,
   json,
   readJson,
@@ -331,7 +332,7 @@ async function commitBranch(request: Request, env: Env): Promise<Response> {
   }
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/token" && request.method === "POST") return mintCloneToken(request, env);
@@ -339,4 +340,4 @@ export default {
     if (url.pathname === "/branch" && request.method === "POST") return commitBranch(request, env);
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

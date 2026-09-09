@@ -4,7 +4,7 @@ import { createClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { tempo as tempoMainnetChain, tempoModerato } from "viem/tempo/chains";
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { errorResponse, json, readJson, requireBearer, Ledger,
+import { drainingBodies, errorResponse, json, readJson, requireBearer, Ledger,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
   type TelegramGatewayBinding, OpsEntrypoint, formatUnits, erc20Balance } from "@operon/worker-kit";
@@ -695,7 +695,7 @@ async function handleReconcile(request: Request, env: Env): Promise<Response> {
   return done ? json({ ok: true }) : errorResponse(404, "outbox_row_not_unknown");
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/gatekeeper/spend/pay") {
@@ -728,7 +728,7 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
 
 /**
  * The spend wallet, for the operator: the ADDRESS derived from the key
