@@ -672,8 +672,15 @@ interface VerifiedModel {
   degraded: boolean;
 }
 
-/** A second probe after a short pause: a backend that answered an error once is asked once more before the wake is given up. */
+/**
+ * A second probe after a short pause, only after a FAST failure: a
+ * backend that answered an error within a minute is asked once more
+ * before the wake is given up. A probe that ran long (a hang, a
+ * timeout) is not repeated: the wake's hard wall is the session's, and
+ * a second five-minute wait would be spent from it.
+ */
 const PROBE_RETRY_DELAY_MS = 15_000;
+const PROBE_FAST_FAILURE_MS = 60_000;
 
 async function probeTwice(
   adapter: HarnessAdapter,
@@ -681,6 +688,7 @@ async function probeTwice(
   credential: string,
   staged: StagedHarness
 ): Promise<string> {
+  const startedAt = Date.now();
   try {
     return await probe(adapter, model, credential, staged);
   } catch (first) {
@@ -691,6 +699,7 @@ async function probeTwice(
     } else {
       log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
     }
+    if (Date.now() - startedAt > PROBE_FAST_FAILURE_MS) throw first;
     log(`retrying the probe once in ${PROBE_RETRY_DELAY_MS / 1000}s`);
     await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_DELAY_MS));
     return await probe(adapter, model, credential, staged);
