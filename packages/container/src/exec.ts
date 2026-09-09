@@ -17,10 +17,17 @@ export class CommandError extends Error {
   ) {
     // Some tools (Claude Code's -p mode included) report their error on
     // stdout; a diagnostic that only carries stderr renders as an empty
-    // message exactly when it matters most.
-    const detail = (stderr.trim() || stdout.trim()).slice(0, 500);
-    super(`command_failed: ${command} exited ${exitCode ?? "by signal"}: ${detail}`);
+    // message exactly when it matters most. The error line is usually
+    // the LAST one (a banner and its warnings come first), so a long
+    // output keeps its head and its tail, never only its head.
+    super(`command_failed: ${command} exited ${exitCode ?? "by signal"}: ${headAndTail(stderr.trim() || stdout.trim())}`);
   }
+}
+
+/** The first and last lines of a long output, the middle elided. */
+export function headAndTail(text: string, head = 200, tail = 500): string {
+  if (text.length <= head + tail + 20) return text;
+  return `${text.slice(0, head)}\n[... ${text.length - head - tail} chars elided ...]\n${text.slice(-tail)}`;
 }
 
 export interface RunOptions {

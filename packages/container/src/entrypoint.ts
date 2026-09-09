@@ -672,11 +672,49 @@ interface VerifiedModel {
   degraded: boolean;
 }
 
-async function probe(
+/**
+ * A second probe after a short pause, only after a FAST failure: a
+ * backend that answered an error within a minute is asked once more
+ * before the wake is given up. A probe that ran long (a hang, a
+ * timeout) is not repeated: the wake's hard wall is the session's, and
+ * a second five-minute wait would be spent from it.
+ */
+const PROBE_RETRY_DELAY_MS = 15_000;
+const PROBE_FAST_FAILURE_MS = 60_000;
+/** The retry gets one minute, not the probe's five: verification never spends more of the wall than that. */
+const PROBE_RETRY_TIMEOUT_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5 * 60 * 1000;
+
+async function probeTwice(
   adapter: HarnessAdapter,
   model: string,
   credential: string,
   staged: StagedHarness
+): Promise<string> {
+  const startedAt = Date.now();
+  try {
+    return await probe(adapter, model, credential, staged);
+  } catch (first) {
+    // The record carries the harness's own last words in full: a wake
+    // that fails before its session must be diagnosable from its log.
+    if (first instanceof CommandError) {
+      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${(first.stderr.trim() || first.stdout.trim()).slice(-4000)}`);
+    } else {
+      log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
+    }
+    if (Date.now() - startedAt > PROBE_FAST_FAILURE_MS) throw first;
+    log(`retrying the probe once in ${PROBE_RETRY_DELAY_MS / 1000}s (${PROBE_RETRY_TIMEOUT_MS / 1000}s to answer)`);
+    await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_DELAY_MS));
+    return await probe(adapter, model, credential, staged, PROBE_RETRY_TIMEOUT_MS);
+  }
+}
+
+async function probe(
+  adapter: HarnessAdapter,
+  model: string,
+  credential: string,
+  staged: StagedHarness,
+  timeoutMs = PROBE_TIMEOUT_MS
 ): Promise<string> {
   const spec = adapter.probe(model, credential);
   const ids = mindSpawnIds();
@@ -688,7 +726,7 @@ async function probe(
       ...spec.env,
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs,
     ...ids
   });
   return stdout.trim().slice(0, 200);
@@ -706,7 +744,7 @@ async function verifyModel(
   staged: StagedHarness
 ): Promise<VerifiedModel> {
   try {
-    const answer = await probe(adapter, config.model, config.mindCredential, staged);
+    const answer = await probeTwice(adapter, config.model, config.mindCredential, staged);
     log(`model probe answered: ${answer}`);
     return { model: config.model, answer, degraded: false };
   } catch (primaryError) {
@@ -719,7 +757,7 @@ async function verifyModel(
       `pinned model ${config.model} failed to answer (${String(primaryError).slice(0, 300)}); probing fallback ${config.fallbackModel}`
     );
     try {
-      const answer = await probe(adapter, config.fallbackModel, config.mindCredential, staged);
+      const answer = await probeTwice(adapter, config.fallbackModel, config.mindCredential, staged);
       log(`fallback model probe answered: ${answer} (wake runs DEGRADED)`);
       return { model: config.fallbackModel, answer, degraded: true };
     } catch (fallbackError) {

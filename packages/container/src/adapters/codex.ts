@@ -185,7 +185,10 @@ export const codex: HarnessAdapter = {
   probe(model, credential) {
     return {
       command: "codex",
-      args: ["exec", PROBE_QUESTION, "-m", model, "--sandbox", "read-only", ...CODEX_INVARIANT_ARGS],
+      // The container is the sandbox (spec 0010 §2), for the probe as for
+      // the session: Codex's own sandbox needs bubblewrap the image does
+      // not carry, and asking for it only earns a warning and a fallback.
+      args: ["exec", PROBE_QUESTION, "-m", model, "--dangerously-bypass-approvals-and-sandbox", ...CODEX_INVARIANT_ARGS],
       env: credentialEnv(credential)
     };
   },

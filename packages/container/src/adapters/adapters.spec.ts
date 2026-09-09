@@ -237,8 +237,10 @@ describe("codex adapter (spec 0010 §4)", () => {
     ]);
     expect(spec.env).toEqual({});
     const probe = codex.probe("gpt-5.5", login);
-    expect(probe.args).toContain("--sandbox");
-    expect(probe.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    // The container is the sandbox for the probe too: Codex's own
+    // sandbox would need bubblewrap the image does not carry.
+    expect(probe.args).not.toContain("--sandbox");
+    expect(probe.args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(probe.args).not.toContain("--json");
     expect(probe.args.join(" ")).toMatch(/model id/);
   });
