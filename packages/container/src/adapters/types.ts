@@ -128,6 +128,18 @@ export function assertEnvClean(
 }
 
 /**
+ * A literal inside a login file goes on the denylist only when it is
+ * long enough to be a token: a `token_type` of "Bearer" or a
+ * two-letter scope would otherwise fail every later publish that
+ * carries the word. Real tokens and keys are far longer than this.
+ */
+export const MIN_DENYLIST_LITERAL = 8;
+
+export function denylistable(value: unknown): value is string {
+  return typeof value === "string" && value.length >= MIN_DENYLIST_LITERAL;
+}
+
+/**
  * The chassis hooks in the shape the harnesses read (Claude Code's,
  * which Codex and Grok adopted: the same stdout envelopes; stdin
  * field names differ on Grok, see journal-guard stopHookActiveFrom).

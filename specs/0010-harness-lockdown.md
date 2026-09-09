@@ -250,7 +250,9 @@ adapter needs to sign in:
   home and pipes the result into the secret, never printing it.
 
 The chassis denylists every literal inside a file credential (the
-tokens, not only the file as a whole), so a JWT can never ride a
+tokens, not only the file as a whole; a value shorter than eight
+characters is a word such as a token type, not a token, and stays off
+the list so it cannot fail an unrelated publish), so a JWT can never ride a
 transcript or a commit.
 
 **The refresh, done by the scheduler.** Codex refreshes a login file

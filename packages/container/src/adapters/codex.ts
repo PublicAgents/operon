@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { chassisHooks, CredentialShapeError, type HarnessAdapter, type StageInput } from "./types.js";
+import { chassisHooks, CredentialShapeError, type HarnessAdapter, type StageInput, denylistable } from "./types.js";
 import { renderToml, type TomlTable } from "./toml.js";
 import { codexUsageAccumulator, codexUsageFrom } from "../usage.js";
 
@@ -169,7 +169,7 @@ export const codex: HarnessAdapter = {
     const shape = codexCredentialShape(credential);
     if (shape.kind === "apiKey") return [credential];
     const tokens = Object.entries(shape.login.tokens)
-      .filter(([key, value]) => key !== "account_id" && typeof value === "string" && value.length > 0)
+      .filter(([key, value]) => key !== "account_id" && denylistable(value))
       .map(([, value]) => value as string);
     return [credential, ...tokens];
   },

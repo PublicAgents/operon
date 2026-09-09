@@ -30,7 +30,7 @@ const mcp: MergedMcpConfig = {
 const login = JSON.stringify({
   auth_mode: "chatgpt",
   OPENAI_API_KEY: null,
-  tokens: { id_token: "id.jwt", access_token: "access.jwt", refresh_token: "refresh-1", account_id: "acct-1" },
+  tokens: { id_token: "id.jwt.value", access_token: "access.jwt", refresh_token: "refresh-1", account_id: "acct-1" },
   last_refresh: "2026-09-01T00:00:00Z"
 });
 
@@ -249,8 +249,16 @@ describe("codex adapter (spec 0010 §4)", () => {
   });
 
   it("denylists every token in a login file and names the file to relay", () => {
-    expect(codex.secretsIn(login)).toEqual([login, "id.jwt", "access.jwt", "refresh-1"]);
+    expect(codex.secretsIn(login)).toEqual([login, "id.jwt.value", "access.jwt", "refresh-1"]);
     expect(codex.secretsIn("sk-proj-abc")).toEqual(["sk-proj-abc"]);
+    // A short value is a word, not a token: "Bearer" on the denylist
+    // would fail every later publish that carries the word.
+    const withType = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { id_token: "id.jwt.value", access_token: "access.jwt", refresh_token: "refresh-1", token_type: "Bearer" },
+      last_refresh: "2026-09-01T00:00:00Z"
+    });
+    expect(codex.secretsIn(withType)).not.toContain("Bearer");
     expect(codex.credentialFile?.(login)).toBe(".codex/auth.json");
   });
 
@@ -375,6 +383,10 @@ describe("grok adapter (spec 0010 §4a)", () => {
   it("denylists every token in a login file and names the file to relay", () => {
     expect(grok.secretsIn(grokLogin)).toEqual([grokLogin, "grok.access.jwt", "grok-refresh-1"]);
     expect(grok.secretsIn("xai-test-key")).toEqual(["xai-test-key"]);
+    const withType = JSON.stringify({
+      "https://accounts.x.ai/sign-in": { key: "grok.access.jwt", refresh: "grok-refresh-1", token_type: "Bearer", scope: "rw" }
+    });
+    expect(grok.secretsIn(withType)).toEqual([withType, "grok.access.jwt", "grok-refresh-1"]);
     expect(grok.credentialFile?.(grokLogin)).toBe(".grok/auth.json");
   });
 

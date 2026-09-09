@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { chassisHooks, CredentialShapeError, type HarnessAdapter, type StageInput } from "./types.js";
+import { chassisHooks, CredentialShapeError, denylistable, type HarnessAdapter, type StageInput } from "./types.js";
 import { renderToml, type TomlTable } from "./toml.js";
 import { claudeUsageAccumulator, claudeUsageFrom } from "../usage.js";
 
@@ -110,8 +110,8 @@ function isGrokLogin(parsed: Record<string, unknown>): boolean {
 const NOT_A_SECRET = new Set(["account_id", "issuer", "email", "name", "auth_mode", "expires_in", "expires_at"]);
 
 function secretStrings(value: unknown, key?: string): string[] {
-  if (typeof value === "string" && value.length > 0) {
-    return key !== undefined && NOT_A_SECRET.has(key) ? [] : [value];
+  if (typeof value === "string") {
+    return key !== undefined && NOT_A_SECRET.has(key) ? [] : denylistable(value) ? [value] : [];
   }
   if (Array.isArray(value)) return value.flatMap(entry => secretStrings(entry));
   if (typeof value === "object" && value !== null) {
