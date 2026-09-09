@@ -32,6 +32,31 @@ export async function readJson<T = unknown>(
   }
 }
 
+/**
+ * Consume and discard a request body a handler has no use for. A caller
+ * that POSTs a body to a handler that never reads it leaves the stream
+ * unread when the response goes out; behind a service binding the
+ * proxying Worker then logs "Can't read from request stream after
+ * response has been sent" on every such call (the umbilical, spec 0003
+ * step 4, forwards the container's request stream as the binding's
+ * body). The chunks are read and dropped, never buffered, so the cost is
+ * bounded whatever the caller sent. Draining is idempotent: a body
+ * already read, or a request that never had one, is a no-op, and a
+ * stream that fails mid-read is ignored because the handler's answer
+ * does not depend on it.
+ */
+export async function drainBody(request: Request): Promise<void> {
+  if (request.bodyUsed || request.body === null) return;
+  try {
+    const reader = request.body.getReader();
+    while (!(await reader.read()).done) {
+      // Discarded: the handler never asked for this body.
+    }
+  } catch {
+    // Nothing to do: the body was never the handler's input.
+  }
+}
+
 export function errorResponse(status: number, code: string, detail?: string): Response {
   return json({ error: code, ...(detail ? { detail } : {}) }, status);
 }

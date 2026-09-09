@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorResponse, json, readJson, requireBearer } from "./http.js";
+import { drainBody, errorResponse, json, readJson, requireBearer } from "./http.js";
 
 function request(auth?: string): Request {
   return new Request("https://example.com/", {
@@ -47,6 +47,53 @@ describe("readJson", () => {
       const request = new Request("https://x/", { method: "POST", body });
       expect(await readJson(request)).toEqual({ ok: false });
     }
+  });
+});
+
+describe("drainBody", () => {
+  it("consumes a body the handler never reads, so nothing is left unread behind the response", async () => {
+    const request = new Request("https://x/", { method: "POST", body: "{}" });
+    expect(request.bodyUsed).toBe(false);
+    await drainBody(request);
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("is a no-op on a request without a body", async () => {
+    const request = new Request("https://x/", { method: "POST" });
+    await expect(drainBody(request)).resolves.toBeUndefined();
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  it("is a no-op on a body already read, and never throws", async () => {
+    const request = new Request("https://x/", { method: "POST", body: '{"a":1}' });
+    expect(await readJson(request)).toEqual({ ok: true, value: { a: 1 } });
+    await expect(drainBody(request)).resolves.toBeUndefined();
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("reads a streamed body to its end without buffering it", async () => {
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 3) controller.close();
+        else controller.enqueue(new TextEncoder().encode("{}"));
+      }
+    });
+    const request = new Request("https://x/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    await drainBody(request);
+    expect(pulls).toBe(4);
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("swallows a stream that fails mid-read", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error("connection dropped"));
+      }
+    });
+    const request = new Request("https://x/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    await expect(drainBody(request)).resolves.toBeUndefined();
   });
 });
 

@@ -1,5 +1,6 @@
 import { parseRoster } from "@operon/core";
 import {
+  drainBody,
   errorResponse,
   json,
   readJson,
@@ -323,6 +324,7 @@ export default {
     if (url.pathname === "/gatekeeper/asks/list") {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
+      await drainBody(request);
       const asks = await box(env).list({ agentId: agent.id });
       return json({
         ok: true,
@@ -332,6 +334,10 @@ export default {
     if (url.pathname === "/gatekeeper/asks/unread") {
       const agent = agentFromBearer(request, env);
       if (!agent) return errorResponse(401, "unauthorized");
+      // The wake's pull carries a body this handler has no use for; it
+      // is drained so the umbilical never finds an unread stream behind
+      // a sent response.
+      await drainBody(request);
       // Delivery is at-least-once: reading never acks. The porch acks
       // the DELIVERY TOKEN, after the wake has persisted what it was
       // handed, so a lost response re-delivers instead of vanishing
