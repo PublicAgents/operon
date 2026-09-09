@@ -672,6 +672,31 @@ interface VerifiedModel {
   degraded: boolean;
 }
 
+/** A second probe after a short pause: a backend that answered an error once is asked once more before the wake is given up. */
+const PROBE_RETRY_DELAY_MS = 15_000;
+
+async function probeTwice(
+  adapter: HarnessAdapter,
+  model: string,
+  credential: string,
+  staged: StagedHarness
+): Promise<string> {
+  try {
+    return await probe(adapter, model, credential, staged);
+  } catch (first) {
+    // The record carries the harness's own last words in full: a wake
+    // that fails before its session must be diagnosable from its log.
+    if (first instanceof CommandError) {
+      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${(first.stderr.trim() || first.stdout.trim()).slice(-4000)}`);
+    } else {
+      log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
+    }
+    log(`retrying the probe once in ${PROBE_RETRY_DELAY_MS / 1000}s`);
+    await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_DELAY_MS));
+    return await probe(adapter, model, credential, staged);
+  }
+}
+
 async function probe(
   adapter: HarnessAdapter,
   model: string,
@@ -706,7 +731,7 @@ async function verifyModel(
   staged: StagedHarness
 ): Promise<VerifiedModel> {
   try {
-    const answer = await probe(adapter, config.model, config.mindCredential, staged);
+    const answer = await probeTwice(adapter, config.model, config.mindCredential, staged);
     log(`model probe answered: ${answer}`);
     return { model: config.model, answer, degraded: false };
   } catch (primaryError) {
@@ -719,7 +744,7 @@ async function verifyModel(
       `pinned model ${config.model} failed to answer (${String(primaryError).slice(0, 300)}); probing fallback ${config.fallbackModel}`
     );
     try {
-      const answer = await probe(adapter, config.fallbackModel, config.mindCredential, staged);
+      const answer = await probeTwice(adapter, config.fallbackModel, config.mindCredential, staged);
       log(`fallback model probe answered: ${answer} (wake runs DEGRADED)`);
       return { model: config.fallbackModel, answer, degraded: true };
     } catch (fallbackError) {
