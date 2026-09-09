@@ -40,6 +40,11 @@ describe("runTool", () => {
     await expect(
       runTool(toolByName("wake")!, { agentId: "promoter" }, context, audit)
     ).rejects.toBeInstanceOf(AuditUnavailableError);
+    // The refusal carries the ledger's own words, so a paused fleet
+    // whose resume was refused says why from the answer alone.
+    await expect(runTool(toolByName("wake")!, { agentId: "promoter" }, context, audit)).rejects.toThrow(
+      /audit unavailable: .+\)$/
+    );
     expect(rows).toEqual([]);
   });
 
