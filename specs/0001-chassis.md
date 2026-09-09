@@ -138,10 +138,13 @@ Mind auth comes in two modes, chosen per harness:
   subscription tokens), so observability for these minds comes from the
   wake log, the scheduler ledger, and the harness's own telemetry.
 - **API-key via AI Gateway**: harnesses that take a base-URL override
-  (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GROK_XAI_API_BASE_URL`, and
-  equivalents) point at the gateway, which injects the stored provider
-  key. These minds get gateway budgets, attribution, and logs; the
-  budget cap replaces the subscription cap.
+  (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and equivalents) point at
+  the gateway, which injects the stored provider key. These minds get
+  gateway budgets, attribution, and logs; the budget cap replaces the
+  subscription cap. Today every adapter forbids its base-URL variable
+  in the session environment (spec 0010 §2, `forbiddenEnv`), so a
+  gateway-routed mind is an adapter change, not an operator setting;
+  an API key rides the adapter's own variable straight to the provider.
 
 In both modes, the mind credential is the one credential inside the
 container blast radius. It grants inference only: no money, no
