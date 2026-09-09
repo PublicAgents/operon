@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseRoster } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
 import {
+  respondThenDrain,
   errorResponse,
   json,
   readJson,
@@ -465,7 +466,12 @@ export class TelegramGateway extends WorkerEntrypoint<Env> {
  * gone is any way to address these paths from the public hostname.
  */
 export class Door extends WorkerEntrypoint<Env> {
-  override async fetch(request: Request): Promise<Response> {
+  /** The body is consumed before the response leaves, whatever the route did with it. */
+  override fetch(request: Request): Promise<Response> {
+    return respondThenDrain(request, () => this.route(request));
+  }
+
+  private async route(request: Request): Promise<Response> {
     const env = this.env;
     const url = new URL(request.url);
     if (url.pathname === "/notify" && request.method === "POST") {

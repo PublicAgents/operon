@@ -1,4 +1,4 @@
-import { errorResponse, json, readJson, Ledger, OpsEntrypoint } from "@operon/worker-kit";
+import { drainingBodies, errorResponse, json, readJson, Ledger, OpsEntrypoint } from "@operon/worker-kit";
 import { sessionNameFromPath, SESSION_NAME } from "./audit.js";
 import { WebSession } from "./session-do.js";
 import { WebMeter } from "./meter-do.js";
@@ -118,7 +118,7 @@ export class Ops extends OpsEntrypoint<Env> {
   }
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     const agentId = request.headers.get("x-operon-agent");
@@ -184,7 +184,7 @@ export default {
     target.searchParams.set("cap", String(maxConcurrent(env)));
     return session(env, agentId, name).fetch(new Request(target.toString(), request));
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
 
 /** A strong password, minted door-side; the mind never sees the value. */
 function mintPassword(): string {

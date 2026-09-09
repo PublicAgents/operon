@@ -13,6 +13,7 @@ import {
 } from "./adjudication.js";
 import { PrHolds } from "./holds-do.js";
 import {
+  drainingBodies,
   errorResponse,
   json,
   readJson,
@@ -747,7 +748,7 @@ async function handleUpstreamFile(request: Request, env: Env): Promise<Response>
   }
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/gatekeeper/pr" && request.method === "POST") {
@@ -785,4 +786,4 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

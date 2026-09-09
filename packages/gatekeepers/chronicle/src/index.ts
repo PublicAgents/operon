@@ -17,7 +17,7 @@ import {
   sumUsageByDay,
   type TraceKind
 } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer, OpsEntrypoint } from "@operon/worker-kit";
+import { drainingBodies, errorResponse, json, readJson, requireBearer, OpsEntrypoint } from "@operon/worker-kit";
 import { WakeLog } from "./wake-log-do.js";
 
 export { WakeLog };
@@ -282,7 +282,7 @@ async function operatorReads(request: Request, env: Env): Promise<Response> {
     return errorResponse(404, "not_found");
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/chronicle/wake-log/append" && request.method === "POST") {
@@ -297,7 +297,7 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
 
 export class Ops extends OpsEntrypoint<Env> {
   protected handle(request: Request): Promise<Response> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drainBody, errorResponse, json, readJson, requireBearer } from "./http.js";
+import { drainBody, drainingBodies, errorResponse, json, readJson, requireBearer, respondThenDrain } from "./http.js";
 
 function request(auth?: string): Request {
   return new Request("https://example.com/", {
@@ -94,6 +94,82 @@ describe("drainBody", () => {
     });
     const request = new Request("https://x/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
     await expect(drainBody(request)).resolves.toBeUndefined();
+  });
+});
+
+describe("respondThenDrain", () => {
+  it("drains a body the route ignored, after the route produced its response", async () => {
+    const request = new Request("https://x/", { method: "POST", body: "{}" });
+    const response = await respondThenDrain(request, () => json({ ok: true }));
+    expect(response.status).toBe(200);
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("drains on a named refusal too, so an early return leaves nothing unread", async () => {
+    const request = new Request("https://x/", { method: "POST", body: "{}" });
+    const response = await respondThenDrain(request, () => errorResponse(401, "unauthorized"));
+    expect(response.status).toBe(401);
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("drains when the route throws, and still surfaces the error", async () => {
+    const request = new Request("https://x/", { method: "POST", body: "{}" });
+    await expect(
+      respondThenDrain(request, () => {
+        throw new Error("route failed");
+      })
+    ).rejects.toThrow("route failed");
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("leaves a body the route read alone", async () => {
+    const request = new Request("https://x/", { method: "POST", body: '{"a":1}' });
+    let seen: unknown;
+    await respondThenDrain(request, async () => {
+      seen = await readJson(request);
+      return json({ ok: true });
+    });
+    expect(seen).toEqual({ ok: true, value: { a: 1 } });
+  });
+});
+
+describe("drainingBodies", () => {
+  const env = { NAME: "test" };
+  const ctx = {} as ExecutionContext;
+
+  it("wraps fetch so the body is drained before the response leaves", async () => {
+    const handler = drainingBodies<typeof env>({
+      fetch: () => json({ ok: true })
+    });
+    const request = new Request("https://x/", { method: "POST", body: "{}" });
+    const response = await handler.fetch?.(request, env, ctx);
+    expect(response?.status).toBe(200);
+    expect(request.bodyUsed).toBe(true);
+  });
+
+  it("hands the same request, env, and ctx to the wrapped fetch", async () => {
+    const seen: unknown[] = [];
+    const handler = drainingBodies<typeof env>({
+      fetch: (request, fetchEnv, fetchCtx) => {
+        seen.push(request.url, fetchEnv, fetchCtx);
+        return json({ ok: true });
+      }
+    });
+    const request = new Request("https://x/path", { method: "POST", body: "{}" });
+    await handler.fetch?.(request, env, ctx);
+    expect(seen).toEqual(["https://x/path", env, ctx]);
+  });
+
+  it("carries every other export through untouched", () => {
+    const scheduled = () => undefined;
+    const handler = drainingBodies<typeof env>({ fetch: () => json({ ok: true }), scheduled });
+    expect(handler.scheduled).toBe(scheduled);
+  });
+
+  it("returns a handler without fetch as it is", () => {
+    const scheduled = () => undefined;
+    const handler: ExportedHandler<typeof env> = { scheduled };
+    expect(drainingBodies(handler)).toBe(handler);
   });
 });
 

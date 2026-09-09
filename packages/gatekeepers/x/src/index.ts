@@ -1,6 +1,6 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+import { drainingBodies, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type TelegramGatewayBinding
 } from "@operon/worker-kit";
@@ -442,7 +442,7 @@ async function handleMe(env: Env, agent: RosterAgent): Promise<Response> {
   return json({ ok: true, me: parsed.data });
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method !== "POST") return errorResponse(404, "not_found");
@@ -465,4 +465,4 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

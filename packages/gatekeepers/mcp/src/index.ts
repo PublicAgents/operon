@@ -1,6 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { findAgent, parseRoster, type McpBudget, type McpServerDef, type McpWebhook } from "@operon/core";
-import { errorResponse, json, Ledger, OpsEntrypoint, readJson } from "@operon/worker-kit";
+import { drainingBodies, errorResponse, json, Ledger, OpsEntrypoint, readJson } from "@operon/worker-kit";
 import { inPortalScope, ownerOf, type ServerTrust, type UpstreamTool } from "./classify.js";
 import { UpstreamError } from "./guarded-fetch.js";
 import { CatalogMemory } from "./catalog-memory.js";
@@ -451,7 +451,7 @@ function meterHooks(env: Env, agentId: string, server: string, budget: McpBudget
 /** Catalog revisions already ledgered, per isolate (see CatalogMemory). */
 const catalogs = new CatalogMemory();
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     // hooks.<zone>: the one public surface of this Worker (spec 0014
@@ -570,4 +570,4 @@ export default {
       return errorResponse(502, code, detail);
     }
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

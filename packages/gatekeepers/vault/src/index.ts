@@ -1,5 +1,5 @@
 import { findAgent, parseRoster, type RosterAgent } from "@operon/core";
-import { drainBody, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+import { drainingBodies, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type TelegramGatewayBinding
 } from "@operon/worker-kit";
@@ -105,8 +105,7 @@ async function handleGet(request: Request, env: Env, agent: RosterAgent): Promis
   return json({ ok: true, label, value });
 }
 
-async function handleList(request: Request, env: Env, agent: RosterAgent): Promise<Response> {
-  await drainBody(request);
+async function handleList(env: Env, agent: RosterAgent): Promise<Response> {
   return json({ ok: true, secrets: await vaultBox(env, agent.id).list() });
 }
 
@@ -124,18 +123,15 @@ async function handleDelete(request: Request, env: Env, agent: RosterAgent): Pro
 
 /**
  * Every value for one agent: the wake supervisor's denylist pull, made
- * with the same per-agent bearer. Ledgered by count only. The pull
- * carries a body this handler has no use for; it is drained so the
- * umbilical never finds an unread stream behind a sent response.
+ * with the same per-agent bearer. Ledgered by count only.
  */
-async function handleAll(request: Request, env: Env, agent: RosterAgent): Promise<Response> {
-  await drainBody(request);
+async function handleAll(env: Env, agent: RosterAgent): Promise<Response> {
   const secrets = await vaultBox(env, agent.id).all();
   await record(env, "vault_all", { agentId: agent.id, count: secrets.length });
   return json({ ok: true, secrets });
 }
 
-export default {
+export default drainingBodies({
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== "POST") return errorResponse(404, "not_found");
@@ -143,9 +139,9 @@ export default {
     if (!agent) return errorResponse(401, "unauthorized");
     if (url.pathname === "/gatekeeper/vault/set") return handleSet(request, env, agent);
     if (url.pathname === "/gatekeeper/vault/get") return handleGet(request, env, agent);
-    if (url.pathname === "/gatekeeper/vault/list") return handleList(request, env, agent);
+    if (url.pathname === "/gatekeeper/vault/list") return handleList(env, agent);
     if (url.pathname === "/gatekeeper/vault/delete") return handleDelete(request, env, agent);
-    if (url.pathname === "/gatekeeper/vault/all") return handleAll(request, env, agent);
+    if (url.pathname === "/gatekeeper/vault/all") return handleAll(env, agent);
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);

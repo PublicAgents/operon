@@ -1,7 +1,7 @@
 import { findAgent, parseRoster } from "@operon/core";
 import { recordMessage } from "@operon/chronicle";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
+import { drainingBodies, errorResponse, json, readJson, requireBearer, Ledger, OpsEntrypoint,
   notifyOperator as sendOperatorNotify,
   type OperatorAction,
   type TelegramGatewayBinding
@@ -338,7 +338,7 @@ async function handleHeld(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, held: await mailbox(env, agent.id).listHeld() });
 }
 
-export default {
+export default drainingBodies({
   async email(message, env, ctx): Promise<void> {
     const roster = parseRoster(env.ROSTER);
     const identity = identityForRecipient(roster, env.EMAIL_DOMAIN, message.to);
@@ -414,7 +414,7 @@ export default {
     }
     return errorResponse(404, "not_found");
   }
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
 
 /**
  * The operator's binding-only decision + read surface (spec 0003 step 3):
