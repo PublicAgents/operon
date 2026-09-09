@@ -681,6 +681,9 @@ interface VerifiedModel {
  */
 const PROBE_RETRY_DELAY_MS = 15_000;
 const PROBE_FAST_FAILURE_MS = 60_000;
+/** The retry gets one minute, not the probe's five: verification never spends more of the wall than that. */
+const PROBE_RETRY_TIMEOUT_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function probeTwice(
   adapter: HarnessAdapter,
@@ -700,9 +703,9 @@ async function probeTwice(
       log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
     }
     if (Date.now() - startedAt > PROBE_FAST_FAILURE_MS) throw first;
-    log(`retrying the probe once in ${PROBE_RETRY_DELAY_MS / 1000}s`);
+    log(`retrying the probe once in ${PROBE_RETRY_DELAY_MS / 1000}s (${PROBE_RETRY_TIMEOUT_MS / 1000}s to answer)`);
     await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_DELAY_MS));
-    return await probe(adapter, model, credential, staged);
+    return await probe(adapter, model, credential, staged, PROBE_RETRY_TIMEOUT_MS);
   }
 }
 
@@ -710,7 +713,8 @@ async function probe(
   adapter: HarnessAdapter,
   model: string,
   credential: string,
-  staged: StagedHarness
+  staged: StagedHarness,
+  timeoutMs = PROBE_TIMEOUT_MS
 ): Promise<string> {
   const spec = adapter.probe(model, credential);
   const ids = mindSpawnIds();
@@ -722,7 +726,7 @@ async function probe(
       ...spec.env,
       ...("uid" in ids ? { HOME: "/home/mind" } : {})
     },
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs,
     ...ids
   });
   return stdout.trim().slice(0, 200);
