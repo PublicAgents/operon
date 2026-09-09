@@ -5,15 +5,21 @@
  * fence), one 401 behavior (reload, which re-runs the Access flow).
  */
 
+export function apiErrorMessage(status: number, body: unknown): string {
+  if (typeof body !== "object" || body === null || !("error" in body)) return `request failed (${status})`;
+  const { error, detail } = body as { error: unknown; detail?: unknown };
+  const name = String(error);
+  return typeof detail === "string" && detail.length > 0 && detail !== name ? `${name}: ${detail.slice(0, 300)}` : name;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
   constructor(status: number, body: unknown) {
-    super(
-      typeof body === "object" && body !== null && "error" in body
-        ? String((body as { error: unknown }).error)
-        : `request failed (${status})`
-    );
+    // The name AND the detail: a refusal such as send_failed says why
+    // in its detail, and a badge that hides it sends the operator to
+    // the logs for a sentence the answer already carried.
+    super(apiErrorMessage(status, body));
     this.status = status;
     this.body = body;
   }
