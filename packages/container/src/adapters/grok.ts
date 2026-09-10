@@ -142,8 +142,12 @@ const NOT_A_SECRET = new Set([
   "organization"
 ]);
 
+/** Keys that hold a credential by definition: denylisted whatever the value looks like. */
+const CREDENTIAL_KEYS = new Set(["key", "access_token", "refresh_token", "refresh", "id_token", "token", "secret", "api_key", "password", "jwt"]);
+
 function secretStrings(value: unknown, key?: string): string[] {
   if (typeof value === "string") {
+    if (key !== undefined && CREDENTIAL_KEYS.has(key)) return value.length > 0 ? [value] : [];
     if (key !== undefined && NOT_A_SECRET.has(key)) return [];
     if (/\s/.test(value)) return [];
     return denylistable(value) ? [value] : [];

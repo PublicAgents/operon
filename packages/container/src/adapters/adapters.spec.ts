@@ -398,6 +398,12 @@ describe("grok adapter (spec 0010 §4a)", () => {
       }
     });
     expect(grok.secretsIn(withIdentity)).toEqual([withIdentity, "grok.access.jwt"]);
+    // A credential key is denylisted whatever its value looks like: a
+    // token with a space in it is still the token.
+    const oddToken = JSON.stringify({
+      "https://accounts.x.ai/sign-in": { key: "two part token", refresh: "short 1", display_name: "Michael Krens" }
+    });
+    expect(grok.secretsIn(oddToken)).toEqual([oddToken, "two part token", "short 1"]);
     expect(grok.credentialFile?.(grokLogin)).toBe(".grok/auth.json");
   });
 
