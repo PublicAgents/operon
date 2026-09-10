@@ -166,6 +166,10 @@ async function refreshIfDue(
   seedFingerprint: string,
   context: LaunchContext
 ): Promise<string> {
+  // Codex only: Grok also stages a login file, but its OAuth client and
+  // token endpoint are not a documented public grant the way Codex's
+  // are, so a grok credential is never refreshed here (spec 0010 §5).
+  if (harness !== "codex") return credential;
   const login = parseCodexLogin(credential);
   if (!login || !context.refreshLogin) return credential;
   const now = Date.now();

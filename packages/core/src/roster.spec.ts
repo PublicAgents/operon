@@ -423,6 +423,9 @@ describe("harnesses (spec 0010 §4)", () => {
   it("accepts pinned alternates and refuses the primary, unknown harnesses, and unpinned models", () => {
     expect(withHarnesses("claude-code", { codex: { model: "gpt-5.5", fallbackModel: "gpt-5.5-mini" } }).agents[0].harnesses)
       .toEqual({ codex: { model: "gpt-5.5", fallbackModel: "gpt-5.5-mini" } });
+    expect(withHarnesses("claude-code", { grok: { model: "grok-4.6" } }).agents[0].harnesses).toEqual({
+      grok: { model: "grok-4.6" }
+    });
     expect(withHarnesses("claude-code").agents[0].harnesses).toBeUndefined();
     expect(() => withHarnesses("claude-code", { "claude-code": { model: "x" } })).toThrow(/is the primary harness/);
     expect(() => withHarnesses("claude-code", { gemini: { model: "x" } })).toThrow(/is not a harness/);

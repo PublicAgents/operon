@@ -4,8 +4,8 @@ Status: accepted 2026-09-03. Implements the operator's two asks: a mind
 session must use only the capabilities the chassis hands it, never a
 connector, memory, plugin, or setting attached to the provider account
 it signs in with; and one agent must be wakeable on a different harness
-(Codex CLI next to Claude Code) as the same agent, with the same memory,
-doors, and grants.
+(Codex CLI or Grok Build CLI next to Claude Code) as the same agent,
+with the same memory, doors, and grants.
 
 ## 1. The problem
 
@@ -53,18 +53,23 @@ opposite of "the same agent".
   project hooks, project rules, and project `.mcp.json` do not load. Codex
   never has the state directory listed as a trusted project, so its
   `.codex/config.toml`, hooks, and rules stay disabled by Codex's own
-  trust rule. The mind's memory is its repository, read through the wake
+  trust rule. Grok keeps folder-trust on and is never launched with
+  `--trust`, so a project `.grok/` in the state directory stays
+  untrusted. The mind's memory is its repository, read through the wake
   prompt and its own file reads, the same on every harness.
 - **A harness's capabilities and its autonomy come from the adapter,
   not the operator's extra args.** The lockdown flags are chassis
   invariants the adapter emits on every session and probe, and so are
   the unattended-run flags: Claude Code's `--permission-mode
   bypassPermissions --output-format stream-json --verbose`, Codex's
-  `--dangerously-bypass-approvals-and-sandbox --json`. A headless wake
-  that may stop to ask is not a wake, and the container is the sandbox
-  either way. This amends spec 0001, which made autonomy an operator
-  setting. `HARNESS_EXTRA_ARGS` (and `HARNESS_EXTRA_ARGS_CODEX`) remain
-  for genuine extras, an effort level say, and default to empty.
+  `--dangerously-bypass-approvals-and-sandbox --json`, Grok's
+  `--permission-mode bypassPermissions --output-format
+  streaming-messages-json --no-auto-update`. A headless wake that may
+  stop to ask is not a wake, and the container is the sandbox either
+  way. This amends spec 0001, which made autonomy an operator setting.
+  `HARNESS_EXTRA_ARGS` (and `HARNESS_EXTRA_ARGS_<HARNESS>` for every
+  other harness) remain for genuine extras, an effort level say, and
+  default to empty.
 - **One agent, many harnesses.** A roster entry keeps its primary
   `harness`/`model` and may name alternates under `harnesses:` with a
   model pin each. A manual wake may name one of them; the wake runs the
@@ -165,6 +170,67 @@ startup (no documented opt-out); and Codex's built-in web search stays
 at the harness default, as Claude Code's built-in web tools do. Both
 are provider-side features of inference itself, not connectors.
 
+## 4a. Grok Build CLI
+
+The third adapter, as spec 0001 decision 1a ordered. Grok keeps its
+home in `GROK_HOME=/home/mind/.grok`, created per wake and staged with:
+
+- `config.toml`: `[cli] auto_update = false`, `[features]` with
+  `telemetry`, `feedback`, `ask_user_question`, `image_gen`,
+  `video_gen`, `managed_config`, and `remote_fetch` all `false`,
+  `[memory] enabled = false`, `[workflows] enabled = false`,
+  `[managed_mcps] enabled = false`, `[compat.claude]` and
+  `[compat.cursor]` with skills, rules, agents, mcps, and hooks all
+  `false` (so a state repo's `.claude/` or `.cursor/` does not become
+  config), and the wake's MCP servers as `[mcp_servers.<name>]` tables
+  (`command` and `args` for stdio; `url` and `headers` carrying the
+  wake nonce for the umbilical's virtual hosts). Grok has no
+  `--mcp-config` / `--strict-mcp-config`: the staged home is the only
+  configuration source, and folder-trust stays on without `--trust`, so
+  a project `.grok/` in the state directory stays untrusted.
+- `hooks/operon.json`: the same PostToolUse pull hook and Stop journal
+  guard. Global hooks under `$GROK_HOME/hooks/` are always trusted, so
+  the session does not need a hook-trust bypass. Grok's Stop stdin uses
+  camelCase `stopHookActive` where Claude Code and Codex send
+  `stop_hook_active`; the journal guard reads both.
+- `auth.json`: the mind credential (§5), when the credential is a login
+  file.
+
+The session and probe environment, emitted by the adapter, repeats the
+off switches as variables (they outrank `config.toml`, so a mind that
+edits the staged file mid-session cannot turn them back on):
+`GROK_DISABLE_AUTOUPDATER=1`, `GROK_MEMORY=0`,
+`GROK_ASK_USER_QUESTION=0`, `GROK_TELEMETRY_ENABLED=0` and the other
+vendor-telemetry flags, `GROK_EXTERNAL_OTEL=0`, `GROK_WORKFLOWS=0`,
+`GROK_MANAGED_MCPS_ENABLED=0`, and the `GROK_CLAUDE_*` /
+`GROK_CURSOR_*` compat cells all `0`. `ask_user_question` is the one
+that would hang a wake waiting for a human who is not there.
+
+The session is `grok -p <prompt> -m <model> --no-auto-update
+--permission-mode bypassPermissions --output-format
+streaming-messages-json` in the state directory, plus the operator's
+extras; the probe runs the same identity question with
+`--permission-mode dontAsk --disable-web-search` and without the
+streamed format. Grok has no fallback-model flag: the entrypoint's
+probe-then-fallback covers an unavailable pinned model before the
+session; mid-session fallback is a Claude Code feature only.
+
+`streaming-messages-json` is the Anthropic Messages `stream-json`
+shape, so usage is Claude Code's `result` event (spec 0011) and the
+console renderer already understands the line types.
+
+Known residuals, named rather than hidden: Grok's external OTEL speaks
+OTLP protobuf (and logs/metrics only), while the porch accepts JSON, so
+chassis OTEL export stays off and usage is read from the stream;
+Grok's built-in web search stays at the harness default, as Claude
+Code's and Codex's do; Grok injects project `AGENTS.md` as rules (the
+charter still arrives through the wake prompt); Grok does not document
+`HTTPS_PROXY` (live-verify; keep `*.x.ai` and `*.grok.com` direct in
+the egress table either way); and a login file is watched for in-place
+rewrites the way Codex's is, but is not refreshed by the scheduler
+(Grok's OAuth client and token endpoint are not a documented public
+grant).
+
 ## 5. Credentials and the operator's policy, per harness
 
 `MIND_CREDENTIAL_<HARNESS>` on the scheduler (spec 0001) holds what the
@@ -177,9 +243,16 @@ adapter needs to sign in:
   `tools/codex-authorize.mjs` runs `codex login` under a temporary home
   and pipes the result into the secret, never printing it. A Cloudflare
   secret holds at most 5 KB; a login file is about 4 KB.
+- `grok`: either the JSON of a `grok login` (`auth.json`: issuer-keyed
+  entries with a `key`, or an `access_token`), staged as
+  `$GROK_HOME/auth.json`, or an API key, injected as `XAI_API_KEY`. The
+  tool `tools/grok-authorize.mjs` runs `grok login` under a temporary
+  home and pipes the result into the secret, never printing it.
 
 The chassis denylists every literal inside a file credential (the
-tokens, not only the file as a whole), so a JWT can never ride a
+tokens, not only the file as a whole; a value shorter than eight
+characters is a word such as a token type, not a token, and stays off
+the list so it cannot fail an unrelated publish), so a JWT can never ride a
 transcript or a commit.
 
 **The refresh, done by the scheduler.** Codex refreshes a login file
@@ -208,7 +281,8 @@ seeded one could. The rewrite is noted in the log and does not carry
 over.
 
 `HARNESS_EXTRA_ARGS` (the scheduler policy var) carries claude-code
-extras; `HARNESS_EXTRA_ARGS_CODEX` carries codex extras. Both default
+extras; every other harness reads `HARNESS_EXTRA_ARGS_<HARNESS>`
+(`HARNESS_EXTRA_ARGS_CODEX`, `HARNESS_EXTRA_ARGS_GROK`). All default
 to `[]`: the unattended-run and output flags are the adapters' own (§2).
 
 ## 6. The wake, the plane, the console
@@ -223,10 +297,10 @@ to `[]`: the unattended-run and output flags are the adapters' own (§2).
   one.
 - The wake record and the chronicle's `wake_finished` row carry
   `harness`; the end-of-wake summary names it.
-- The image carries both CLIs, pinned. Spec 0001 §4.1 said one image per
-  harness; one image with every adapter's CLI is what makes a per-wake
-  harness choice possible without a second container class, and the
-  drain gate still hashes the one Dockerfile.
+- The image carries every adapter's CLI, pinned. Spec 0001 §4.1 said one
+  image per harness; one image with every adapter's CLI is what makes a
+  per-wake harness choice possible without a second container class, and
+  the drain gate still hashes the one Dockerfile.
 
 ## 7. Verification
 
@@ -241,10 +315,13 @@ to `[]`: the unattended-run and output flags are the adapters' own (§2).
   once the access token has expired too.
 - Container: the adapters' staged files and environments are pure and
   tested (Claude Code: settings, managed keys, flags, env; Codex:
-  config.toml, hooks.json, auth.json, env); the adapter table equals
-  core's `KNOWN_HARNESSES`.
+  config.toml, hooks.json, auth.json, env; Grok: config.toml,
+  hooks/operon.json, auth.json, env); the adapter table equals core's
+  `KNOWN_HARNESSES`. The journal guard reads both `stop_hook_active` and
+  `stopHookActive`.
 - Live (AGENTS.md rule: a container change needs one hand-run wake read
   end to end): a claude-code wake logs the lockdown, shows no claude.ai
   connectors in its MCP list, and still pulls, journals, and persists; a
   codex wake of the same agent reads the same repo, uses the umbilical
-  doors, and journals with the stamp.
+  doors, and journals with the stamp; a grok wake of the same agent does
+  the same, with `ask_user_question` off and usage on the `result` line.

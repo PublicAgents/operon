@@ -5,6 +5,7 @@ import {
   assertEnvClean,
   claudeCode,
   codex,
+  grok,
   getAdapter,
   UnknownHarnessError,
   EnvNotCleanError,
@@ -12,6 +13,7 @@ import {
 } from "./index.js";
 import { CLAUDE_LOCKDOWN_ENV, claudeMcpConfigPath, claudeSettingsPath } from "./claude-code.js";
 import { codexConfig, codexCredentialShape } from "./codex.js";
+import { GROK_LOCKDOWN_ENV, grokConfig, grokCredentialShape } from "./grok.js";
 import type { MergedMcpConfig } from "../mcp-config.js";
 
 const hooks = { pullHook: "node /opt/operon/pull-hook.js", journalGuard: "node /opt/operon/journal-guard.js" };
@@ -28,7 +30,7 @@ const mcp: MergedMcpConfig = {
 const login = JSON.stringify({
   auth_mode: "chatgpt",
   OPENAI_API_KEY: null,
-  tokens: { id_token: "id.jwt", access_token: "access.jwt", refresh_token: "refresh-1", account_id: "acct-1" },
+  tokens: { id_token: "id.jwt.value", access_token: "access.jwt", refresh_token: "refresh-1", account_id: "acct-1" },
   last_refresh: "2026-09-01T00:00:00Z"
 });
 
@@ -36,6 +38,7 @@ describe("getAdapter", () => {
   it("resolves known harnesses", () => {
     expect(getAdapter("claude-code")).toBe(claudeCode);
     expect(getAdapter("codex")).toBe(codex);
+    expect(getAdapter("grok")).toBe(grok);
   });
 
   it("fails loudly on unknown harnesses", () => {
@@ -246,8 +249,16 @@ describe("codex adapter (spec 0010 §4)", () => {
   });
 
   it("denylists every token in a login file and names the file to relay", () => {
-    expect(codex.secretsIn(login)).toEqual([login, "id.jwt", "access.jwt", "refresh-1"]);
+    expect(codex.secretsIn(login)).toEqual([login, "id.jwt.value", "access.jwt", "refresh-1"]);
     expect(codex.secretsIn("sk-proj-abc")).toEqual(["sk-proj-abc"]);
+    // A short value is a word, not a token: "Bearer" on the denylist
+    // would fail every later publish that carries the word.
+    const withType = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { id_token: "id.jwt.value", access_token: "access.jwt", refresh_token: "refresh-1", token_type: "Bearer" },
+      last_refresh: "2026-09-01T00:00:00Z"
+    });
+    expect(codex.secretsIn(withType)).not.toContain("Bearer");
     expect(codex.credentialFile?.(login)).toBe(".codex/auth.json");
   });
 
@@ -255,5 +266,135 @@ describe("codex adapter (spec 0010 §4)", () => {
     expect(() => assertEnvClean(codex, { OPENAI_API_KEY: "sk" })).toThrowError(EnvNotCleanError);
     expect(() => assertEnvClean(codex, { CODEX_API_KEY: "sk" })).toThrowError(/CODEX_API_KEY/);
     expect(() => assertEnvClean(codex, { CODEX_HOME: "/root/.codex" })).toThrowError(/CODEX_HOME/);
+  });
+});
+
+const grokLogin = JSON.stringify({
+  "https://accounts.x.ai/sign-in": { key: "grok.access.jwt", refresh: "grok-refresh-1" }
+});
+
+describe("grok adapter (spec 0010 §4a)", () => {
+  it("tells a login file from an API key and refuses anything else by name", () => {
+    expect(grokCredentialShape(grokLogin).kind).toBe("login");
+    expect(grokCredentialShape('{"access_token":"tok","refresh_token":"ref"}').kind).toBe("login");
+    expect(grokCredentialShape("xai-test-key").kind).toBe("apiKey");
+    expect(() => grokCredentialShape("")).toThrowError(CredentialShapeError);
+    expect(() => grokCredentialShape("two words")).toThrowError(/mind_credential_malformed/);
+    expect(() => grokCredentialShape("{not json")).toThrowError(/does not parse/);
+    expect(() => grokCredentialShape('{"hello":1}')).toThrowError(/without a grok login/);
+  });
+
+  it("stages its home under the mind's: config, hooks, and the login file, all 0600", () => {
+    const staged = grok.stage({ home: "/home/mind", credential: grokLogin, hooks });
+    expect(staged.files.map(file => file.path)).toEqual([
+      "/home/mind/.grok/config.toml",
+      "/home/mind/.grok/hooks/operon.json",
+      "/home/mind/.grok/auth.json"
+    ]);
+    for (const file of staged.files) expect(file.mode).toBe(0o600);
+    expect(staged.files[2].content).toBe(grokLogin);
+    expect(staged.env).toEqual({ GROK_HOME: "/home/mind/.grok", ...GROK_LOCKDOWN_ENV });
+    expect(staged.args).toEqual([]);
+    const hooksFile = JSON.parse(staged.files[1].content) as { hooks: Record<string, unknown[]> };
+    expect(Object.keys(hooksFile.hooks)).toEqual(["PostToolUse", "Stop"]);
+    expect(JSON.stringify(hooksFile)).not.toContain('"matcher"');
+  });
+
+  it("turns off everything account-attached in the config", () => {
+    const config = grok.stage({ home: "/home/mind", credential: grokLogin, hooks }).files[0].content;
+    expect(config).toContain("auto_update = false");
+    expect(config).toContain("telemetry = false");
+    expect(config).toContain("ask_user_question = false");
+    expect(config).toContain("image_gen = false");
+    expect(config).toContain("managed_config = false");
+    expect(config).toContain("[memory]\nenabled = false");
+    expect(config).toContain("[compat.claude]\nskills = false");
+    expect(config).toContain("[compat.cursor]");
+    expect(config).toContain("mcps = false");
+    expect(config).not.toContain("mcp_servers");
+  });
+
+  it("renders the wake's MCP servers as grok tables with the nonce header", () => {
+    const config = grok.stage({ home: "/home/mind", credential: grokLogin, mcp, hooks }).files[0].content;
+    expect(config).toContain('[mcp_servers.browser]\ncommand = "node"\nargs = ["/opt/operon/web-mcp.js"]');
+    expect(config).toContain(
+      '[mcp_servers.google-analytics]\nurl = "http://mcp-google-analytics.operon.internal/mcp/google-analytics"'
+    );
+    expect(config).toContain(
+      '[mcp_servers.google-analytics.headers]\nauthorization = "Bearer nonce-1"\nx-operon-porch = "1"'
+    );
+    expect(Object.keys(grokConfig(mcp).mcp_servers as object)).toEqual(["browser", "google-analytics"]);
+  });
+
+  it("does not point OTEL at the porch (protobuf vs JSON) and still reads usage from the stream", () => {
+    const off = grok.stage({ home: "/home/mind", credential: grokLogin, hooks });
+    expect(off.lines.some(line => line.includes("telemetry off"))).toBe(true);
+    const on = grok.stage({
+      home: "/home/mind",
+      credential: grokLogin,
+      hooks,
+      telemetry: { endpoint: "http://127.0.0.1:4321/otel" }
+    });
+    expect(on.files[0].content).not.toContain("otel");
+    expect(on.env.GROK_EXTERNAL_OTEL).toBe("0");
+    expect(on.lines.join("\n")).toContain("protobuf");
+    expect(
+      grok.usageFrom([
+        JSON.stringify({
+          type: "result",
+          usage: { input_tokens: 5, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+        })
+      ])
+    ).toMatchObject({ inputTokens: 5, outputTokens: 2 });
+  });
+
+  it("stages no login file for an API key and rides it as XAI_API_KEY", () => {
+    const staged = grok.stage({ home: "/home/mind", credential: "xai-test-key", hooks });
+    expect(staged.files.map(file => file.path)).not.toContain("/home/mind/.grok/auth.json");
+    expect(grok.session("p", "grok-4.6", "xai-test-key").env.XAI_API_KEY).toBe("xai-test-key");
+    expect(grok.probe("grok-4.6", "xai-test-key").env.XAI_API_KEY).toBe("xai-test-key");
+    expect(grok.credentialFile?.("xai-test-key")).toBeUndefined();
+  });
+
+  it("runs grok -p unattended with the pinned model, streamed output, and no fallback flag", () => {
+    const spec = grok.session("do the wake", "grok-4.6", grokLogin, "grok-4");
+    expect(spec.command).toBe("grok");
+    expect(spec.args).toEqual([
+      "-p",
+      "do the wake",
+      "-m",
+      "grok-4.6",
+      "--no-auto-update",
+      "--permission-mode",
+      "bypassPermissions",
+      "--output-format",
+      "streaming-messages-json"
+    ]);
+    expect(spec.env.XAI_API_KEY).toBeUndefined();
+    expect(spec.env.GROK_ASK_USER_QUESTION).toBe("0");
+    const probe = grok.probe("grok-4.6", grokLogin);
+    expect(probe.args).toContain("--permission-mode");
+    expect(probe.args).toContain("dontAsk");
+    expect(probe.args).toContain("--disable-web-search");
+    expect(probe.args).not.toContain("streaming-messages-json");
+    expect(probe.args.join(" ")).toMatch(/model id/);
+  });
+
+  it("denylists every token in a login file and names the file to relay", () => {
+    expect(grok.secretsIn(grokLogin)).toEqual([grokLogin, "grok.access.jwt", "grok-refresh-1"]);
+    expect(grok.secretsIn("xai-test-key")).toEqual(["xai-test-key"]);
+    const withType = JSON.stringify({
+      "https://accounts.x.ai/sign-in": { key: "grok.access.jwt", refresh: "grok-refresh-1", token_type: "Bearer", scope: "rw" }
+    });
+    expect(grok.secretsIn(withType)).toEqual([withType, "grok.access.jwt", "grok-refresh-1"]);
+    expect(grok.credentialFile?.(grokLogin)).toBe(".grok/auth.json");
+  });
+
+  it("refuses an environment that would switch its auth, home, or endpoint", () => {
+    expect(() => assertEnvClean(grok, { XAI_API_KEY: "xai-x" })).toThrowError(EnvNotCleanError);
+    expect(() => assertEnvClean(grok, { GROK_HOME: "/root/.grok" })).toThrowError(/GROK_HOME/);
+    expect(() => assertEnvClean(grok, { GROK_CLI_CHAT_PROXY_BASE_URL: "https://elsewhere" })).toThrowError(
+      /GROK_CLI_CHAT_PROXY_BASE_URL/
+    );
   });
 });

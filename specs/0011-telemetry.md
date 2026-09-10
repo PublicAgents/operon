@@ -1,16 +1,18 @@
 # 0011: Telemetry through the chassis: usage, events, and traces per wake
 
 Status: accepted 2026-09-03. Implements the operator's ask to see what
-each wake cost in tokens on either harness, and to see a wake's
+each wake cost in tokens on any harness, and to see a wake's
 timeline and traces in the console, without a third-party backend and
 without loosening spec 0010's lockdown.
 
 ## 1. The problem
 
-Both harnesses know exactly what a session spent: Claude Code's
+The harnesses know exactly what a session spent: Claude Code's
 stream-json ends with a `result` event carrying token counts, a dollar
-figure, turns and duration; Codex's JSONL ends every turn with a
-`turn.completed` carrying token counts. Both also speak OpenTelemetry:
+figure, turns and duration; Grok's `--output-format
+streaming-messages-json` is that same `result` shape; Codex's JSONL
+ends every turn with a `turn.completed` carrying token counts. Claude
+Code and Codex also speak OpenTelemetry:
 Claude Code exports metrics (token usage, cost, edits), events (tool
 calls and decisions, API requests, errors) and, behind a beta flag,
 spans (interaction, LLM request, tool); Codex exports events, spans and
@@ -32,13 +34,14 @@ through the umbilical, and a console page per wake.
   produces (spec 0010 made the structured stream mandatory); the
   entrypoint records one `wake_usage` row through the chronicle door
   and names the numbers in the end-of-wake summary. No exporter, no
-  timing window, identical for both harnesses.
-- **Telemetry export goes to the chassis, never to the provider.** Both
-  harnesses export OTLP over HTTP with the JSON encoding to the wake's
-  own porch, which forwards to the chronicle Gatekeeper through the
-  umbilical. The provider-bound exporters stay off (spec 0010 §3, §4).
-  The chronicle parses OTLP JSON itself; there is no collector and no
-  dependency.
+  timing window, identical for every harness.
+- **Telemetry export goes to the chassis, never to the provider.**
+  Claude Code and Codex export OTLP over HTTP with the JSON encoding
+  to the wake's own porch, which forwards to the chronicle Gatekeeper
+  through the umbilical. Grok's external OTEL is protobuf, so it does
+  not export; usage still lands from the stream. The provider-bound
+  exporters stay off (spec 0010 §3, §4, §4a). The chronicle parses
+  OTLP JSON itself; there is no collector and no dependency.
 - **The session holds no nonce.** The exporters are pointed at the
   loopback porch with the porch header, exactly as the browser door
   is; the porch attaches the chronicle bearer outside the session.
@@ -74,7 +77,8 @@ The chronicle gains four tables:
 
 - **Container.** After the session, `adapter.usageFrom(lines)` reads
   the usage from the retained stream lines (Claude Code's `result`,
-  Codex's `turn.completed` summed). The porch serves
+  Grok's `result` from `streaming-messages-json`, Codex's
+  `turn.completed` summed). The porch serves
   `POST /otel/v1/{traces,metrics,logs}` and forwards the redacted body
   to `<chronicle door>/v1/<signal>` with the chronicle bearer; the
   session never learns that bearer. The adapters point their exporters
@@ -82,7 +86,9 @@ The chronicle gains four tables:
   `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` for spans, the JSON protocol,
   short export intervals, account and content flags off), Codex through
   `[otel]` in its staged config (`otlp-http`, `protocol = "json"`, the
-  three signal endpoints).
+  three signal endpoints). Grok's external OTEL is protobuf (logs and
+  metrics only); the porch is JSON, so Grok does not export OTEL and
+  vendor telemetry stays off. Usage still lands from the stream.
 - **Umbilical.** The router adds `x-operon-wake` beside
   `x-operon-agent` on every forwarded request.
 - **Chronicle Gatekeeper.** `POST /chronicle/wake-usage` and the three
@@ -102,9 +108,12 @@ The chronicle gains four tables:
   spans, metrics with sum/gauge/histogram points, log records, every
   `anyValue` kind) into rows, caps attribute and body sizes, and
   refuses payloads over the row cap by name.
-- Container: `usageFrom` on a Claude `result` line and on a run of
-  Codex `turn.completed` lines; the porch forwards an OTLP body with
-  the chronicle bearer and redacts denylisted literals from it; the
-  adapters' telemetry settings name the porch and only the porch.
-- Live (AGENTS.md rule): one wake per harness shows a usage row, events
-  and spans in the console, and its summary names the token counts.
+- Container: `usageFrom` on a Claude `result` line, a Grok `result`
+  line, and on a run of Codex `turn.completed` lines; the porch
+  forwards an OTLP body with the chronicle bearer and redacts
+  denylisted literals from it; the adapters' telemetry settings name
+  the porch and only the porch (Grok's, none).
+- Live (AGENTS.md rule): one wake per harness shows a usage row and
+  its summary names the token counts; Claude Code and Codex also show
+  events and spans in the console (Grok's OTEL is protobuf, so those
+  rows stay empty).

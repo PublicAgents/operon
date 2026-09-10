@@ -6,8 +6,10 @@ import type { StagedMcpServer } from "./config.js";
  *
  * Everything the mind can reach through MCP is merged here: the browser
  * server of spec 0004, and every server the operator granted this agent.
- * It is written OUTSIDE the state repo and passed with --mcp-config,
- * rather than dropped as `.mcp.json` in the working tree, for two
+ * It is written OUTSIDE the state repo and handed to the harness the
+ * way that harness loads servers (Claude Code: --mcp-config; Codex and
+ * Grok: staged into their home config), rather than dropped as
+ * `.mcp.json` in the working tree, for two
  * reasons: the previous arrangement committed chassis config into the
  * agent's memory on every wake, and a file that names doors belongs
  * where `git add -A` cannot reach it.

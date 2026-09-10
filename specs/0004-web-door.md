@@ -55,8 +55,8 @@ policy, everything ledgered, and the operator able to watch.
   methods, owns WebAuthn, and substitutes secrets on injection.
 - **MCP is the mind-side surface.** The harness gets a standard browser
   MCP server (chrome-devtools-mcp) pointed at the relay; no bespoke
-  browsing tools. Codex speaks MCP too, so the door is harness-portable
-  by construction. Scripts are equally welcome: anything in the
+  browsing tools. Codex and Grok speak MCP too, so the door is
+  harness-portable by construction. Scripts are equally welcome: anything in the
   container may connectOverCDP to the same relay endpoint.
 - **Named sessions, persisted by the Gatekeeper.** Browser Run sessions
   die (10 minutes idle, max); identity must not. The Gatekeeper
@@ -663,15 +663,18 @@ by the CDP provider regardless of this table.
 | Git and GitHub | `github.com`, `api.github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `ghcr.io` | Clones, release downloads, raw file fetches, and `npm install github:owner/repo`. The state repo clone is entrypoint traffic and never passes the forwarder. |
 | Claude Code | `api.anthropic.com`, `claude.ai`, `statsig.anthropic.com`, `code.claude.com` | Inference and the WebFetch domain preflight, the OAuth flow, feature flags, docs. Inference is the largest steady stream in any wake. |
 | Codex | `api.openai.com`, `chatgpt.com`, `auth.openai.com`, `auth0.openai.com`, `platform.openai.com`, `developers.openai.com` | Inference with an API key (`api.`) or a ChatGPT subscription (`chatgpt.com`, a separate registrable domain); the device or browser OAuth flow and token refresh; docs. Updates and the native binary come from GitHub releases and npm, covered above. |
+| Grok | `api.x.ai`, `auth.x.ai`, `accounts.x.ai`, `grok.com`, `cli-chat-proxy.grok.com` | Inference with an API key (`api.x.ai`) or a Grok subscription (cli-chat-proxy / grok.com); the device or browser OAuth flow and token refresh. Updates come from npm, covered above. |
 | Model weights | `huggingface.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co` | |
 | Docker images | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | No Docker in the container, but a pull attempt still costs the manifest fetch. |
 | Cloudflare tooling | `api.cloudflare.com`, `workers.cloudflare.com` | `wrangler` runs. |
 | Script CDNs | `cdn.jsdelivr.net`, `unpkg.com`, `esm.sh`, `cdnjs.cloudflare.com` | |
 | Granted MCP servers | | Their virtual hosts are umbilical hosts, direct by derivation already. |
 
-Both harnesses honour `HTTPS_PROXY`, so without their entries the
+Claude Code and Codex honour `HTTPS_PROXY`, so without their entries the
 inference stream rides the catch-all: the single most expensive thing
-to proxy and the one with the least to gain from it.
+to proxy and the one with the least to gain from it. Grok does not
+document the standard proxy variables; keep its hosts direct in any
+case, and live-verify that the Rust client honours them.
 
 As a policy, everything above stays off the proxy and the browser
 downloads are blocked because the container can never use them:
@@ -711,6 +714,9 @@ egress:
     code.claude.com: direct
     "*.openai.com": direct
     chatgpt.com: direct
+    "*.x.ai": direct
+    grok.com: direct
+    "*.grok.com": direct
     # large downloads and tooling
     "*.huggingface.co": direct
     "*.docker.io": direct
@@ -725,8 +731,9 @@ egress:
 
 Two things to know when adapting it. `*.domain` covers the bare
 domain and its subdomains, so `*.anthropic.com` includes
-`api.anthropic.com` and `*.openai.com` covers every OpenAI host but
-`chatgpt.com`. And `storage.googleapis.com` serves both Go modules and
+`api.anthropic.com`, `*.openai.com` covers every OpenAI host but
+`chatgpt.com`, and `*.x.ai` covers every xAI host but `grok.com`. And
+`storage.googleapis.com` serves both Go modules and
 Puppeteer's Chromium, so it is listed direct rather than blocked; a
 deployment that would rather block Puppeteer downloads too drops it
 from the direct list and accepts that Go installs pay proxy traffic.
@@ -785,8 +792,9 @@ holding an identity is the exception.
 
 The image grows by Chrome (roughly 300 MB) and the MCP server; the
 container's memory (3 GiB) holds one headless browser beside a harness
-comfortably. Both harnesses receive the server through the same merged
-MCP config (Claude Code's `--mcp-config`, Codex's `[mcp_servers]`).
+comfortably. Every harness receives the server through the same merged
+MCP config (Claude Code's `--mcp-config`, Codex's and Grok's
+`[mcp_servers]`).
 
 ## 10. Costs
 

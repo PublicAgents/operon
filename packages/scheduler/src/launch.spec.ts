@@ -35,6 +35,7 @@ describe("mindCredentialVar", () => {
   it("maps harness ids to secret names", () => {
     expect(mindCredentialVar("claude-code")).toBe("MIND_CREDENTIAL_CLAUDE_CODE");
     expect(mindCredentialVar("codex")).toBe("MIND_CREDENTIAL_CODEX");
+    expect(mindCredentialVar("grok")).toBe("MIND_CREDENTIAL_GROK");
   });
 });
 
@@ -62,6 +63,7 @@ describe("resolveMind (spec 0010 §4)", () => {
   it("names the per-harness extra-args variable", () => {
     expect(harnessExtraArgsVar("claude-code")).toBe("HARNESS_EXTRA_ARGS");
     expect(harnessExtraArgsVar("codex")).toBe("HARNESS_EXTRA_ARGS_CODEX");
+    expect(harnessExtraArgsVar("grok")).toBe("HARNESS_EXTRA_ARGS_GROK");
   });
 });
 
@@ -152,6 +154,38 @@ describe("prepareLaunch on an alternate harness (spec 0010)", () => {
     await expect(prepareLaunch(agent, "manual", "w6", codexContext(fresh), "codex")).rejects.toThrowError(
       /harness_not_configured/
     );
+  });
+
+  it("does not run the Codex refresh against a grok login, even one that has a tokens table", async () => {
+    const withGrok: RosterAgent = { ...agent, harnesses: { grok: { model: "grok-4.6" } } };
+    const grokLogin = JSON.stringify({
+      tokens: { access_token: jwt(Date.now() / 1000 + 86400), refresh_token: "r1" },
+      last_refresh: "2026-01-01T00:00:00Z"
+    });
+    let refreshes = 0;
+    const prepared = await prepareLaunch(
+      withGrok,
+      "manual",
+      "wake-g",
+      context({
+        getSecret: name =>
+          ({
+            MIND_CREDENTIAL_CLAUDE_CODE: "mind-token",
+            MIND_CREDENTIAL_GROK: grokLogin,
+            HARNESS_EXTRA_ARGS_GROK: '["--effort","low"]'
+          })[name],
+        refreshLogin: async () => {
+          refreshes += 1;
+          return "nope";
+        },
+        log: () => undefined
+      }),
+      "grok"
+    );
+    expect(prepared.harness).toBe("grok");
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe(grokLogin);
+    expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--effort","low"]');
+    expect(refreshes).toBe(0);
   });
 });
 

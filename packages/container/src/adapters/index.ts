@@ -1,10 +1,12 @@
 import { claudeCode } from "./claude-code.js";
 import { codex } from "./codex.js";
+import { grok } from "./grok.js";
 import type { HarnessAdapter } from "./types.js";
 
 export const adapters: Record<string, HarnessAdapter> = {
   [claudeCode.id]: claudeCode,
-  [codex.id]: codex
+  [codex.id]: codex,
+  [grok.id]: grok
 };
 
 export class UnknownHarnessError extends Error {
@@ -35,3 +37,4 @@ export {
 } from "./types.js";
 export { claudeCode } from "./claude-code.js";
 export { codex } from "./codex.js";
+export { grok } from "./grok.js";

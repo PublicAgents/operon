@@ -20,10 +20,10 @@
  * and its second stop stands.
  *
  * Loop safety: a Stop hook that always blocked would trap the session,
- * so the guard yields when stop_hook_active says it already blocked
- * once (the harness sets it on re-entry). One firm reminder, then the
- * mind's decision stands; presleep still records an unjournaled wake
- * as failed.
+ * so the guard yields when stop_hook_active (Claude Code, Codex) or
+ * stopHookActive (Grok) says it already blocked once. One firm
+ * reminder, then the mind's decision stands; presleep still records
+ * an unjournaled wake as failed.
  */
 
 import { readFile } from "node:fs/promises";
@@ -122,15 +122,22 @@ async function readOrNull(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * Claude Code and Codex send snake_case `stop_hook_active`; Grok sends
+ * camelCase `stopHookActive`. Either true means this is a re-entry.
+ */
+export function stopHookActiveFrom(input: unknown): boolean {
+  if (typeof input !== "object" || input === null) return false;
+  const record = input as Record<string, unknown>;
+  return record.stop_hook_active === true || record.stopHookActive === true;
+}
+
 async function main(): Promise<void> {
   let stopHookActive = false;
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-    const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-      stop_hook_active?: boolean;
-    };
-    stopHookActive = input.stop_hook_active === true;
+    stopHookActive = stopHookActiveFrom(JSON.parse(Buffer.concat(chunks).toString("utf8")));
   } catch {
     /* no input is fine; treat as a first stop */
   }

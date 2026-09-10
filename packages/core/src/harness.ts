@@ -5,7 +5,7 @@
  * at check time rather than discovered as a failed wake. The container's
  * adapters.spec pins the two lists to each other.
  */
-export const KNOWN_HARNESSES = ["claude-code", "codex"] as const;
+export const KNOWN_HARNESSES = ["claude-code", "codex", "grok"] as const;
 
 export type Harness = (typeof KNOWN_HARNESSES)[number];
 
