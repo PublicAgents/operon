@@ -107,11 +107,50 @@ function isGrokLogin(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
-const NOT_A_SECRET = new Set(["account_id", "issuer", "email", "name", "auth_mode", "expires_in", "expires_at"]);
+/**
+ * Keys whose values are identity or bookkeeping, never a token: the
+ * account holder's name in the journal must not cost the wake its
+ * persist (it did, once). A value with whitespace in it is a name or
+ * a sentence, never a token, whatever its key.
+ */
+const NOT_A_SECRET = new Set([
+  "account_id",
+  "issuer",
+  "email",
+  "name",
+  "display_name",
+  "full_name",
+  "given_name",
+  "family_name",
+  "username",
+  "user_name",
+  "login",
+  "sub",
+  "iss",
+  "aud",
+  "auth_mode",
+  "token_type",
+  "scope",
+  "expires_in",
+  "expires_at",
+  "created_at",
+  "updated_at",
+  "last_refresh",
+  "plan",
+  "tier",
+  "org",
+  "organization"
+]);
+
+/** Keys that hold a credential by definition: denylisted whatever the value looks like. */
+const CREDENTIAL_KEYS = new Set(["key", "access_token", "refresh_token", "refresh", "id_token", "token", "secret", "api_key", "password", "jwt"]);
 
 function secretStrings(value: unknown, key?: string): string[] {
   if (typeof value === "string") {
-    return key !== undefined && NOT_A_SECRET.has(key) ? [] : denylistable(value) ? [value] : [];
+    if (key !== undefined && CREDENTIAL_KEYS.has(key)) return value.length > 0 ? [value] : [];
+    if (key !== undefined && NOT_A_SECRET.has(key)) return [];
+    if (/\s/.test(value)) return [];
+    return denylistable(value) ? [value] : [];
   }
   if (Array.isArray(value)) return value.flatMap(entry => secretStrings(entry));
   if (typeof value === "object" && value !== null) {
