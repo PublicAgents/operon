@@ -387,6 +387,17 @@ describe("grok adapter (spec 0010 §4a)", () => {
       "https://accounts.x.ai/sign-in": { key: "grok.access.jwt", refresh: "grok-refresh-1", token_type: "Bearer", scope: "rw" }
     });
     expect(grok.secretsIn(withType)).toEqual([withType, "grok.access.jwt", "grok-refresh-1"]);
+    // The account holder's name is identity, not a token: a journal
+    // that names the operator must not fail the persist (it did once).
+    const withIdentity = JSON.stringify({
+      "https://accounts.x.ai/sign-in": {
+        key: "grok.access.jwt",
+        display_name: "Michael Krens",
+        user: { full_name: "Michael Krens", username: "michi88-grok", email: "grok@example.com" },
+        note: "signed in from a laptop"
+      }
+    });
+    expect(grok.secretsIn(withIdentity)).toEqual([withIdentity, "grok.access.jwt"]);
     expect(grok.credentialFile?.(grokLogin)).toBe(".grok/auth.json");
   });
 
