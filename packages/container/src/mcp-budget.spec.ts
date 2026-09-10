@@ -16,11 +16,22 @@ function answering(byServer: Record<string, unknown | Error>): typeof fetch {
     expect((init?.headers as Record<string, string>).authorization).toBe("Bearer nonce");
     const answer = byServer[name];
     if (answer instanceof Error) throw answer;
+    if (answer instanceof Response) return answer;
     return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 }
 
 describe("the metered servers' budgets at wake start (spec 0014 §2)", () => {
+  it("reads a bespoke Gatekeeper server's 404 as not metered, not as an error", async () => {
+    const views = await readMcpBudgets(
+      [{ name: "tasks", type: "http", virtual: "mcp-tasks.operon.internal" }],
+      "nonce",
+      answering({ tasks: new Response(JSON.stringify({ error: "not_found" }), { status: 404 }) })
+    );
+    expect(views).toEqual([{ server: "tasks", budgeted: false }]);
+    expect(budgetLine(views)).toBe("mcp budgets: none");
+  });
+
   it("reads every remote server, skips stdio, and keeps going past a failure", async () => {
     const views = await readMcpBudgets(
       servers,

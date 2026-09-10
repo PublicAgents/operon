@@ -90,6 +90,8 @@ export async function pullMcpResults(
           signal: AbortSignal.timeout(PULL_TIMEOUT_MS)
         });
         const body = (await response.json().catch(() => ({}))) as { ok?: boolean; results?: McpResult[]; error?: string };
+        // A bespoke Gatekeeper server has no results route: nothing queued, nothing wrong.
+        if (response.status === 404) return { server: server.name, results: [] };
         if (!response.ok || body.ok === false) return { server: server.name, error: body.error ?? `${response.status}` };
         return { server: server.name, results: Array.isArray(body.results) ? body.results : [] };
       } catch (error) {
