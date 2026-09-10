@@ -16,6 +16,7 @@ function answering(byServer: Record<string, unknown | Error>, calls: string[] = 
     expect((init?.headers as Record<string, string>).authorization).toBe("Bearer nonce");
     const answer = byServer[name];
     if (answer instanceof Error) throw answer;
+    if (answer instanceof Response) return answer;
     return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 }
@@ -51,6 +52,17 @@ describe("task results at wake start (spec 0014 §3)", () => {
     expect([...pulled.ids]).toEqual([["tasks", ["a", "b", "c"]]]);
     expect(pulled.errors).toEqual(["search: Error: connect ECONNREFUSED"]);
     expect(pulled.sanitized).toEqual([]);
+  });
+
+  it("reads a bespoke Gatekeeper server's 404 as nothing queued, not as a failure", async () => {
+    const pulled = await pullMcpResults(
+      [{ name: "tasks", type: "http", virtual: "mcp-tasks.operon.internal" }],
+      "nonce",
+      [],
+      answering({ tasks: new Response(JSON.stringify({ error: "not_found" }), { status: 404 }) })
+    );
+    expect(pulled.files).toEqual([]);
+    expect(pulled.errors).toEqual([]);
   });
 
   it("stubs a result whose body carries a denylisted secret before it exists in the tree", () => {

@@ -53,6 +53,10 @@ async function readOne(
         perCall?: Record<string, number>;
         free?: string[];
       };
+      // A bespoke Gatekeeper server (spec 0008 §5) serves its tools and
+      // nothing else: the budget route exists only on the mcp Gatekeeper,
+      // so its 404 means "not metered", not "unreadable".
+      if (response.status === 404) return { server: server.name, budgeted: false };
       if (!response.ok || body.ok === false) {
         return { server: server.name, budgeted: false, error: body.error ?? `${response.status}` };
       }
