@@ -151,7 +151,9 @@ PUBLISHING AND MONEY
                                          price a path of one of YOUR hosts;
                                          re-offer to update${door("till", caps.till)}
   operon till retire <host> <path>       make a path free again${door("till", caps.till)}
-  operon till sales                      your offers and ledgered receipts${door("till", caps.till)}
+  operon till sales                      your offers, ledgered receipts, and
+                                         the replay refusals the door made
+                                         for you${door("till", caps.till)}
   operon pay <url> --max <amount> --reason <r>
                                          fetch a paid resource; the spend
                                          Gatekeeper settles it on your behalf,

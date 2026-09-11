@@ -64,7 +64,10 @@ custody and recipients are the operator's alone):
                                          MPP before it serves. Update by
                                          re-offering the same host+path.
   operon till retire <host> <path>       make a path free again
-  operon till sales                      your offers and ledgered receipts
+  operon till sales                      your offers, ledgered receipts, and
+                                         the replay refusals the door made
+                                         for you (a spent credential shown
+                                         again)
   operon pay <url> --max <amount> --reason <r>
                                          fetch a paid resource: free content comes
                                          straight back; a payable challenge within
