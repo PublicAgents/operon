@@ -172,6 +172,10 @@ describe("metered remote servers (spec 0014)", () => {
     ).not.toThrow();
     expect(() => parseRoster(wh(w => delete w.callbackEventPath))).toThrowError(/callbackEventPath/);
     expect(() => parseRoster(wh(w => (w.events = [])))).toThrowError(/at least one event/);
+    // An http server without pins admits nothing (spec 0008 §5): refused
+    // at check rather than discovered as an empty server in a wake.
+    expect(() => parseRoster(mutate(search, d => delete d.tools))).toThrowError(/mcp_no_tools_pinned/);
+    expect(() => parseRoster(mutate(search, d => (d.tools = [])))).toThrowError(/mcp_no_tools_pinned/);
   });
 
   it("keeps budget and webhook off servers that cannot carry them", () => {
@@ -189,7 +193,7 @@ describe("capability grants (spec 0008)", () => {
     roster.mcp = {
       "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" },
       linear: { type: "portal", server: "linear", tools: ["linear_create_issue"] },
-      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "bearer" },
+      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "bearer", tools: ["ping"] },
       somelocal: { type: "stdio", command: "npx", args: ["-y", "some-mcp@1.2.3"] }
     };
     roster.agents[0].mcp = ["google-analytics", "linear"];
@@ -459,7 +463,7 @@ describe("chassis MCP server names (spec 0004 §3, §9)", () => {
       parseRoster(
         JSON.stringify({
           zone: "demo.example",
-          mcp: { [name]: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" } },
+          mcp: { [name]: { type: "http", url: "https://mcp.example.com/mcp", auth: "none", tools: ["ping"] } },
           agents: [{ id: "a", stateRepo: "o/r", cadence: "0 6 * * *", harness: "claude-code", model: "m", enabled: true, hosts: ["@"] }]
         })
       );

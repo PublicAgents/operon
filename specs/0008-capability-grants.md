@@ -247,7 +247,11 @@ administrator-vetted, so classification runs at the `vetted` tier:
 `type: http` is the fallback for bearer or no-auth servers and for
 deployments without the portal: the per-server secret `MCP_<NAME>_TOKEN`
 lives on this Worker, and classification runs at the `byo` tier, where
-no annotation is trusted and ONLY pinned tools are callable.
+no annotation is trusted and ONLY pinned tools are callable. An `http`
+server with no `tools` pinned would therefore offer nothing, so the
+manifest check refuses it by name (`mcp_no_tools_pinned`) rather than
+letting a mind find a connected server with an empty catalog; the
+catalog row carries `granted` beside `tools` for the same reason.
 
 The upstream client is the official MCP SDK client over Streamable
 HTTP, which owns protocol-revision negotiation and accepts a custom

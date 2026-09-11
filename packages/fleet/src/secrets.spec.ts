@@ -79,8 +79,8 @@ describe("requiredSecrets", () => {
       ...BASE,
       mcp: {
         "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" },
-        linear: { type: "http", url: "https://mcp.linear.app/mcp", auth: "bearer" },
-        open: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" }
+        linear: { type: "http", url: "https://mcp.linear.app/mcp", auth: "bearer", tools: ["ping"] },
+        open: { type: "http", url: "https://mcp.example.com/mcp", auth: "none", tools: ["ping"] }
       },
       agents: [{ ...BASE.agents[0], mcp: ["google-analytics", "linear", "open"] }],
       control: { projects: [{ project: "second-one", zone: "second.example" }] }
@@ -112,7 +112,7 @@ describe("requiredSecrets", () => {
           signature: { header: "X-Signature", scheme: "hmac-sha256-hex" }
         }
         },
-        plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" }
+        plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none", tools: ["ping"] }
       },
       agents: [{ ...BASE.agents[0], mcp: ["tasks", "plain"] }]
     });

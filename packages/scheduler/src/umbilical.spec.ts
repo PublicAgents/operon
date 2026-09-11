@@ -61,7 +61,7 @@ describe("MCP routing (spec 0008 §4)", () => {
     mcp: {
       "google-analytics": { type: "gatekeeper", worker: "gatekeeper-google-analytics" },
       linear: { type: "portal", server: "linear" },
-      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none" }
+      plain: { type: "http", url: "https://mcp.example.com/mcp", auth: "none", tools: ["ping"] }
     },
     agents: [
       {
