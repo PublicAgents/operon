@@ -7,6 +7,7 @@ import { credentialClaimKey, durableStore, TillStore } from "./replay-store.js";
 export { TillStore };
 import { TillCatalog } from "./catalog-do.js";
 import { tokenEnvName, validateOffer, type Offer, type OfferLimits } from "./gates.js";
+import { salesView, type TillLedgerRow } from "./sales.js";
 
 export { Ledger, TillCatalog };
 export * from "./gates.js";
@@ -212,10 +213,9 @@ doors.post("/gatekeeper/till/sales", async c => {
   const env = c.env;
   const agent = agentFromBearer(c.req.raw, env);
   if (!agent) return errorResponse(401, "invalid_token");
-  const rows = (await ledger(env).recent()) as Array<{ kind: string; detail?: { agentId?: string } }>;
-  const sales = rows.filter(row => row.kind === "receipt" && row.detail?.agentId === agent.id);
+  const rows = (await ledger(env).recent()) as TillLedgerRow[];
   const offers = await catalog(env).listForAgent(agent.id);
-  return json({ ok: true, offers, sales });
+  return json({ ok: true, offers, ...salesView(rows, agent.id) });
 });
 
 // ---- serving overlay -------------------------------------------------
