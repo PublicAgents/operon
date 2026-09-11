@@ -1,7 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { findAgent, parseRoster, type McpBudget, type McpServerDef, type McpWebhook } from "@operon/core";
 import { drainingBodies, errorResponse, json, Ledger, OpsEntrypoint, readJson } from "@operon/worker-kit";
-import { inPortalScope, ownerOf, type ServerTrust, type UpstreamTool } from "./classify.js";
+import { classify, inPortalScope, ownerOf, type ServerTrust, type UpstreamTool } from "./classify.js";
 import { UpstreamError } from "./guarded-fetch.js";
 import { CatalogMemory } from "./catalog-memory.js";
 import { createProxyServer, type MeterRefusal } from "./proxy.js";
@@ -536,12 +536,19 @@ export default drainingBodies({
         // not a sighting: one row per request was one per second. The
         // revision is noted only once its row is written, so a failed
         // append is retried by the next request rather than forgotten.
+        // The row says how many of the offered tools the grants admit:
+        // a byo server with nothing pinned reads "granted: 0", which is
+        // what a mind that finds the server empty is looking at.
+        const granted = tools.filter(
+          tool => classify(tool, { trust: server.trust, pinned: server.pinned, server: server.name }).allowed
+        ).length;
         await catalogs.record(agentId, server.name, revision, () =>
           ledger(env).append("mcp_catalog", {
             agentId,
             server: server.name,
             revision,
-            tools: tools.length
+            tools: tools.length,
+            granted
           })
         );
         const budget = (server.def as { budget?: McpBudget }).budget;

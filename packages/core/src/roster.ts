@@ -390,7 +390,17 @@ function parseMcpDef(name: string, value: unknown): McpServerDef {
       if (!/^https:\/\//.test(url)) fail(`${path}.url`, "must be an https:// URL");
       const auth = requireString(raw.auth, `${path}.auth`);
       if (auth !== "none" && auth !== "bearer") fail(`${path}.auth`, 'must be "none" or "bearer"');
-      return { type, url, auth, ...(tools ? { tools } : {}), ...parseMetering(path, raw, tools) };
+      // An http upstream is not administrator-vetted, so only pinned
+      // tools are callable (spec 0008 §5). Without pins every tool is
+      // refused at the catalog and the mind sees a connected server
+      // with nothing in it: dead config, refused at check instead.
+      if (!tools || tools.length === 0) {
+        fail(
+          `${path}.tools`,
+          "mcp_no_tools_pinned: an http server admits only the tools pinned here; name at least one, or remove the server"
+        );
+      }
+      return { type, url, auth, tools, ...parseMetering(path, raw, tools) };
     }
     default: {
       const command = requireString(raw.command, `${path}.command`);
