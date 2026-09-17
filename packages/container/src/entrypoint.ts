@@ -6,7 +6,7 @@ import { chromeMajorFrom, LOCAL_BROWSER_EXECUTABLE, LOCAL_BROWSER_OUTPUT_DIR, mc
 import { dirname, join } from "node:path";
 import { readWakeConfig, type WakeConfig } from "./config.js";
 import { assertEnvClean, getAdapter, type HarnessAdapter, type StagedHarness } from "./adapters/index.js";
-import { CommandError, runCapture, runStreaming } from "./exec.js";
+import { CommandError, headAndTail, runCapture, runStreaming } from "./exec.js";
 import { runGitleaksOnFiles } from "./gitleaks.js";
 import { sanitizeInboxFiles, sanitizeTranscript, type InboundMessage } from "./inbox.js";
 import { excludeChassisWritten, verifyPresleep, type PresleepFailure } from "./presleep.js";
@@ -698,7 +698,16 @@ async function probeTwice(
     // The record carries the harness's own last words in full: a wake
     // that fails before its session must be diagnosable from its log.
     if (first instanceof CommandError) {
-      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${(first.stderr.trim() || first.stdout.trim()).slice(-4000)}`);
+      // Both streams: Claude Code prints its warnings on stderr and its
+      // verdict on stdout, and a probe that showed only the warnings
+      // hid a week of failures behind a model-window notice.
+      const said = [
+        first.stderr.trim() ? `--- stderr ---\n${headAndTail(first.stderr.trim(), 500, 1500)}` : "",
+        first.stdout.trim() ? `--- stdout ---\n${headAndTail(first.stdout.trim(), 500, 1500)}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${said}`);
     } else {
       log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
     }

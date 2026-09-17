@@ -109,7 +109,7 @@ cannot write there):
 {
   "disableClaudeAiConnectors": true,
   "autoMemoryEnabled": false,
-  "strictKnownMarketplaces": true,
+  "strictKnownMarketplaces": [],
   "env": { ...the same off switches as below... }
 }
 ```
