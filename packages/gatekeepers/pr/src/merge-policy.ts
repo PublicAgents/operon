@@ -55,6 +55,8 @@ export interface MergeContext {
   sharedIdentity: boolean;
   /** Path globs that may merge without the operator; empty means everything is held. */
   auto: readonly string[];
+  /** Deletions merge on the auto path when their path matches a glob; absent or false holds every deletion. */
+  deletions?: boolean;
   /** Check runs that must exist and be green by name; empty means "every run present, at least one". */
   checks: readonly string[];
 }
@@ -245,13 +247,17 @@ export function mergeDecision(pr: PrSnapshot, ctx: MergeContext): MergeVerdict {
 
   // A deletion is never a data change (spec 0012 §6): a removed file
   // is outside the auto globs whatever its path, and a rename's old
-  // side is a removal. The registry classifies the same way.
+  // side is a removal. The registry classifies the same way. A grant
+  // whose `deletions` is auto delegates that call: a deletion then
+  // merges when its path matches a glob, like any other change.
+  const deleted = ctx.deletions
+    ? []
+    : [
+        ...pr.files.filter(file => file.status === "removed").map(file => `${file.filename} (deleted)`),
+        ...pr.files.filter(file => file.previousFilename !== undefined).map(file => `${file.previousFilename} (deleted)`)
+      ];
   const outside = [
-    ...new Set([
-      ...touchedPaths(pr.files).filter(path => !ctx.auto.some(glob => matchPathGlob(glob, path))),
-      ...pr.files.filter(file => file.status === "removed").map(file => `${file.filename} (deleted)`),
-      ...pr.files.filter(file => file.previousFilename !== undefined).map(file => `${file.previousFilename} (deleted)`)
-    ])
+    ...new Set([...touchedPaths(pr.files).filter(path => !ctx.auto.some(glob => matchPathGlob(glob, path))), ...deleted])
   ];
   if (outside.length > 0) {
     return { kind: "hold", reason: "outside_auto_paths", outside, approvedBy };

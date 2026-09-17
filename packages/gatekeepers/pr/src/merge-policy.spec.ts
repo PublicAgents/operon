@@ -245,6 +245,28 @@ describe("mergeDecision (spec 0012 §6)", () => {
     });
   });
 
+  it("merges a deletion and a rename's old side on the auto path when the grant delegates deletions", () => {
+    const files = [
+      { filename: "registry/evidence/case-reports/x.json", status: "removed" },
+      { filename: "registry/jobs/cs/x.json", previousFilename: "registry/jobs/cs/old.json" }
+    ];
+    expect(mergeDecision(snapshot({ files }), context({ deletions: true }))).toEqual({ kind: "auto", approvedBy: ["reviewer"] });
+    // The globs still apply to both sides: a delegation of deletions is
+    // not a widening of the paths.
+    const outsideGlobs = [{ filename: "registry/jobs/cs/x.json", previousFilename: "site/src/pages/index.astro" }];
+    expect(mergeDecision(snapshot({ files: outsideGlobs }), context({ deletions: true }))).toMatchObject({
+      kind: "hold",
+      outside: ["site/src/pages/index.astro"]
+    });
+    // With "**" and deletions delegated, every change merges on approval and green checks.
+    expect(
+      mergeDecision(
+        snapshot({ files: [{ filename: ".github/workflows/ci.yml" }, { filename: "site/old.ts", status: "removed" }] }),
+        context({ auto: ["**"], deletions: true })
+      )
+    ).toEqual({ kind: "auto", approvedBy: ["reviewer"] });
+  });
+
   it("holds everything when the grant has no auto globs", () => {
     expect(mergeDecision(snapshot(), context({ auto: [] }))).toMatchObject({ kind: "hold" });
   });

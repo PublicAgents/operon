@@ -83,13 +83,21 @@ agents:
 - `review: string[]`: repos on which this agent may post pull-request
   reviews. Its own list, not `pr`: reusing `pr` would let the author
   role approve other agents' work and defeat the separation.
-- `merge: MergeGrant[]` with `{repo, auto?, checks?}`. `auto` is a list
-  of path globs; a pull request whose every changed path matches one
-  of them merges without the operator, anything else is held. Absent
-  or empty means every merge is held. Globs name directories
-  explicitly (`registry/agents/**`); a glob like `registry/**` that
-  also covers operator-owned policy files is a manifest mistake the
-  operator must not make, and the living help says so. `checks` names
+- `merge: MergeGrant[]` with `{repo, auto?, checks?, deletions?}`.
+  `auto` is a list of path globs; a pull request whose every changed
+  path matches one of them merges without the operator, anything else
+  is held. Absent or empty means every merge is held. Globs name
+  directories explicitly (`registry/agents/**`); a glob like
+  `registry/**` that also covers operator-owned policy files is a
+  manifest mistake the operator must not make, and the living help
+  says so. `auto: ["**"]` is the operator's explicit delegation of the
+  whole repository: every change merges on the reviewer's approval and
+  green checks, code and workflows included, and the branch protection
+  on that repository must then name the reviewer, not the operator, as
+  code owner (§4) or the merge blocks there instead. `deletions` is
+  `hold` (the default: every removed file and every rename's old side
+  is held, §6) or `auto` (a deletion merges when its path matches a
+  glob, like any other change). `checks` names
   the check runs that must exist and be green on the head; absent
   means "every check run present must be green, and at least one must
   exist", which is weaker and is stated as such in `check` output.
@@ -219,8 +227,11 @@ not a data change), must match an `auto` glob for the verdict `auto`;
 otherwise the verdict is `hold` with the outside list. A deletion is
 never a data change: a removed file (GitHub status `removed`) and a
 rename's old side are always in the outside list, marked `(deleted)`,
-whatever their paths. Data is added and corrected by its owners;
-removing it is the operator's call. `matchPathGlob`
+whatever their paths, unless the grant says `deletions: auto`, in
+which case a deletion is classified by its path like any other change.
+Data is added and corrected by its owners; removing it is the
+operator's call unless the operator delegates that call in the grant.
+`matchPathGlob`
 is a tiny in-file matcher (`**` any segments, `*` within a segment),
 zero dependencies.
 

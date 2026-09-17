@@ -218,6 +218,14 @@ export interface MergeGrant {
   repo: string;
   auto?: string[];
   checks?: string[];
+  /**
+   * Whether a deletion (a removed file, a rename's old side) may merge
+   * on the auto path when its path matches a glob (`auto`), or is
+   * always held for the operator (`hold`, the default): data is added
+   * and corrected by its owners, removing it is the operator's call
+   * unless the operator delegates that call here (spec 0012 §6).
+   */
+  deletions?: "auto" | "hold";
 }
 
 /** Per-agent GitHub grants (spec 0008 §6, spec 0012 §3). Absent lists grant nothing. */
@@ -603,18 +611,23 @@ function parseMcpDefs(value: unknown): Record<string, McpServerDef> {
 }
 
 const GITHUB_GRANT_KEYS = new Set(["pr", "write", "review", "merge"]);
-const MERGE_GRANT_KEYS = new Set(["repo", "auto", "checks"]);
+const MERGE_GRANT_KEYS = new Set(["repo", "auto", "checks", "deletions"]);
 /** A path glob: the safe path charset plus `*`; no leading slash, no `..` (checked apart). */
 const AUTO_GLOB = /^[A-Za-z0-9_.*/-]+$/;
 
 function parseMergeGrant(value: unknown, path: string): MergeGrant {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    fail(path, "must be an object {repo, auto?, checks?}");
+    fail(path, "must be an object {repo, auto?, checks?, deletions?}");
   }
   const raw = value as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
     if (!MERGE_GRANT_KEYS.has(key)) {
       fail(`${path}.${key}`, `is not a merge grant field (known: ${[...MERGE_GRANT_KEYS].join(", ")})`);
+    }
+  }
+  if (raw.deletions !== undefined) {
+    if (raw.deletions !== "auto" && raw.deletions !== "hold") {
+      fail(`${path}.deletions`, 'must be "auto" (a deletion merges when its path matches a glob) or "hold" (every deletion is held; the default)');
     }
   }
   const repo = requireString(raw.repo, `${path}.repo`);
@@ -634,6 +647,7 @@ function parseMergeGrant(value: unknown, path: string): MergeGrant {
       return name;
     });
   }
+  if (raw.deletions === "auto") grant.deletions = "auto";
   return grant;
 }
 
@@ -659,7 +673,7 @@ function parseGithubGrants(value: unknown, path: string): GithubGrants {
   const review = repos("review");
   let merge: MergeGrant[] | undefined;
   if (raw.merge !== undefined) {
-    if (!Array.isArray(raw.merge)) fail(`${path}.merge`, "must be an array of {repo, auto?, checks?}");
+    if (!Array.isArray(raw.merge)) fail(`${path}.merge`, "must be an array of {repo, auto?, checks?, deletions?}");
     merge = raw.merge.map((entry, i) => parseMergeGrant(entry, `${path}.merge[${i}]`));
     const seen = new Set<string>();
     for (const grant of merge) {

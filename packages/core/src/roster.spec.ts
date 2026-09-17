@@ -309,6 +309,12 @@ describe("capability grants (spec 0008)", () => {
       /not a path glob/
     );
     expect(() => parseRoster(withMerge([{ repo: "o/r", checks: [""] }]))).toThrowError(/checks/);
+    // Deletions are held unless the operator delegates that call by name.
+    expect(() => parseRoster(withMerge([{ repo: "o/r", deletions: "yes" }]))).toThrowError(/deletions/);
+    expect(parseRoster(withMerge([{ repo: "o/r", auto: ["**"], deletions: "auto" }]))).toBeTruthy();
+    const full = JSON.parse(withMerge([{ repo: "o/r", auto: ["**"], deletions: "auto" }])) as unknown;
+    expect(parseRoster(JSON.stringify(full)).agents[0].github?.merge?.[0]).toEqual({ repo: "o/r", auto: ["**"], deletions: "auto" });
+    expect(parseRoster(withMerge([{ repo: "o/r", deletions: "hold" }])).agents[0].github?.merge?.[0]).toEqual({ repo: "o/r" });
     expect(() => parseRoster(withMerge([{ repo: "o/r" }, { repo: "o/r" }]))).toThrowError(/twice/);
     expect(() => parseRoster(withMerge({ repo: "o/r" }))).toThrowError(/must be an array/);
   });
