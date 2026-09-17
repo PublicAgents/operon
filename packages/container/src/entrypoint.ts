@@ -698,7 +698,11 @@ async function probeTwice(
     // The record carries the harness's own last words in full: a wake
     // that fails before its session must be diagnosable from its log.
     if (first instanceof CommandError) {
-      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${(first.stderr.trim() || first.stdout.trim()).slice(-4000)}`);
+      // Both streams: Claude Code prints its warnings on stderr and its
+      // verdict on stdout, and a probe that showed only the warnings
+      // hid a week of failures behind a model-window notice.
+      const said = [first.stderr.trim(), first.stdout.trim()].filter(Boolean).join("\n--- stdout ---\n");
+      log(`model probe of ${model} failed (exit ${first.exitCode ?? "by signal"}); the harness said:\n${said.slice(-4000)}`);
     } else {
       log(`model probe of ${model} failed: ${String(first).slice(0, 500)}`);
     }

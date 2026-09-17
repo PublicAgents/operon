@@ -36,7 +36,7 @@ RUN curl -fsSL -o /tmp/gitleaks.tar.gz \
 # whether an image roll (and therefore a wake drain) is needed. Every
 # harness CLI lives in the one image (spec 0010 §6): a wake picks its
 # harness, so the image must carry every adapter's CLI.
-RUN npm install -g @anthropic-ai/claude-code@2.1.251 @openai/codex@0.153.0 @xai-official/grok@1.0.13 @playwright/mcp@0.0.80
+RUN npm install -g @anthropic-ai/claude-code@2.1.274 @openai/codex@0.153.0 @xai-official/grok@1.0.13 @playwright/mcp@0.0.80
 # The local browser (spec 0004 §9): Google Chrome, driven through the
 # Playwright MCP server above, for unauthenticated browsing through the
 # session's egress. Google publishes the stable channel unpinned, like
