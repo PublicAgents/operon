@@ -434,7 +434,8 @@ export async function mergeDoor(deps: AdjudicationDeps, input: MergeInput): Prom
     logins: input.identities.logins,
     sharedIdentity: input.identities.sharedIdentity,
     auto: grant.auto ?? [],
-    checks: grant.checks ?? []
+    checks: grant.checks ?? [],
+    deletions: grant.deletions === "auto"
   };
   const verdict = mergeDecision(snapshot, ctx);
   if (verdict.kind === "refuse") {
