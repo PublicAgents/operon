@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Door } from "@operon/core";
 import { sanitizeOverrides, type DoorOverrides } from "./doors.js";
-import { refreshLogin, settleCredential, singleFlight, type SettledCredential } from "./mind-credential.js";
+import { refreshLogin, serialized, settleCredential, type SettledCredential } from "./mind-credential.js";
 
 /**
  * A mind credential the scheduler refreshed (spec 0010 §5), descended
@@ -79,15 +79,18 @@ export class FleetControl extends DurableObject {
   }
 
   /**
-   * One refresh in flight per harness. The object is one instance for
-   * the colony, so a launch that arrives while another is already
-   * refreshing the same harness's login awaits that grant and wakes on
-   * its result instead of spending the same refresh token a second
-   * time (the authority rotates it on every grant). The lock is held
-   * in memory: an eviction mid-grant loses only the lock, and the next
-   * launch re-reads the store.
+   * One credential decision at a time per harness. The object is one
+   * instance for the colony, so a launch that arrives while another is
+   * settling the same harness's login waits for it, then runs its own
+   * decision against the store that launch just wrote: it finds the
+   * refreshed login there and not due, instead of spending the same
+   * refresh token a second time (the authority rotates it on every
+   * grant), and a launch carrying a newly authorized secret or a longer
+   * hard wall still checks its own. The lock is held in memory: an
+   * eviction mid-grant loses only the lock, and the next launch
+   * re-reads the store.
    */
-  private settling = new Map<string, Promise<SettledCredential>>();
+  private settling = new Map<string, Promise<unknown>>();
 
   async settleCredential(
     harness: string,
@@ -95,7 +98,7 @@ export class FleetControl extends DurableObject {
     seedFingerprint: string,
     hardWallMs: number
   ): Promise<SettledCredential> {
-    return singleFlight(this.settling, harness, () =>
+    return serialized(this.settling, harness, () =>
       settleCredential(harness, seed, seedFingerprint, hardWallMs, {
         getStored: name => this.refreshedCredential(name),
         store: (name, fingerprint, value) => this.setRefreshedCredential(name, fingerprint, value),

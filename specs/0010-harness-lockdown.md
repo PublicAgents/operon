@@ -312,10 +312,12 @@ the operator authorizes again.
 The whole decision (stored copy or seed, refresh when due, store, wake
 or refuse) runs inside the FleetControl object, one instance for the
 colony, under a per-harness lock: two launches that overlap on the same
-harness never each spend the one refresh token, the second awaits the
-first's grant and wakes on its result. The lock is held in memory; an
-eviction mid-grant loses only the lock, and the next launch re-reads
-the store.
+harness never each spend the one refresh token. The second waits for
+the first to finish, then makes its own decision against the store the
+first just wrote: it finds the refreshed login there and not due, and a
+launch carrying a newly authorized secret or a longer hard wall still
+checks its own. The lock is held in memory; an eviction mid-grant loses
+only the lock, and the next launch re-reads the store.
 
 Inside the container a
 rewrite of the login (a revoked token, the one case left) is watched:

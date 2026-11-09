@@ -12,7 +12,7 @@ import {
   GROK_REFRESH_SLACK_MS,
   grokRefreshMarginMs,
   settleCredential,
-  singleFlight,
+  serialized,
   type SettleDeps,
   authorizeHint,
   grokAccessTokenExpiry,
@@ -354,26 +354,67 @@ describe("settleCredential: the whole launch decision (spec 0010 §5)", () => {
   });
 });
 
-describe("singleFlight: one refresh in flight per harness", () => {
-  it("lets an overlapping launch await the grant already running instead of spending the token again", async () => {
-    const inFlight = new Map<string, Promise<string>>();
-    let grants = 0;
-    let release!: (value: string) => void;
-    const slow = () =>
-      new Promise<string>(resolve => {
-        grants += 1;
+describe("serialized: one credential decision at a time per harness", () => {
+  it("runs an overlapping launch after the first, in order, so it reads what the first stored", async () => {
+    const tails = new Map<string, Promise<unknown>>();
+    const order: string[] = [];
+    let release!: () => void;
+    const first = serialized(tails, "grok", async () => {
+      order.push("first start");
+      await new Promise<void>(resolve => {
         release = resolve;
       });
-    const first = singleFlight(inFlight, "grok", slow);
-    const second = singleFlight(inFlight, "grok", slow);
-    const other = singleFlight(inFlight, "codex", async () => "codex-login");
+      order.push("first end");
+      return "first";
+    });
+    const second = serialized(tails, "grok", async () => {
+      order.push("second");
+      return "second";
+    });
+    const other = serialized(tails, "codex", async () => {
+      order.push("codex");
+      return "codex";
+    });
+    await other;
+    expect(order).toEqual(["first start", "codex"]);
+    release();
+    expect(await Promise.all([first, second])).toEqual(["first", "second"]);
+    expect(order).toEqual(["first start", "codex", "first end", "second"]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(tails.size).toBe(0);
+  });
+
+  it("lets a failed decision through without blocking the next", async () => {
+    const tails = new Map<string, Promise<unknown>>();
+    const failed = serialized(tails, "grok", async () => {
+      throw new Error("boom");
+    });
+    const next = serialized(tails, "grok", async () => "next");
+    await expect(failed).rejects.toThrowError(/boom/);
+    expect(await next).toBe("next");
+  });
+
+  it("makes the second of two overlapping launches find the first's refresh stored and not due", async () => {
+    const tails = new Map<string, Promise<unknown>>();
+    const store = new Map<string, { seed: string; value: string }>();
+    let grants = 0;
+    const d: SettleDeps = {
+      getStored: async harness => store.get(harness),
+      store: async (harness, seed, value) => {
+        store.set(harness, { seed, value });
+      },
+      refresh: async () => {
+        grants += 1;
+        await new Promise(resolve => setTimeout(resolve, 5));
+        return grokFile(now + 6 * HOUR, { refresh_token: "g-r2" });
+      }
+    };
+    const due = grokFile(now + 2 * HOUR);
+    const settle = (wall: number) => serialized(tails, "grok", () => settleCredential("grok", due, "fp", wall, d, now));
+    const [a, b] = await Promise.all([settle(WALL), settle(4 * HOUR)]);
     expect(grants).toBe(1);
-    release("grok-login");
-    expect(await Promise.all([first, second, other])).toEqual(["grok-login", "grok-login", "codex-login"]);
-    expect(inFlight.size).toBe(0);
-    const third = singleFlight(inFlight, "grok", slow);
-    expect(grants).toBe(2);
-    release("later-login");
-    expect(await third).toBe("later-login");
+    expect(a).toMatchObject({ ok: true, value: expect.stringContaining("g-r2") });
+    expect(b).toMatchObject({ ok: true, value: expect.stringContaining("g-r2") });
+    expect(b.ok && b.notes.join()).toMatch(/stored refresh/);
   });
 });

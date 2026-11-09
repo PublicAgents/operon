@@ -426,15 +426,24 @@ export async function settleCredential(
 }
 
 /**
- * One run per key at a time: a call that arrives while another is in
- * flight for the same key awaits that one's result. FleetControl holds
- * the map for settleCredential, so overlapping launches on a harness
- * share one grant instead of each spending the refresh token.
+ * One run per key at a time, in arrival order: a call that arrives while
+ * another is running for the same key waits for it to finish (however it
+ * ends) and then runs its own, so it reads the store the earlier run just
+ * wrote and makes its own decision for its own seed and wake length.
+ * FleetControl holds the map for settleCredential: overlapping launches
+ * on a harness never each spend the refresh token, because the second
+ * finds the first's refreshed login stored and not due.
  */
-export function singleFlight<T>(inFlight: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
-  const running = inFlight.get(key);
-  if (running) return running;
-  const started = run().finally(() => inFlight.delete(key));
-  inFlight.set(key, started);
-  return started;
+export function serialized<T>(tails: Map<string, Promise<unknown>>, key: string, run: () => Promise<T>): Promise<T> {
+  const previous = tails.get(key) ?? Promise.resolve();
+  const own = previous.then(run, run);
+  const tail = own.then(
+    () => undefined,
+    () => undefined
+  );
+  tails.set(key, tail);
+  void tail.then(() => {
+    if (tails.get(key) === tail) tails.delete(key);
+  });
+  return own;
 }
