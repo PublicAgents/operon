@@ -236,9 +236,8 @@ Code's and Codex's do; Grok injects project `AGENTS.md` as rules (the
 charter still arrives through the wake prompt); Grok does not document
 `HTTPS_PROXY` (live-verify; keep `*.x.ai` and `*.grok.com` direct in
 the egress table either way); and a login file is watched for in-place
-rewrites the way Codex's is, but is not refreshed by the scheduler
-(Grok's OAuth client and token endpoint are not a documented public
-grant).
+rewrites the way Codex's is and refreshed by the scheduler the way
+Codex's is (§5): the login entry names its own authority.
 
 ## 5. Credentials and the operator's policy, per harness
 
@@ -281,7 +280,46 @@ A refusal by the authority while the access token is still valid lets
 the wake run on what it has, named in the log; once the access token
 has expired too, the wake is refused as
 `mind_credential_refresh_failed`: the operator authorizes again, and
-nothing the container could do would help. Inside the container a
+nothing the container could do would help.
+
+**Grok, the same way.** A Grok login entry names its own authority:
+`oidc_issuer` and `oidc_client_id` beside the access token under `key`
+(a six-hour `at+jwt`) and the refresh token, and the issuer's discovery
+document (`<issuer>/.well-known/openid-configuration`) lists the
+`refresh_token` grant with the `none` client auth method, so the public
+client id in the file is all the grant needs. The scheduler refreshes
+the entry at launch whenever the access token would not outlive the
+wake's hard wall (`maxWakeMinutes`, else the chassis default of two
+hours) plus an hour of slack, so the token outlives the wake and Grok
+never spends the refresh token inside the container, by a form-encoded
+refresh grant against `<issuer>/oauth2/token`, and writes `key`, the
+rotated refresh token when one is returned (the authority rotates it on
+every grant, observed 2026-11-09, which is exactly why the copy in the
+secret must never be the one spent), and `expires_at` back into the same
+entry. A hard wall of five hours or more exceeds what a fresh six-hour
+token covers: such a wake is still refreshed at launch, but the CLI may
+spend the refresh token near the wake's end, and the stored chain is
+then behind the authority's; the next launch's refresh is refused and
+that wake runs on its stored token while it lasts. Long Grok wakes are
+unsupported for that reason. Store, choice, refusal handling, and the
+refused wake's message (which names `tools/grok-authorize.mjs`) are as
+for Codex. One difference stays: a login no wake has touched for weeks
+dies at the authority regardless (a two-month-old login was refused on
+2026-11-09), and the launch-time refresh keeps a login alive only while
+its harness is being woken. After a long gap on an alternate harness
+the operator authorizes again.
+
+The whole decision (stored copy or seed, refresh when due, store, wake
+or refuse) runs inside the FleetControl object, one instance for the
+colony, under a per-harness lock: two launches that overlap on the same
+harness never each spend the one refresh token. The second waits for
+the first to finish, then makes its own decision against the store the
+first just wrote: it finds the refreshed login there and not due, and a
+launch carrying a newly authorized secret or a longer hard wall still
+checks its own. The lock is held in memory; an eviction mid-grant loses
+only the lock, and the next launch re-reads the store.
+
+Inside the container a
 rewrite of the login (a revoked token, the one case left) is watched:
 the file is re-read before every transcript flush, every porch request,
 and presleep, and whatever it holds joins the denylist before that scan

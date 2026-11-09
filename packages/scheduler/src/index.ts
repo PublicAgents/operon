@@ -7,11 +7,9 @@ import { errorResponse, json, requireBearer,
 import {
   LaunchPreconditionError,
   prepareLaunch,
-  type LaunchContext
-} from "./launch.js";
+  type LaunchContext, hardWallMsFor } from "./launch.js";
 import { effectiveDoors } from "./doors.js";
 import { WakeContainer } from "./wake-container.js";
-import { parseCodexLogin, refreshCodexLogin, type CodexLoginFile } from "./mind-credential.js";
 export { FleetControl } from "./fleet-control.js";
 
 /**
@@ -30,7 +28,6 @@ export class WakeQuery extends WorkerEntrypoint<Env> {
     return status.current?.wakeId ?? null;
   }
 }
-import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 export { WakeContainer };
 // Top-level export required: ctx.exports only sees top-level entrypoints.
@@ -78,10 +75,8 @@ function launchContext(env: Env): LaunchContext {
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getDoorOverrides: agentId => fleetControl(env).doorOverrides(agentId),
-    getRefreshedCredential: harness => fleetControl(env).refreshedCredential(harness),
-    refreshLogin: login => refreshCodexLogin(parseCodexLogin(login) as CodexLoginFile, fetch),
-    storeRefreshedCredential: (harness, seed, value) =>
-      fleetControl(env).setRefreshedCredential(harness, seed, value),
+    settleCredential: (harness, seed, seedFingerprint, hardWallMs) =>
+      fleetControl(env).settleCredential(harness, seed, seedFingerprint, hardWallMs),
     async getGithubToken(agent: RosterAgent) {
       if (!env.GITHUB_GATEKEEPER) {
         throw new LaunchPreconditionError(
@@ -170,9 +165,7 @@ async function wake(
     const result = await stub.launch({
       ...prepared,
       staleAfterMs: STALE_AFTER_MS,
-      hardWallMs: agent.maxWakeMinutes
-        ? agent.maxWakeMinutes * 60_000
-        : DEFAULT_HARD_WALL_MS
+      hardWallMs: hardWallMsFor(agent)
     });
     if (result.status === "locked") {
       const detail = result.stale

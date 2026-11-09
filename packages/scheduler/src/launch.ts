@@ -1,11 +1,6 @@
 import { doorHost } from "./umbilical-routes.js";
-import {
-  accessTokenExpiry,
-  chooseCredential,
-  credentialFingerprint,
-  loginNeedsRefresh,
-  parseCodexLogin
-} from "./mind-credential.js";
+import { credentialFingerprint, type SettledCredential } from "./mind-credential.js";
+import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
   EgressTableError,
@@ -113,12 +108,12 @@ export interface LaunchContext {
   getSecret(name: string): string | undefined;
   /** The operator's runtime door overrides for the agent (spec 0006 §7); none when absent. */
   getDoorOverrides?(agentId: string): Promise<DoorOverrides>;
-  /** The stored refresh of a file credential (spec 0010 §5), with the seed it descends from. */
-  getRefreshedCredential?(harness: string): Promise<{ seed: string; value: string } | undefined>;
-  /** Refresh a Codex login against the authority; returns the new file. Throws RefreshError. */
-  refreshLogin?(login: string): Promise<string>;
-  /** Keep a refreshed credential for later launches under the seed it descends from. */
-  storeRefreshedCredential?(harness: string, seed: string, value: string): Promise<void>;
+  /**
+   * The credential this launch wakes on (spec 0010 §5): the stored
+   * refresh while it descends from the seed, refreshed when due, under
+   * a per-harness lock. Absent, the seed is used as it is.
+   */
+  settleCredential?(harness: string, seed: string, seedFingerprint: string, hardWallMs: number): Promise<SettledCredential>;
   /** The launch's own log line (the Worker console by default). */
   log?(line: string): void;
   /** Mints a short-lived token scoped to the agent's state repo. */
@@ -153,45 +148,9 @@ export interface PreparedLaunch {
   mcpHosts: string[];
 }
 
-/**
- * Refresh a Codex login when it is due. A refusal by the authority
- * (expired, reused, revoked) while the access token is still valid
- * lets the wake run on what it has, named in the log; once the access
- * token is gone too, the wake is refused by name: the operator must
- * authorize again, and nothing the container could do would help.
- */
-async function refreshIfDue(
-  harness: string,
-  credential: string,
-  seedFingerprint: string,
-  context: LaunchContext
-): Promise<string> {
-  // Codex only: Grok also stages a login file, but its OAuth client and
-  // token endpoint are not a documented public grant the way Codex's
-  // are, so a grok credential is never refreshed here (spec 0010 §5).
-  if (harness !== "codex") return credential;
-  const login = parseCodexLogin(credential);
-  if (!login || !context.refreshLogin) return credential;
-  const now = Date.now();
-  if (!loginNeedsRefresh(login, now)) return credential;
-  const log = context.log ?? (line => console.log(line));
-  try {
-    const refreshed = await context.refreshLogin(credential);
-    await context.storeRefreshedCredential?.(harness, seedFingerprint, refreshed);
-    log(`mind credential (${harness}): login refreshed by the scheduler and stored for later launches`);
-    return refreshed;
-  } catch (error) {
-    const detail = String(error instanceof Error ? error.message : error).slice(0, 200);
-    const expiry = accessTokenExpiry(login);
-    if (expiry !== undefined && expiry > now) {
-      log(`mind credential (${harness}): refresh failed (${detail}); the access token is still valid, waking on it`);
-      return credential;
-    }
-    throw new LaunchPreconditionError(
-      "mind_credential_refresh_failed",
-      `${detail}; the access token has expired too: authorize the ${harness} account again (npm run authorize:codex)`
-    );
-  }
+/** The wake's hard wall: the roster's maxWakeMinutes, else the chassis default. */
+export function hardWallMsFor(agent: RosterAgent): number {
+  return agent.maxWakeMinutes ? agent.maxWakeMinutes * 60_000 : DEFAULT_HARD_WALL_MS;
 }
 
 export async function prepareLaunch(
@@ -212,15 +171,17 @@ export async function prepareLaunch(
   }
   // A file credential rotates (spec 0010 §5): the launch starts from
   // the stored refresh while it descends from the CURRENT secret (the
-  // operator's re-authorize wins by construction), and refreshes it
-  // here, a day before the harness would inside the container.
+  // operator's re-authorize wins by construction), refreshed before the
+  // harness would inside the container, under the FleetControl lock so
+  // overlapping launches never both spend the one refresh token.
   const seedFingerprint = await credentialFingerprint(seededCredential);
-  const chosen = chooseCredential(
-    seededCredential,
-    seedFingerprint,
-    await context.getRefreshedCredential?.(mind.harness)
-  );
-  const mindCredential = await refreshIfDue(mind.harness, chosen.value, seedFingerprint, context);
+  const settled = context.settleCredential
+    ? await context.settleCredential(mind.harness, seededCredential, seedFingerprint, hardWallMsFor(agent))
+    : ({ ok: true, value: seededCredential, notes: [] } satisfies SettledCredential);
+  if (!settled.ok) throw new LaunchPreconditionError(settled.code, settled.detail);
+  const log = context.log ?? (line => console.log(line));
+  for (const note of settled.notes) log(note);
+  const mindCredential = settled.value;
   // The operator's session policy for THIS harness (spec 0010 §5); a
   // harness with none configured runs on the adapter's own defaults.
   const harnessExtraArgs = context.getSecret(harnessExtraArgsVar(mind.harness));

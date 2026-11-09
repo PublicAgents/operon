@@ -99,10 +99,11 @@ function authorize() {
     { cwd: ROOT, input: auth, stdio: ["pipe", "inherit", "inherit"] }
   );
   console.log(
-    "\n✓ MIND_CREDENTIAL_GROK stored. Grok may refresh this login inside a wake; the chassis" +
-      "\n  watches the rewrite for the denylist and does not persist it (spec 0010 §5). Re-run this" +
-      "\n  after a sign-out, a revoked session, or a wake that can no longer authenticate. Wake an" +
-      "\n  agent on grok with the console's harness picker or the wake tool's harness field."
+    "\n✓ MIND_CREDENTIAL_GROK stored. The scheduler refreshes this login at launch and keeps the" +
+      "\n  result for later wakes (spec 0010 §5); an in-container rewrite is watched, not persisted." +
+      "\n  Re-run this after a sign-out, a revoked session, a long gap with no wake on grok, or a" +
+      "\n  wake refused as mind_credential_refresh_failed. Wake an agent on grok with the console's" +
+      "\n  harness picker or the wake tool's harness field."
   );
   return 0;
 }
