@@ -188,6 +188,15 @@ home in `GROK_HOME=/home/mind/.grok`, created per wake and staged with:
   `--mcp-config` / `--strict-mcp-config`: the staged home is the only
   configuration source, and folder-trust stays on without `--trust`, so
   a project `.grok/` in the state directory stays untrusted.
+
+  `remote_fetch = false` also pins Grok's model catalog to the defaults
+  bundled in the pinned CLI (the same switch covers the vendor's asset
+  downloads, and there is no narrower one). A roster `model` for the
+  grok harness must therefore be an id the pinned CLI bundles (`grok
+  models` without a login lists them); the catalog's newer ids answer
+  `unknown model id` until a CLI release bundles them. Moving the
+  catalog with the CLI pin is the point: nothing the vendor publishes
+  between image builds changes what a wake runs on.
 - `hooks/operon.json`: the same PostToolUse pull hook and Stop journal
   guard. Global hooks under `$GROK_HOME/hooks/` are always trusted, so
   the session does not need a hook-trust bypass. Grok's Stop stdin uses
