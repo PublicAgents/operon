@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RosterAgent } from "@operon/core";
 import { WAKE_ENV } from "@operon/core";
 import {
+  hardWallMsFor,
   harnessExtraArgsVar,
   LaunchPreconditionError,
   mindCredentialVar,
@@ -9,7 +10,8 @@ import {
   resolveMind,
   type LaunchContext
 } from "./launch.js";
-import { credentialFingerprint, RefreshError } from "./mind-credential.js";
+import { credentialFingerprint } from "./mind-credential.js";
+import { DEFAULT_HARD_WALL_MS } from "./wake-lifecycle.js";
 
 const agent: RosterAgent = {
   id: "growth",
@@ -96,59 +98,54 @@ describe("prepareLaunch on an alternate harness (spec 0010)", () => {
     expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--codex"]');
   });
 
-  it("keeps the primary's extra args and never refreshes a token credential", async () => {
-    let refreshes = 0;
-    const prepared = await prepareLaunch(withAlternate, "cron", "wake-p", codexContext(fresh, {
-      refreshLogin: async () => {
-        refreshes += 1;
-        return "x";
-      }
-    }));
+  it("keeps the primary's extra args", async () => {
+    const prepared = await prepareLaunch(withAlternate, "cron", "wake-p", codexContext(fresh));
     expect(prepared.harness).toBe("claude-code");
     expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--claude"]');
     expect(prepared.env[WAKE_ENV.mindCredential]).toBe("mind-token");
-    expect(refreshes).toBe(0);
   });
 
-  it("prefers a stored refresh only while it descends from the current secret", async () => {
-    const fingerprint = await credentialFingerprint(fresh);
-    const stored = loginFile(new Date().toISOString());
-    const current = await prepareLaunch(withAlternate, "manual", "w1", codexContext(fresh, {
-      getRefreshedCredential: async () => ({ seed: fingerprint, value: stored })
-    }), "codex");
-    expect(current.env[WAKE_ENV.mindCredential]).toBe(stored);
-    const orphaned = await prepareLaunch(withAlternate, "manual", "w2", codexContext(fresh, {
-      getRefreshedCredential: async () => ({ seed: "older-seed", value: stored })
-    }), "codex");
-    expect(orphaned.env[WAKE_ENV.mindCredential]).toBe(fresh);
-  });
-
-  it("refreshes a login that is due, stores it under the seed, and wakes on it", async () => {
-    const stored: unknown[] = [];
-    const prepared = await prepareLaunch(withAlternate, "manual", "w3", codexContext(due, {
-      refreshLogin: async (harness, login) => {
-        expect(harness).toBe("codex");
-        expect(login).toBe(due);
-        return "refreshed-login";
-      },
-      storeRefreshedCredential: async (...args) => {
-        stored.push(args);
+  it("settles the credential through the context, by harness, seed fingerprint and hard wall, and wakes on the result", async () => {
+    const calls: unknown[] = [];
+    const prepared = await prepareLaunch(
+      { ...withAlternate, maxWakeMinutes: 45 },
+      "manual",
+      "w1",
+      codexContext(fresh, {
+        settleCredential: async (...args) => {
+          calls.push(args);
+          return { ok: true, value: "settled-login", notes: ["note one"] };
+        }
+      }),
+      "codex"
+    );
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("settled-login");
+    expect(calls).toEqual([["codex", fresh, await credentialFingerprint(fresh), 45 * 60_000]]);
+    const primary = await prepareLaunch(withAlternate, "manual", "w2", codexContext(fresh, {
+      settleCredential: async (...args) => {
+        calls.push(args);
+        return { ok: true, value: "mind-token", notes: [] };
       }
-    }), "codex");
-    expect(prepared.env[WAKE_ENV.mindCredential]).toBe("refreshed-login");
-    expect(stored).toEqual([["codex", await credentialFingerprint(due), "refreshed-login"]]);
+    }));
+    expect(primary.env[WAKE_ENV.mindCredential]).toBe("mind-token");
+    expect(calls[1]).toEqual(["claude-code", "mind-token", await credentialFingerprint("mind-token"), DEFAULT_HARD_WALL_MS]);
   });
 
-  it("wakes on a still-valid login when the refresh is refused, and refuses by name once it has expired", async () => {
-    const refused = async () => {
-      throw new RefreshError("refresh_failed:refresh_token_reused", "");
-    };
-    const valid = await prepareLaunch(withAlternate, "manual", "w4", codexContext(due, { refreshLogin: refused }), "codex");
-    expect(valid.env[WAKE_ENV.mindCredential]).toBe(due);
-    const expired = loginFile("2026-01-01T00:00:00Z", 1_600_000_000);
+  it("wakes on the seed as it is when the context cannot settle credentials", async () => {
+    const prepared = await prepareLaunch(withAlternate, "manual", "w3", codexContext(due), "codex");
+    expect(prepared.env[WAKE_ENV.mindCredential]).toBe(due);
+  });
+
+  it("refuses the launch by name when the credential cannot be settled", async () => {
     await expect(
-      prepareLaunch(withAlternate, "manual", "w5", codexContext(expired, { refreshLogin: refused }), "codex")
-    ).rejects.toThrowError(/mind_credential_refresh_failed.*authorize/);
+      prepareLaunch(withAlternate, "manual", "w4", codexContext(due, {
+        settleCredential: async () => ({
+          ok: false,
+          code: "mind_credential_refresh_failed",
+          detail: "refresh_failed:invalid_grant; authorize the codex account again (npm run authorize:codex)"
+        })
+      }), "codex")
+    ).rejects.toThrowError(/mind_credential_refresh_failed.*authorize:codex/);
   });
 
   it("refuses an alternate the roster did not pin, before any secret is read", async () => {
@@ -157,13 +154,9 @@ describe("prepareLaunch on an alternate harness (spec 0010)", () => {
     );
   });
 
-  it("does not run the Codex refresh against a grok login, even one that has a tokens table", async () => {
+  it("carries a grok alternate's credential and extra args", async () => {
     const withGrok: RosterAgent = { ...agent, harnesses: { grok: { model: "grok-4.6" } } };
-    const grokLogin = JSON.stringify({
-      tokens: { access_token: jwt(Date.now() / 1000 + 86400), refresh_token: "r1" },
-      last_refresh: "2026-01-01T00:00:00Z"
-    });
-    let refreshes = 0;
+    const grokLogin = JSON.stringify({ "https://auth.x.ai::client-1": { key: "k", refresh_token: "g-r1" } });
     const prepared = await prepareLaunch(
       withGrok,
       "manual",
@@ -175,10 +168,6 @@ describe("prepareLaunch on an alternate harness (spec 0010)", () => {
             MIND_CREDENTIAL_GROK: grokLogin,
             HARNESS_EXTRA_ARGS_GROK: '["--effort","low"]'
           })[name],
-        refreshLogin: async () => {
-          refreshes += 1;
-          return "nope";
-        },
         log: () => undefined
       }),
       "grok"
@@ -186,89 +175,13 @@ describe("prepareLaunch on an alternate harness (spec 0010)", () => {
     expect(prepared.harness).toBe("grok");
     expect(prepared.env[WAKE_ENV.mindCredential]).toBe(grokLogin);
     expect(prepared.env[WAKE_ENV.harnessExtraArgs]).toBe('["--effort","low"]');
-    expect(refreshes).toBe(0);
   });
+});
 
-  describe("a grok login (spec 0010 §5)", () => {
-    const withGrok: RosterAgent = { ...agent, harnesses: { grok: { model: "grok-4.6" } } };
-    const grokFile = (expSeconds: number) =>
-      JSON.stringify({
-        "https://auth.x.ai::client-1": {
-          key: jwt(expSeconds),
-          auth_mode: "oidc",
-          email: "mind@example.org",
-          refresh_token: "g-r1",
-          expires_at: new Date(expSeconds * 1000).toISOString(),
-          oidc_issuer: "https://auth.x.ai",
-          oidc_client_id: "client-1"
-        }
-      });
-    const grokContext = (login: string, overrides: Partial<LaunchContext> = {}) =>
-      context({
-        getSecret: name => ({ MIND_CREDENTIAL_CLAUDE_CODE: "mind-token", MIND_CREDENTIAL_GROK: login })[name],
-        log: () => undefined,
-        ...overrides
-      });
-
-    it("refreshes one whose access token runs out within the margin, and stores it under grok", async () => {
-      const soon = grokFile(Date.now() / 1000 + 3600);
-      const stored: unknown[] = [];
-      const prepared = await prepareLaunch(
-        withGrok,
-        "manual",
-        "wg1",
-        grokContext(soon, {
-          refreshLogin: async (harness, login) => {
-            expect(harness).toBe("grok");
-            expect(login).toBe(soon);
-            return "refreshed-grok";
-          },
-          storeRefreshedCredential: async (...args) => {
-            stored.push(args);
-          }
-        }),
-        "grok"
-      );
-      expect(prepared.env[WAKE_ENV.mindCredential]).toBe("refreshed-grok");
-      expect(stored).toEqual([["grok", await credentialFingerprint(soon), "refreshed-grok"]]);
-    });
-
-    it("leaves one with hours to spare alone", async () => {
-      let refreshes = 0;
-      const fresh = grokFile(Date.now() / 1000 + 5 * 3600);
-      const prepared = await prepareLaunch(
-        withGrok,
-        "manual",
-        "wg2",
-        grokContext(fresh, {
-          refreshLogin: async () => {
-            refreshes += 1;
-            return "nope";
-          }
-        }),
-        "grok"
-      );
-      expect(prepared.env[WAKE_ENV.mindCredential]).toBe(fresh);
-      expect(refreshes).toBe(0);
-    });
-
-    it("names the grok authorize tool when the refresh is refused and the token is gone", async () => {
-      const refused = async () => {
-        throw new RefreshError("refresh_failed:invalid_grant", "");
-      };
-      const expired = grokFile(1_600_000_000);
-      await expect(
-        prepareLaunch(withGrok, "manual", "wg3", grokContext(expired, { refreshLogin: refused }), "grok")
-      ).rejects.toThrowError(/mind_credential_refresh_failed.*grok-authorize/);
-      const valid = await prepareLaunch(
-        withGrok,
-        "manual",
-        "wg4",
-        grokContext(grokFile(Date.now() / 1000 + 3600), { refreshLogin: refused }),
-        "grok"
-      );
-      expect(valid.env[WAKE_ENV.mindCredential]).toContain("g-r1");
-    });
+describe("hardWallMsFor", () => {
+  it("is the roster's maxWakeMinutes, else the chassis default", () => {
+    expect(hardWallMsFor(agent)).toBe(DEFAULT_HARD_WALL_MS);
+    expect(hardWallMsFor({ ...agent, maxWakeMinutes: 90 })).toBe(90 * 60_000);
   });
 });
 

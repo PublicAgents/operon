@@ -288,20 +288,34 @@ nothing the container could do would help.
 document (`<issuer>/.well-known/openid-configuration`) lists the
 `refresh_token` grant with the `none` client auth method, so the public
 client id in the file is all the grant needs. The scheduler refreshes
-the entry at launch whenever under three hours of the access token
-remain (a wake's hard wall defaults to two, so the token outlives the
-wake and Grok never spends the refresh token inside the container), by
-a form-encoded refresh grant against `<issuer>/oauth2/token`, and writes
-`key`, the rotated refresh token when one is returned (the authority
-rotates it on every grant, observed 2026-11-09, which is exactly why the
-copy in the secret must never be the one spent), and `expires_at` back
-into the same entry. Store, choice, refusal handling, and the
+the entry at launch whenever the access token would not outlive the
+wake's hard wall (`maxWakeMinutes`, else the chassis default of two
+hours) plus an hour of slack, so the token outlives the wake and Grok
+never spends the refresh token inside the container, by a form-encoded
+refresh grant against `<issuer>/oauth2/token`, and writes `key`, the
+rotated refresh token when one is returned (the authority rotates it on
+every grant, observed 2026-11-09, which is exactly why the copy in the
+secret must never be the one spent), and `expires_at` back into the same
+entry. A hard wall of five hours or more exceeds what a fresh six-hour
+token covers: such a wake is still refreshed at launch, but the CLI may
+spend the refresh token near the wake's end, and the stored chain is
+then behind the authority's; the next launch's refresh is refused and
+that wake runs on its stored token while it lasts. Long Grok wakes are
+unsupported for that reason. Store, choice, refusal handling, and the
 refused wake's message (which names `tools/grok-authorize.mjs`) are as
 for Codex. One difference stays: a login no wake has touched for weeks
 dies at the authority regardless (a two-month-old login was refused on
 2026-11-09), and the launch-time refresh keeps a login alive only while
 its harness is being woken. After a long gap on an alternate harness
 the operator authorizes again.
+
+The whole decision (stored copy or seed, refresh when due, store, wake
+or refuse) runs inside the FleetControl object, one instance for the
+colony, under a per-harness lock: two launches that overlap on the same
+harness never each spend the one refresh token, the second awaits the
+first's grant and wakes on its result. The lock is held in memory; an
+eviction mid-grant loses only the lock, and the next launch re-reads
+the store.
 
 Inside the container a
 rewrite of the login (a revoked token, the one case left) is watched:

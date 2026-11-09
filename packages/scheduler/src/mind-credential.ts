@@ -182,12 +182,19 @@ export function parseGrokLogin(credential: string): GrokLogin | undefined {
 }
 
 /**
- * Grok's access token lives six hours and a wake's hard wall defaults
- * to two: refreshing at launch whenever under three hours remain means
- * the token outlives the wake, so Grok never needs to spend the refresh
- * token inside the container.
+ * Grok's access token lives six hours. The launch refreshes it whenever
+ * less than the wake's hard wall plus this slack remains, so the token
+ * outlives the wake and Grok never spends the refresh token inside the
+ * container (the authority rotates it on every grant: a token spent in
+ * the container is a stored chain broken). A hard wall of five hours or
+ * more exceeds what a fresh token covers; such a wake may still refresh
+ * in the container near its end, which the spec names as unsupported.
  */
-export const GROK_REFRESH_MARGIN_MS = 3 * 60 * 60 * 1000;
+export const GROK_REFRESH_SLACK_MS = 60 * 60 * 1000;
+
+export function grokRefreshMarginMs(hardWallMs: number): number {
+  return hardWallMs + GROK_REFRESH_SLACK_MS;
+}
 
 /** The Grok access token's expiry: its JWT exp, else the entry's expires_at, epoch ms. */
 export function grokAccessTokenExpiry(login: GrokLogin): number | undefined {
@@ -209,11 +216,11 @@ function grokRefreshable(entry: GrokLoginEntry): boolean {
   );
 }
 
-export function grokLoginNeedsRefresh(login: GrokLogin, nowMs: number): boolean {
+export function grokLoginNeedsRefresh(login: GrokLogin, nowMs: number, hardWallMs: number): boolean {
   if (!grokRefreshable(login.entry)) return false;
   const expiry = grokAccessTokenExpiry(login);
   if (expiry === undefined) return true;
-  return expiry - nowMs < GROK_REFRESH_MARGIN_MS;
+  return expiry - nowMs < grokRefreshMarginMs(hardWallMs);
 }
 
 /**
@@ -296,8 +303,17 @@ export interface RefreshPlan {
   expiry: number | undefined;
 }
 
-/** The refresh plan for a harness's credential; undefined when it is not a refreshable login. */
-export function refreshPlan(harness: string, credential: string, nowMs: number): RefreshPlan | undefined {
+/**
+ * The refresh plan for a harness's credential; undefined when it is not
+ * a refreshable login. The wake's hard wall only matters to Grok, whose
+ * access token is short.
+ */
+export function refreshPlan(
+  harness: string,
+  credential: string,
+  nowMs: number,
+  hardWallMs: number
+): RefreshPlan | undefined {
   if (harness === "codex") {
     const login = parseCodexLogin(credential);
     if (!login) return undefined;
@@ -306,7 +322,7 @@ export function refreshPlan(harness: string, credential: string, nowMs: number):
   if (harness === "grok") {
     const login = parseGrokLogin(credential);
     if (!login) return undefined;
-    return { due: grokLoginNeedsRefresh(login, nowMs), expiry: grokAccessTokenExpiry(login) };
+    return { due: grokLoginNeedsRefresh(login, nowMs, hardWallMs), expiry: grokAccessTokenExpiry(login) };
   }
   return undefined;
 }
@@ -351,4 +367,74 @@ export function chooseCredential(
 ): { value: string; refreshed: boolean } {
   if (stored && stored.seed === seedFingerprint) return { value: stored.value, refreshed: true };
   return { value: seed, refreshed: false };
+}
+
+/** What a launch starts its wake on, or why it cannot. */
+export type SettledCredential =
+  | { ok: true; value: string; notes: string[] }
+  | { ok: false; code: "mind_credential_refresh_failed"; detail: string };
+
+export interface SettleDeps {
+  /** The stored refresh for the harness, with the seed fingerprint it descends from. */
+  getStored(harness: string): Promise<{ seed: string; value: string } | undefined>;
+  /** Keep a refreshed credential under the seed it descends from. */
+  store(harness: string, seed: string, value: string): Promise<void>;
+  /** Refresh a login against its authority (refreshLogin bound to a fetch). Throws RefreshError. */
+  refresh(harness: string, login: string): Promise<string>;
+}
+
+/**
+ * The whole credential decision for one launch, in order: choose the
+ * stored refresh while it descends from the current secret, refresh it
+ * when due, store what came back, and wake on it. A refusal by the
+ * authority while the access token is still valid lets the wake run on
+ * what it has, noted; once the access token is gone too the launch is
+ * refused by name and the operator authorizes again. The caller holds
+ * the per-harness lock (FleetControl does): two launches that overlap
+ * must not each spend the one refresh token.
+ */
+export async function settleCredential(
+  harness: string,
+  seed: string,
+  seedFingerprint: string,
+  hardWallMs: number,
+  deps: SettleDeps,
+  nowMs = Date.now()
+): Promise<SettledCredential> {
+  const chosen = chooseCredential(seed, seedFingerprint, await deps.getStored(harness));
+  const notes: string[] = [];
+  if (chosen.refreshed) notes.push(`mind credential (${harness}): starting from the scheduler's stored refresh`);
+  const plan = refreshPlan(harness, chosen.value, nowMs, hardWallMs);
+  if (!plan || !plan.due) return { ok: true, value: chosen.value, notes };
+  try {
+    const refreshed = await deps.refresh(harness, chosen.value);
+    await deps.store(harness, seedFingerprint, refreshed);
+    notes.push(`mind credential (${harness}): login refreshed by the scheduler and stored for later launches`);
+    return { ok: true, value: refreshed, notes };
+  } catch (error) {
+    const detail = String(error instanceof Error ? error.message : error).slice(0, 200);
+    if (plan.expiry !== undefined && plan.expiry > nowMs) {
+      notes.push(`mind credential (${harness}): refresh failed (${detail}); the access token is still valid, waking on it`);
+      return { ok: true, value: chosen.value, notes };
+    }
+    return {
+      ok: false,
+      code: "mind_credential_refresh_failed",
+      detail: `${detail}; the access token has expired too: authorize the ${harness} account again (${authorizeHint(harness)})`
+    };
+  }
+}
+
+/**
+ * One run per key at a time: a call that arrives while another is in
+ * flight for the same key awaits that one's result. FleetControl holds
+ * the map for settleCredential, so overlapping launches on a harness
+ * share one grant instead of each spending the refresh token.
+ */
+export function singleFlight<T>(inFlight: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
+  const running = inFlight.get(key);
+  if (running) return running;
+  const started = run().finally(() => inFlight.delete(key));
+  inFlight.set(key, started);
+  return started;
 }

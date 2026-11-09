@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Door } from "@operon/core";
 import { sanitizeOverrides, type DoorOverrides } from "./doors.js";
+import { refreshLogin, settleCredential, singleFlight, type SettledCredential } from "./mind-credential.js";
 
 /**
  * A mind credential the scheduler refreshed (spec 0010 §5), descended
@@ -75,6 +76,32 @@ export class FleetControl extends DurableObject {
       value,
       at: new Date().toISOString()
     } satisfies RefreshedCredential);
+  }
+
+  /**
+   * One refresh in flight per harness. The object is one instance for
+   * the colony, so a launch that arrives while another is already
+   * refreshing the same harness's login awaits that grant and wakes on
+   * its result instead of spending the same refresh token a second
+   * time (the authority rotates it on every grant). The lock is held
+   * in memory: an eviction mid-grant loses only the lock, and the next
+   * launch re-reads the store.
+   */
+  private settling = new Map<string, Promise<SettledCredential>>();
+
+  async settleCredential(
+    harness: string,
+    seed: string,
+    seedFingerprint: string,
+    hardWallMs: number
+  ): Promise<SettledCredential> {
+    return singleFlight(this.settling, harness, () =>
+      settleCredential(harness, seed, seedFingerprint, hardWallMs, {
+        getStored: name => this.refreshedCredential(name),
+        store: (name, fingerprint, value) => this.setRefreshedCredential(name, fingerprint, value),
+        refresh: (name, login) => refreshLogin(name, login, fetch)
+      })
+    );
   }
 
   async doorOverrides(agentId: string): Promise<DoorOverrides> {

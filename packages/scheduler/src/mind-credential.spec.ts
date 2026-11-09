@@ -9,7 +9,11 @@ import {
   RefreshError,
   CODEX_TOKEN_ENDPOINT,
   REFRESH_AFTER_MS,
-  GROK_REFRESH_MARGIN_MS,
+  GROK_REFRESH_SLACK_MS,
+  grokRefreshMarginMs,
+  settleCredential,
+  singleFlight,
+  type SettleDeps,
   authorizeHint,
   grokAccessTokenExpiry,
   grokLoginNeedsRefresh,
@@ -157,24 +161,36 @@ describe("parseGrokLogin", () => {
   });
 });
 
+const WALL = 2 * HOUR;
+
 describe("grokLoginNeedsRefresh (spec 0010 §5)", () => {
-  it("is due under three hours before the access token expires, from the JWT first, else expires_at", () => {
-    expect(GROK_REFRESH_MARGIN_MS).toBe(3 * HOUR);
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now + 4 * HOUR))!, now)).toBe(false);
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now + 2 * HOUR))!, now)).toBe(true);
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now - HOUR))!, now)).toBe(true);
+  it("is due when the access token would not outlive the wake's hard wall plus an hour, from the JWT first, else expires_at", () => {
+    expect(GROK_REFRESH_SLACK_MS).toBe(HOUR);
+    expect(grokRefreshMarginMs(WALL)).toBe(3 * HOUR);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now + 4 * HOUR))!, now, WALL)).toBe(false);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now + 2 * HOUR))!, now, WALL)).toBe(true);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now - HOUR))!, now, WALL)).toBe(true);
     const opaque = parseGrokLogin(grokFile(now + 5 * HOUR, { key: "opaque-token" }))!;
     expect(grokAccessTokenExpiry(opaque)).toBe(now + 5 * HOUR);
-    expect(grokLoginNeedsRefresh(opaque, now)).toBe(false);
+    expect(grokLoginNeedsRefresh(opaque, now, WALL)).toBe(false);
     const dateless = parseGrokLogin(grokFile(now, { key: "opaque-token", expires_at: "never" }))!;
     expect(grokAccessTokenExpiry(dateless)).toBeUndefined();
-    expect(grokLoginNeedsRefresh(dateless, now)).toBe(true);
+    expect(grokLoginNeedsRefresh(dateless, now, WALL)).toBe(true);
+  });
+
+  it("widens the margin with a longer hard wall", () => {
+    const fourHours = parseGrokLogin(grokFile(now + 4 * HOUR))!;
+    expect(grokLoginNeedsRefresh(fourHours, now, WALL)).toBe(false);
+    expect(grokLoginNeedsRefresh(fourHours, now, 4 * HOUR)).toBe(true);
+    // A wall longer than a fresh token covers: still refreshed at launch, and the
+    // spec names the in-container refresh near the end of such a wake as unsupported.
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now + 6 * HOUR))!, now, 6 * HOUR)).toBe(true);
   });
 
   it("never refreshes an entry that cannot name its authority or has no refresh token", () => {
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { refresh_token: undefined }))!, now)).toBe(false);
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { oidc_issuer: "http://evil" }))!, now)).toBe(false);
-    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { oidc_client_id: "" }))!, now)).toBe(false);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { refresh_token: undefined }))!, now, WALL)).toBe(false);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { oidc_issuer: "http://evil" }))!, now, WALL)).toBe(false);
+    expect(grokLoginNeedsRefresh(parseGrokLogin(grokFile(now, { oidc_client_id: "" }))!, now, WALL)).toBe(false);
   });
 });
 
@@ -237,13 +253,14 @@ describe("refreshGrokLogin", () => {
 
 describe("refreshPlan and refreshLogin dispatch by harness", () => {
   it("plans a codex or grok login and nothing else", () => {
-    expect(refreshPlan("codex", login("2026-09-01T00:00:00Z"), now)).toEqual({ due: true, expiry: now + 3 * 86400 * 1000 });
-    expect(refreshPlan("grok", grokFile(now + 2 * HOUR), now)).toEqual({ due: true, expiry: now + 2 * HOUR });
-    expect(refreshPlan("grok", grokFile(now + 5 * HOUR), now)).toEqual({ due: false, expiry: now + 5 * HOUR });
-    expect(refreshPlan("codex", "sk-key", now)).toBeUndefined();
-    expect(refreshPlan("grok", "xai-key", now)).toBeUndefined();
-    expect(refreshPlan("grok", login("2026-09-01T00:00:00Z"), now)).toBeUndefined();
-    expect(refreshPlan("claude-code", "setup-token", now)).toBeUndefined();
+    expect(refreshPlan("codex", login("2026-09-01T00:00:00Z"), now, WALL)).toEqual({ due: true, expiry: now + 3 * 86400 * 1000 });
+    expect(refreshPlan("grok", grokFile(now + 2 * HOUR), now, WALL)).toEqual({ due: true, expiry: now + 2 * HOUR });
+    expect(refreshPlan("grok", grokFile(now + 5 * HOUR), now, WALL)).toEqual({ due: false, expiry: now + 5 * HOUR });
+    expect(refreshPlan("grok", grokFile(now + 5 * HOUR), now, 5 * HOUR)).toEqual({ due: true, expiry: now + 5 * HOUR });
+    expect(refreshPlan("codex", "sk-key", now, WALL)).toBeUndefined();
+    expect(refreshPlan("grok", "xai-key", now, WALL)).toBeUndefined();
+    expect(refreshPlan("grok", login("2026-09-01T00:00:00Z"), now, WALL)).toBeUndefined();
+    expect(refreshPlan("claude-code", "setup-token", now, WALL)).toBeUndefined();
   });
 
   it("routes each harness to its own grant and refuses the rest by name", async () => {
@@ -260,5 +277,103 @@ describe("refreshPlan and refreshLogin dispatch by harness", () => {
     expect(authorizeHint("codex")).toBe("npm run authorize:codex");
     expect(authorizeHint("grok")).toBe("node operon/tools/grok-authorize.mjs");
     expect(authorizeHint("claude-code")).toContain("MIND_CREDENTIAL_CLAUDE_CODE");
+  });
+});
+
+describe("settleCredential: the whole launch decision (spec 0010 §5)", () => {
+  const fp = "seed-fingerprint";
+  function deps(overrides: Partial<SettleDeps> & { stored?: { seed: string; value: string } } = {}) {
+    const calls = { refreshed: [] as string[], stored: [] as unknown[] };
+    const d: SettleDeps = {
+      getStored: async () => overrides.stored,
+      store: async (...args) => {
+        calls.stored.push(args);
+      },
+      refresh: async (_harness, loginText) => {
+        calls.refreshed.push(loginText);
+        return "refreshed";
+      },
+      ...overrides
+    };
+    return { d, calls };
+  }
+
+  it("wakes a token credential as it is and never asks the authority anything", async () => {
+    const { d, calls } = deps();
+    expect(await settleCredential("claude-code", "setup-token", fp, WALL, d, now)).toEqual({
+      ok: true,
+      value: "setup-token",
+      notes: []
+    });
+    expect(calls.refreshed).toEqual([]);
+  });
+
+  it("starts from the stored refresh only while it descends from the current secret", async () => {
+    const stored = grokFile(now + 5 * HOUR, { refresh_token: "g-r2" });
+    const seed = grokFile(now + 5 * HOUR);
+    const current = await settleCredential("grok", seed, fp, WALL, deps({ stored: { seed: fp, value: stored } }).d, now);
+    expect(current).toMatchObject({ ok: true, value: stored });
+    expect(current.ok && current.notes.join()).toMatch(/stored refresh/);
+    const orphaned = await settleCredential("grok", seed, fp, WALL, deps({ stored: { seed: "older", value: stored } }).d, now);
+    expect(orphaned).toMatchObject({ ok: true, value: seed, notes: [] });
+  });
+
+  it("refreshes a login that is due, stores it under the seed, and wakes on it", async () => {
+    const due = grokFile(now + 2 * HOUR);
+    const { d, calls } = deps();
+    const settled = await settleCredential("grok", due, fp, WALL, d, now);
+    expect(settled).toMatchObject({ ok: true, value: "refreshed" });
+    expect(settled.ok && settled.notes.join()).toMatch(/refreshed by the scheduler/);
+    expect(calls.refreshed).toEqual([due]);
+    expect(calls.stored).toEqual([["grok", fp, "refreshed"]]);
+    const codexDue = login("2026-09-01T00:00:00Z");
+    expect(await settleCredential("codex", codexDue, fp, WALL, d, now)).toMatchObject({ ok: true, value: "refreshed" });
+  });
+
+  it("wakes on a still-valid login when the refresh is refused, and refuses by name once it has expired", async () => {
+    const refused = deps({
+      refresh: async () => {
+        throw new RefreshError("refresh_failed:invalid_grant", "");
+      }
+    });
+    const valid = grokFile(now + 2 * HOUR);
+    const settled = await settleCredential("grok", valid, fp, WALL, refused.d, now);
+    expect(settled).toMatchObject({ ok: true, value: valid });
+    expect(settled.ok && settled.notes.join()).toMatch(/still valid/);
+    expect(refused.calls.stored).toEqual([]);
+    expect(await settleCredential("grok", grokFile(now - HOUR), fp, WALL, refused.d, now)).toEqual({
+      ok: false,
+      code: "mind_credential_refresh_failed",
+      detail: expect.stringMatching(/invalid_grant.*expired too.*grok-authorize/)
+    });
+    const codexExpired = login("2026-01-01T00:00:00Z", 1_600_000_000);
+    expect(await settleCredential("codex", codexExpired, fp, WALL, refused.d, now)).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/authorize:codex/)
+    });
+  });
+});
+
+describe("singleFlight: one refresh in flight per harness", () => {
+  it("lets an overlapping launch await the grant already running instead of spending the token again", async () => {
+    const inFlight = new Map<string, Promise<string>>();
+    let grants = 0;
+    let release!: (value: string) => void;
+    const slow = () =>
+      new Promise<string>(resolve => {
+        grants += 1;
+        release = resolve;
+      });
+    const first = singleFlight(inFlight, "grok", slow);
+    const second = singleFlight(inFlight, "grok", slow);
+    const other = singleFlight(inFlight, "codex", async () => "codex-login");
+    expect(grants).toBe(1);
+    release("grok-login");
+    expect(await Promise.all([first, second, other])).toEqual(["grok-login", "grok-login", "codex-login"]);
+    expect(inFlight.size).toBe(0);
+    const third = singleFlight(inFlight, "grok", slow);
+    expect(grants).toBe(2);
+    release("later-login");
+    expect(await third).toBe("later-login");
   });
 });
