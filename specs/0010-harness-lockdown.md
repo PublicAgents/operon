@@ -292,8 +292,10 @@ the entry at launch whenever under three hours of the access token
 remain (a wake's hard wall defaults to two, so the token outlives the
 wake and Grok never spends the refresh token inside the container), by
 a form-encoded refresh grant against `<issuer>/oauth2/token`, and writes
-`key`, the rotated refresh token when one is returned, and `expires_at`
-back into the same entry. Store, choice, refusal handling, and the
+`key`, the rotated refresh token when one is returned (the authority
+rotates it on every grant, observed 2026-11-09, which is exactly why the
+copy in the secret must never be the one spent), and `expires_at` back
+into the same entry. Store, choice, refusal handling, and the
 refused wake's message (which names `tools/grok-authorize.mjs`) are as
 for Codex. One difference stays: a login no wake has touched for weeks
 dies at the authority regardless (a two-month-old login was refused on
