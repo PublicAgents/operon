@@ -170,6 +170,8 @@ export function grokConfig(mcp: StageInput["mcp"]): TomlTable {
       image_gen: false,
       video_gen: false,
       managed_config: false,
+      // Also pins the model catalog to the CLI's bundled defaults: a
+      // roster model must be one the pinned CLI bundles (spec 0010 §4a).
       remote_fetch: false
     },
     memory: { enabled: false },
