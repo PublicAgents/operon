@@ -1,11 +1,5 @@
 import { doorHost } from "./umbilical-routes.js";
-import {
-  accessTokenExpiry,
-  chooseCredential,
-  credentialFingerprint,
-  loginNeedsRefresh,
-  parseCodexLogin
-} from "./mind-credential.js";
+import { authorizeHint, chooseCredential, credentialFingerprint, refreshPlan } from "./mind-credential.js";
 import { closedDoors, disabledDoors, type DoorOverrides } from "./doors.js";
 import {
   EgressTableError,
@@ -115,8 +109,8 @@ export interface LaunchContext {
   getDoorOverrides?(agentId: string): Promise<DoorOverrides>;
   /** The stored refresh of a file credential (spec 0010 §5), with the seed it descends from. */
   getRefreshedCredential?(harness: string): Promise<{ seed: string; value: string } | undefined>;
-  /** Refresh a Codex login against the authority; returns the new file. Throws RefreshError. */
-  refreshLogin?(login: string): Promise<string>;
+  /** Refresh a harness's login against its authority; returns the new file. Throws RefreshError. */
+  refreshLogin?(harness: string, login: string): Promise<string>;
   /** Keep a refreshed credential for later launches under the seed it descends from. */
   storeRefreshedCredential?(harness: string, seed: string, value: string): Promise<void>;
   /** The launch's own log line (the Worker console by default). */
@@ -154,11 +148,12 @@ export interface PreparedLaunch {
 }
 
 /**
- * Refresh a Codex login when it is due. A refusal by the authority
- * (expired, reused, revoked) while the access token is still valid
- * lets the wake run on what it has, named in the log; once the access
- * token is gone too, the wake is refused by name: the operator must
- * authorize again, and nothing the container could do would help.
+ * Refresh a login when it is due (a Codex or a Grok file; a token or an
+ * API key is never refreshed). A refusal by the authority (expired,
+ * reused, revoked) while the access token is still valid lets the wake
+ * run on what it has, named in the log; once the access token is gone
+ * too, the wake is refused by name: the operator must authorize again,
+ * and nothing the container could do would help.
  */
 async function refreshIfDue(
   harness: string,
@@ -166,30 +161,25 @@ async function refreshIfDue(
   seedFingerprint: string,
   context: LaunchContext
 ): Promise<string> {
-  // Codex only: Grok also stages a login file, but its OAuth client and
-  // token endpoint are not a documented public grant the way Codex's
-  // are, so a grok credential is never refreshed here (spec 0010 §5).
-  if (harness !== "codex") return credential;
-  const login = parseCodexLogin(credential);
-  if (!login || !context.refreshLogin) return credential;
+  if (!context.refreshLogin) return credential;
   const now = Date.now();
-  if (!loginNeedsRefresh(login, now)) return credential;
+  const plan = refreshPlan(harness, credential, now);
+  if (!plan || !plan.due) return credential;
   const log = context.log ?? (line => console.log(line));
   try {
-    const refreshed = await context.refreshLogin(credential);
+    const refreshed = await context.refreshLogin(harness, credential);
     await context.storeRefreshedCredential?.(harness, seedFingerprint, refreshed);
     log(`mind credential (${harness}): login refreshed by the scheduler and stored for later launches`);
     return refreshed;
   } catch (error) {
     const detail = String(error instanceof Error ? error.message : error).slice(0, 200);
-    const expiry = accessTokenExpiry(login);
-    if (expiry !== undefined && expiry > now) {
+    if (plan.expiry !== undefined && plan.expiry > now) {
       log(`mind credential (${harness}): refresh failed (${detail}); the access token is still valid, waking on it`);
       return credential;
     }
     throw new LaunchPreconditionError(
       "mind_credential_refresh_failed",
-      `${detail}; the access token has expired too: authorize the ${harness} account again (npm run authorize:codex)`
+      `${detail}; the access token has expired too: authorize the ${harness} account again (${authorizeHint(harness)})`
     );
   }
 }

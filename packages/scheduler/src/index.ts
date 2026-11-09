@@ -11,7 +11,7 @@ import {
 } from "./launch.js";
 import { effectiveDoors } from "./doors.js";
 import { WakeContainer } from "./wake-container.js";
-import { parseCodexLogin, refreshCodexLogin, type CodexLoginFile } from "./mind-credential.js";
+import { refreshLogin } from "./mind-credential.js";
 export { FleetControl } from "./fleet-control.js";
 
 /**
@@ -79,7 +79,7 @@ function launchContext(env: Env): LaunchContext {
     },
     getDoorOverrides: agentId => fleetControl(env).doorOverrides(agentId),
     getRefreshedCredential: harness => fleetControl(env).refreshedCredential(harness),
-    refreshLogin: login => refreshCodexLogin(parseCodexLogin(login) as CodexLoginFile, fetch),
+    refreshLogin: (harness, login) => refreshLogin(harness, login, fetch),
     storeRefreshedCredential: (harness, seed, value) =>
       fleetControl(env).setRefreshedCredential(harness, seed, value),
     async getGithubToken(agent: RosterAgent) {
