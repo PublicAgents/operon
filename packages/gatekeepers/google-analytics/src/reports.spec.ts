@@ -63,6 +63,37 @@ describe("runReport", () => {
     ]);
   });
 
+  it("reads a long report whole: no cut before the parse", async () => {
+    // Past the 200,000 characters at which the answer used to be cut,
+    // which turned a valid report into "non-JSON body".
+    const rows = Array.from({ length: 6000 }, (_, i) => ({
+      dimensionValues: [{ value: `/a/long/page/path/number/${i}` }],
+      metricValues: [{ value: String(i) }]
+    }));
+    expect(JSON.stringify({ rows }).length).toBeGreaterThan(400_000);
+    const report = (await runReport(scripted([], { rows }), PROPERTY, {
+      startDate: "today",
+      endDate: "today",
+      metrics: ["activeUsers"]
+    })) as { rows: unknown[] };
+    expect(report.rows).toHaveLength(6000);
+    expect(report.rows[5999]).toEqual(rows[5999]);
+  });
+
+  it("quotes a bounded excerpt of a long refusal, never the whole body", async () => {
+    const api: AnalyticsApi = {
+      token: async () => "t",
+      fetch: (async () => new Response("x".repeat(50_000), { status: 500 })) as typeof fetch
+    };
+    const refused = await runReport(api, PROPERTY, {
+      startDate: "today",
+      endDate: "today",
+      metrics: ["activeUsers"]
+    }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(AnalyticsError);
+    expect((refused as AnalyticsError).message.length).toBeLessThan(600);
+  });
+
   it("surfaces Google's own words on a refusal, and the status", async () => {
     const api: AnalyticsApi = {
       token: async () => "t",

@@ -551,6 +551,67 @@ describe("porch doors", () => {
   );
 });
 
+describe("a door's answer is read whole", () => {
+  // Longer than every ceiling the porch used to cut at (the largest was
+  // 200,000 characters), so a cut anywhere fails the parse.
+  const rows = Array.from({ length: 6000 }, (_, i) => ({ id: i, title: `a long enough title for row number ${i}` }));
+  const long = JSON.stringify({ ok: true, rows });
+  const post = (url: string, path: string, body: unknown = {}) =>
+    fetch(`${url}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-operon-porch": "1" },
+      body: JSON.stringify(body)
+    });
+
+  it("is long enough to cross every old ceiling", () => {
+    expect(long.length).toBeGreaterThan(200_000);
+  });
+
+  const doors: Array<[name: string, path: string, wire: (stub: string) => Partial<WakeConfig>]> = [
+    ["github status (cut at 60,000)", "/github/status", stub => ({ prUrl: `${stub}/gatekeeper/pr`, prToken: "b" })],
+    ["ask list (cut at 200,000)", "/ask/list", stub => ({ asksUrl: stub, asksToken: "b" })],
+    ["vault list (cut at 20,000)", "/vault/list", stub => ({ vaultUrl: stub, vaultToken: "b" })],
+    ["pay proposals (cut at 100,000)", "/pay/proposals", stub => ({ spendUrl: stub, spendToken: "b" })],
+    ["till sales (cut at 5,000)", "/till/sales", stub => ({ tillUrl: stub, tillToken: "b" })],
+    ["x posts (cut at 10,000)", "/x/posts", stub => ({ xUrl: stub, xToken: "b" })]
+  ];
+  for (const [name, path, wire] of doors) {
+    it(`${name}: the last row arrives`, async () => {
+      const stub = await startStub(() => ({ status: 200, body: long }));
+      const { url } = await startPorch(config(wire(stub.url)));
+      const response = await post(url, path);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { ok: boolean; gatekeeper: { rows: typeof rows } };
+      expect(body.ok).toBe(true);
+      expect(body.gatekeeper.rows).toHaveLength(6000);
+      expect(body.gatekeeper.rows[5999]).toEqual(rows[5999]);
+    });
+  }
+
+  it("passes a long structured refusal through parsed, not as a quoted fragment", async () => {
+    const refusal = { ok: false, error: "asks_wake_cap", detail: "d".repeat(250_000), filed: 10 };
+    const stub = await startStub(() => ({ status: 429, body: JSON.stringify(refusal) }));
+    const { url } = await startPorch(config({ asksUrl: stub.url, asksToken: "b" }));
+    const response = await post(url, "/ask/list");
+    expect(response.status).toBe(429);
+    const body = (await response.json()) as { error: string; gatekeeper: typeof refusal };
+    expect(body.error).toBe("ask_list_rejected");
+    expect(body.gatekeeper.error).toBe("asks_wake_cap");
+    expect(body.gatekeeper.filed).toBe(10);
+  });
+
+  it("still quotes only a bounded excerpt of a refusal it flattens into a detail string", async () => {
+    const stub = await startStub(() => ({ status: 500, body: "x".repeat(50_000) }));
+    const { url } = await startPorch(config({ prUrl: `${stub.url}/gatekeeper/pr`, prToken: "b" }));
+    const response = await post(url, "/github/status");
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as { error: string; detail: string };
+    expect(body.error).toBe("status_rejected");
+    expect(body.detail.startsWith("500: ")).toBe(true);
+    expect(body.detail.length).toBeLessThanOrEqual(405);
+  });
+});
+
 describe("contentTypeFor", () => {
   it("maps known extensions and defaults to octet-stream", () => {
     expect(contentTypeFor("a/index.html")).toContain("text/html");
