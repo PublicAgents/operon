@@ -553,8 +553,8 @@ export class Porch {
         }))
       })
     });
-    const resultText = (await response.text()).slice(0, 500);
-    if (!response.ok) return fail(502, "publish_rejected", `${response.status}: ${resultText}`);
+    const resultText = await response.text();
+    if (!response.ok) return fail(502, "publish_rejected", `${response.status}: ${resultText.slice(0, 500)}`);
     return ok({ host, files: files.length, gatekeeper: resultText });
   }
 
@@ -623,8 +623,8 @@ export class Porch {
         ...(submodules.length > 0 ? { submodules } : {})
       })
     });
-    const resultText = (await response.text()).slice(0, 800);
-    if (!response.ok) return fail(502, "pr_rejected", `${response.status}: ${resultText}`);
+    const resultText = await response.text();
+    if (!response.ok) return fail(502, "pr_rejected", `${response.status}: ${resultText.slice(0, 800)}`);
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
   }
 
@@ -663,17 +663,24 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
       body: JSON.stringify({ agentId: config.agentId, repo, title, body: issueBody })
     });
-    const resultText = (await response.text()).slice(0, 500);
-    if (!response.ok) return fail(502, "issue_rejected", `${response.status}: ${resultText}`);
+    const resultText = await response.text();
+    if (!response.ok) return fail(502, "issue_rejected", `${response.status}: ${resultText.slice(0, 500)}`);
     return ok({ repo, gatekeeper: JSON.parse(resultText) });
   }
 
-  /** POST a payload to the github Gatekeeper's /gatekeeper/<door>. */
-  private async githubGatekeeper(
-    door: string,
-    payload: Record<string, unknown>,
-    maxResponse = 20000
-  ): Promise<JsonResult> {
+  /**
+   * POST a payload to the github Gatekeeper's /gatekeeper/<door>.
+   *
+   * The answer is read WHOLE, here and at every other door on this
+   * porch. A door's answer is JSON, and JSON cut at a character count is
+   * not a shorter answer but an unparseable one: a status of 60,001
+   * characters used to reach the mind as porch_error with a SyntaxError,
+   * and a long ask list lost its tail the same way. Nothing is cut
+   * before it is parsed. Only the quoted excerpt inside a refusal's
+   * detail string stays bounded, because that is a quotation for a
+   * reader, never parsed.
+   */
+  private async githubGatekeeper(door: string, payload: Record<string, unknown>): Promise<JsonResult> {
     const { config } = this.context;
     if (!config.prUrl || !config.prToken) return fail(503, `${door}_not_wired`);
     const base = config.prUrl.replace(/\/gatekeeper\/pr$/, "");
@@ -682,19 +689,19 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.prToken}` },
       body: JSON.stringify({ agentId: config.agentId, ...payload })
     });
-    const resultText = (await response.text()).slice(0, maxResponse);
+    const resultText = await response.text();
     if (!response.ok) return fail(502, `${door}_rejected`, `${response.status}: ${resultText.slice(0, 400)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
   private async status(): Promise<JsonResult> {
-    return this.githubGatekeeper("status", {}, 60000);
+    return this.githubGatekeeper("status", {});
   }
 
   private async thread(body: Record<string, unknown>): Promise<JsonResult> {
     const { repo, number } = body;
     if (typeof repo !== "string" || typeof number !== "number") return fail(400, "invalid_request");
-    return this.githubGatekeeper("thread", { repo, number }, 200000);
+    return this.githubGatekeeper("thread", { repo, number });
   }
 
   /**
@@ -828,7 +835,7 @@ export class Porch {
     const refused = this.mergeGranted(repo);
     if (refused) return refused;
     this.context.log(`requesting merge of ${repo}#${number}`);
-    return this.githubGatekeeper("merge", { repo, number }, 60000);
+    return this.githubGatekeeper("merge", { repo, number });
   }
 
   private async closePullRequest(body: Record<string, unknown>): Promise<JsonResult> {
@@ -902,7 +909,7 @@ export class Porch {
         files: files.map(file => ({ path: file.path, contentBase64: file.bytes.toString("base64") }))
       })
     });
-    const resultText = (await response.text()).slice(0, 5000);
+    const resultText = await response.text();
     if (!response.ok) {
       return { status: response.status, body: { ok: false, error: "branch_rejected", gatekeeper: safeJson(resultText) } };
     }
@@ -918,7 +925,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.tillToken}` },
       body: JSON.stringify(payload)
     });
-    const resultText = (await response.text()).slice(0, 5000);
+    const resultText = await response.text();
     if (!response.ok) return fail(502, `till_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
@@ -959,7 +966,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.asksToken}` },
       body: JSON.stringify(payload)
     });
-    const resultText = (await response.text()).slice(0, 200_000);
+    const resultText = await response.text();
     if (!response.ok) {
       // The Gatekeeper's refusals are the interesting ones here (a cap
       // reached, an ask that moved), so its body is passed through
@@ -1027,7 +1034,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.spendToken}` },
       body: "{}"
     });
-    const resultText = (await response.text()).slice(0, 100_000);
+    const resultText = await response.text();
     if (!response.ok) return fail(502, "proposals_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
@@ -1049,7 +1056,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.spendToken}` },
       body: JSON.stringify({ url, maxAmount, reason })
     });
-    const resultText = (await response.text()).slice(0, 8 * 1024 * 1024);
+    const resultText = await response.text();
     if (!response.ok) return fail(502, "pay_rejected", `${response.status}: ${resultText.slice(0, 400)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
@@ -1071,7 +1078,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.notifyToken}` },
       body: JSON.stringify({ agentId: config.agentId, id })
     });
-    const resultText = (await response.text()).slice(0, 20000);
+    const resultText = await response.text();
     if (!response.ok) {
       return fail(502, "channel_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
     }
@@ -1091,7 +1098,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.webToken}` },
       body: JSON.stringify(payload)
     });
-    const text = (await response.text()).slice(0, 10000);
+    const text = await response.text();
     if (!response.ok) return fail(502, "web_rejected", `${response.status}: ${text.slice(0, 300)}`);
     try {
       return ok({ gatekeeper: JSON.parse(text) });
@@ -1133,7 +1140,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.xToken}` },
       body: JSON.stringify(payload)
     });
-    const resultText = (await response.text()).slice(0, 10000);
+    const resultText = await response.text();
     if (!response.ok) return fail(502, `x_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
@@ -1169,7 +1176,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.vaultToken}` },
       body: JSON.stringify(payload)
     });
-    const resultText = (await response.text()).slice(0, 20000);
+    const resultText = await response.text();
     if (!response.ok) {
       return fail(502, `vault_${door}_rejected`, `${response.status}: ${resultText.slice(0, 300)}`);
     }
@@ -1216,8 +1223,8 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
       body: JSON.stringify({ agentId: config.agentId, to, subject, text })
     });
-    const resultText = (await response.text()).slice(0, 500);
-    if (!response.ok) return fail(502, "email_rejected", `${response.status}: ${resultText}`);
+    const resultText = await response.text();
+    if (!response.ok) return fail(502, "email_rejected", `${response.status}: ${resultText.slice(0, 500)}`);
     return ok({ gatekeeper: JSON.parse(resultText) });
   }
 
@@ -1238,7 +1245,7 @@ export class Porch {
       headers: { "content-type": "application/json", authorization: `Bearer ${config.emailToken}` },
       body: JSON.stringify({ agentId: config.agentId, id })
     });
-    const resultText = (await response.text()).slice(0, 200000);
+    const resultText = await response.text();
     if (!response.ok) {
       return fail(502, "email_original_rejected", `${response.status}: ${resultText.slice(0, 300)}`);
     }

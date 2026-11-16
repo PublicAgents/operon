@@ -38,7 +38,9 @@ async function call(
     },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
-  const text = (await response.text()).slice(0, 200_000);
+  // Read whole: a report cut at a character count is not a shorter
+  // report but an unparseable one, answered as "non-JSON body".
+  const text = await response.text();
   if (!response.ok) {
     // Google's message names the real fault (property access, a bad
     // dimension), and paraphrasing it would hide what to fix.
